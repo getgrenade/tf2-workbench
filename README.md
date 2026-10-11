@@ -51,3 +51,8 @@ npm run build     type check and production build
 ```
 
 Settings, the last session, poses and custom effects are kept in `%APPDATA%\dev.tf2workbench.app`.
+
+## License and notices
+
+Free of charge. Parts of the code follow the Valve Source 1 SDK and come under its license: see [NOTICE.md](NOTICE.md) and
+[licenses/](licenses/).
