@@ -1,0 +1,12 @@
+[package]
+name = "source-formats"
+version = "0.1.0"
+edition = "2021"
+description = "Parsers for Source engine formats (VPK, MDL/VVD/VTX, VTF/VMT, KeyValues). No Tauri dependency."
+
+[dependencies]
+thiserror = "2"
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"

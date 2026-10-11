@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = ["crates/source-formats", "crates/workbench-core", "crates/workbench-wasm", "crates/webbake", "src-tauri"]
+# the WebAssembly backend only builds for its own target (build-webapp.bat), so plain cargo commands leave it out
+default-members = ["crates/source-formats", "crates/workbench-core", "crates/webbake", "src-tauri"]
+
+[profile.dev.package."*"]
+opt-level = 2
+
+# The shared build: small and self-contained (build.bat). Slower to compile than the default, but the exe is a fraction of the size.
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

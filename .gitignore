@@ -1,0 +1,13 @@
+target/
+node_modules/
+dist/
+src-tauri/gen/
+*.vpk
+*.mdl
+*.vvd
+*.vtx
+*.vtf
+share/
+web-assets/
+dist-web/
+.claude/

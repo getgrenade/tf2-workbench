@@ -1,0 +1,119 @@
+/*
+ * Design tokens. One neutral dark scale, one accent used only for "this is the active thing", one spacing scale and a small type scale.
+ * New and reworked components use these (--ui-*); the older --bg/--panel/--line/--fg/--dim/--accent in style.css are aliased to them
+ * below so the rest of the interface moves with the palette without being touched.
+ */
+:root {
+  /* The two inputs of the theme (Settings changes them; theme.ts writes them to the root element): the base tone of the interface
+     and the highlight. Every surface, text tone and accent tint below is mixed from them. */
+  --ui-base: #222226;
+  --ui-accent: #e08a3c;
+  /* the colour of text on a solid accent fill; theme.ts picks dark or light from how bright the accent is */
+  --ui-on-accent: #fff;
+
+  /* surfaces, darkest to lightest: canvas < panel < raised < input < hover */
+  --ui-canvas: color-mix(in srgb, var(--ui-base) 76%, black);
+  --ui-panel: var(--ui-base);
+  --ui-raised: color-mix(in srgb, var(--ui-base) 98%, white);
+  --ui-input: color-mix(in srgb, var(--ui-base) 96%, white);
+  --ui-hover: color-mix(in srgb, var(--ui-base) 93%, white);
+
+  /* lines are tone, not colour: a hairline of white */
+  --ui-line: rgba(255, 255, 255, 0.07);
+  --ui-line-strong: rgba(255, 255, 255, 0.14);
+
+  /* text */
+  --ui-text: color-mix(in srgb, var(--ui-base) 16%, white);
+  --ui-text-dim: color-mix(in srgb, var(--ui-base) 50%, white);
+  --ui-text-faint: color-mix(in srgb, var(--ui-base) 70%, white);
+
+  /* the one accent: active tool, selected tab, selected card, focus ring. Never a fill for whole panels. */
+  --ui-accent-soft: color-mix(in srgb, var(--ui-accent) 16%, transparent);   /* a selected row, a lit chip */
+  --ui-accent-mid: color-mix(in srgb, var(--ui-accent) 38%, transparent);    /* a lit tool button */
+  --ui-accent-strong: color-mix(in srgb, var(--ui-accent) 60%, transparent);  /* a lit button of a header group */
+  --ui-accent-line: color-mix(in srgb, var(--ui-accent) 55%, transparent);   /* the hairline round something selected */
+  --ui-focus: 0 0 0 1px var(--ui-accent-line);
+
+  /* spacing, on a 4px grid */
+  --ui-1: 2px; --ui-2: 4px; --ui-3: 6px; --ui-4: 8px; --ui-5: 12px; --ui-6: 16px; --ui-7: 24px;
+  --ui-row-gap: 6px;          /* between rows of a form */
+  --ui-row-height: 22px;      /* every control in a row is this tall */
+  --ui-label-col: 96px;       /* the key column of every key-value row */
+  --ui-value-col: 44px;       /* the numeric box at the end of a slider row */
+
+  /* radii */
+  --ui-radius-s: 3px; --ui-radius: 4px; --ui-radius-l: 6px;
+
+  /* type: Inter when it is there, the system UI font when not; numbers are tabular so columns of them line up */
+  --ui-font: Inter, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --ui-mono: "JetBrains Mono", Consolas, ui-monospace, monospace;
+  --ui-fs-label: 11.5px; --ui-fs-body: 12.5px; --ui-fs-head: 11px; --ui-fs-title: 13px;
+  --ui-fw-label: 400; --ui-fw-body: 450; --ui-fw-head: 650;
+
+  /* washes go on top of any surface (hover, pressed, dividers); shades go behind things (dimmed backdrops, shadows) */
+  --ui-wash-1: rgba(255, 255, 255, 0.06);
+  --ui-wash-2: rgba(255, 255, 255, 0.10);
+  --ui-wash-3: rgba(255, 255, 255, 0.16);
+  --ui-divider: rgba(255, 255, 255, 0.20);
+  --ui-shade-1: rgba(0, 0, 0, 0.40);
+  --ui-shade-2: rgba(0, 0, 0, 0.55);
+  --ui-shade-3: rgba(0, 0, 0, 0.70);
+  --ui-shade-4: rgba(0, 0, 0, 0.80);
+  --ui-text-hi: #fff;
+  /* the pills and bars that float over the 3D view: the panel tone, a little see-through */
+  --ui-float: color-mix(in srgb, var(--ui-base) 88%, transparent);
+
+  /* status, teams and the two warm tints that go with the accent */
+  --ui-red: #e5645c; --ui-red-bg: #6e2b27; --ui-red-text: #ffd9d6;
+  --ui-blue: #5ca0e5; --ui-blue-bg: #25405e; --ui-blue-text: #d6e8ff;
+  --ui-warn: #d9b45a; --ui-ok: #7bc47f; --ui-gold: #ffd700;
+  --ui-accent-text: color-mix(in srgb, var(--ui-accent) 30%, white);
+
+  /* control sizes, each with a role: small (inline tools, chips), normal (every field and button of a form), bar (buttons of a bar),
+     large (tabs), float (buttons of the pills over the 3D view); and the three icon sizes that go in them */
+  --ui-h-s: 20px; --ui-h: 22px; --ui-h-bar: 24px; --ui-h-l: 28px; --ui-h-float: 30px;
+  --ui-icon-s: 14px; --ui-icon: 16px; --ui-icon-l: 18px;
+  --ui-radius-xl: 8px;
+  --ui-fs-micro: 10px; --ui-fs-small: 11px; --ui-fs-glyph: 16px;
+
+  /* the old names, now fed from the scale above */
+  --bg: var(--ui-canvas);
+  --panel: var(--ui-panel);
+  --line: var(--ui-line);
+  --fg: var(--ui-text);
+  --dim: var(--ui-text-dim);
+  --accent: var(--ui-accent);
+}
+
+/* ---------- reusable pieces ---------- */
+
+/* A property row: fixed key column, then the control (a slider with its number, a select, a toggle). */
+.ui-prop { display: grid; grid-template-columns: var(--ui-label-col) minmax(0, 1fr); align-items: center; column-gap: var(--ui-4); min-height: var(--ui-row-height); margin: var(--ui-row-gap) 0 0; }
+.ui-prop > .ui-key { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ui-fs-label); font-weight: var(--ui-fw-label); color: var(--ui-text-dim); }
+.ui-prop > .ui-val { display: grid; grid-template-columns: minmax(0, 1fr) var(--ui-value-col); align-items: center; column-gap: var(--ui-3); min-width: 0; }
+.ui-prop > .ui-val.single { grid-template-columns: minmax(0, 1fr); }
+.ui-num { width: 100%; height: var(--ui-row-height); padding: 0 var(--ui-2); border: 1px solid transparent; border-radius: var(--ui-radius-s); background: var(--ui-input);
+  color: var(--ui-text); font: var(--ui-fw-body) var(--ui-fs-label) var(--ui-mono); text-align: right; font-variant-numeric: tabular-nums; appearance: textfield; }
+.ui-num:hover { border-color: var(--ui-line-strong); }
+.ui-num:focus { outline: none; border-color: var(--ui-accent-line); }
+.ui-num::-webkit-inner-spin-button, .ui-num::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+
+/* Sliders: a thin track, a round thumb; the filled part is dim until the slider is hovered, so a page of them is calm. */
+.ui-range, .panel input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: var(--ui-row-height); margin: 0; background: transparent; cursor: pointer; }
+.ui-range::-webkit-slider-runnable-track, .panel input[type="range"]::-webkit-slider-runnable-track { height: 3px; border-radius: 2px; background: var(--ui-input); }
+.ui-range::-webkit-slider-thumb, .panel input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 11px; height: 11px; margin-top: -4px; border-radius: 50%; background: var(--ui-text-dim); border: 0; }
+.ui-range:hover::-webkit-slider-thumb, .ui-range:focus-visible::-webkit-slider-thumb, .panel input[type="range"]:hover::-webkit-slider-thumb { background: var(--ui-text); }
+.ui-range:active::-webkit-slider-thumb, .panel input[type="range"]:active::-webkit-slider-thumb { background: var(--ui-accent); }
+
+/* Tag chips: one size, one look; on is the only accent. */
+.ui-chips { display: flex; flex-wrap: wrap; gap: var(--ui-2); }
+.ui-chip { height: 20px; padding: 0 var(--ui-4); display: inline-flex; align-items: center; border: 1px solid var(--ui-line); border-radius: 10px; background: var(--ui-input);
+  color: var(--ui-text-dim); font-size: 11px; cursor: pointer; user-select: none; }
+.ui-chip:hover { color: var(--ui-text); border-color: var(--ui-line-strong); }
+.ui-chip.on { color: var(--ui-text); border-color: var(--ui-accent-line); background: var(--ui-accent-soft); }
+
+/* Asset cards: a fixed aspect, a dark tile, the selection is one hairline of accent. */
+.ui-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: var(--ui-3); }
+.ui-card { position: relative; aspect-ratio: 1; border: 1px solid var(--ui-line); border-radius: var(--ui-radius-l); background: var(--ui-raised); overflow: hidden; cursor: pointer; }
+.ui-card:hover { border-color: var(--ui-line-strong); background: var(--ui-hover); }
+.ui-card.on { border-color: var(--ui-accent-line); box-shadow: 0 0 0 1px var(--ui-accent-soft), 0 0 10px var(--ui-accent-soft); }

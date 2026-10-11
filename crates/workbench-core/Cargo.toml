@@ -1,0 +1,10 @@
+[package]
+name = "workbench-core"
+version = "0.1.0"
+edition = "2021"
+description = "The app's backend without Tauri: reads the game's files and answers the viewer (desktop commands and the web build's WebAssembly both use it)"
+
+[dependencies]
+source-formats = { path = "../source-formats" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

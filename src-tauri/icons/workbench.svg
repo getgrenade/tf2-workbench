@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- the app icon: a briefcase, white, on nothing, as large as the icon allows (the source of every size in this folder; the gaps are cut out, not painted) -->
+  <defs>
+    <mask id="cutouts" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512">
+      <rect width="512" height="512" fill="#fff"/>
+      <!-- the hollow of the handle and the line of the lid -->
+      <rect x="224" y="147" width="65" height="30" rx="5" fill="#000"/>
+      <rect x="132" y="230" width="249" height="13" fill="#000"/>
+      <!-- the latch: a trapezoid cut out around a white one -->
+      <path d="M222 207H291L275 281H238Z" fill="#000" stroke="#000" stroke-width="10" stroke-linejoin="round"/>
+      <path d="M233 218H280L268 270H245Z" fill="#fff"/>
+    </mask>
+  </defs>
+  <!-- drawn in a 249 wide case, then scaled to 440 and centred -->
+  <g fill="#fff" mask="url(#cutouts)" transform="translate(256 256) scale(1.767) translate(-256.500 -239.500)">
+    <rect x="209" y="133" width="95" height="44" rx="12"/>
+    <rect x="132" y="171" width="249" height="175" rx="20"/>
+  </g>
+</svg>
