@@ -1,0 +1,23 @@
+TF2 Workbench
+Copyright (c) 2026 getgrenade. All rights reserved, except as stated below.
+
+TF2 Workbench is free of charge. You may:
+
+  * download, build and run it, for yourself, free of charge;
+  * read the source code and modify it for your own use;
+  * redistribute it, modified or not, provided that every one of these holds:
+      1. it is free of charge (no sale, no paywall, no payment or subscription required to get or use it);
+      2. this LICENSE file, NOTICE.md and the "licenses" folder travel with it, unchanged;
+      3. you do not present it as Valve's or as endorsed by Valve.
+
+Any other use, including commercial use and putting it, or anything built from it, behind a payment, needs written permission.
+
+Valve's code. Parts of this project follow the Source 1 SDK, Copyright (c) Valve Corporation (see NOTICE.md for which). Those parts are
+used under the SOURCE 1 SDK LICENSE (licenses/SOURCE1-SDK-LICENSE.txt), and Valve's third-party legal notices
+(licenses/thirdpartylegalnotices.txt) apply to them. Where these terms and Valve's differ for those parts, Valve's govern.
+
+Not affiliated. Team Fortress 2 and the Source engine are Valve Corporation's. TF2 Workbench contains none of the game's files: it reads
+them from the game you have installed, and what you do with them is between you and Valve.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED. IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR ITS USE.

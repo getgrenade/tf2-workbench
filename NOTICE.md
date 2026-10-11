@@ -1,6 +1,6 @@
 # Notices
 
-TF2 Workbench is a fan project, free of charge. It is not affiliated with or endorsed by Valve Corporation. Team Fortress 2, Source and the
+TF2 Workbench is a fan project, free of charge (see [LICENSE](LICENSE)). It is not affiliated with or endorsed by Valve Corporation. Team Fortress 2, Source and the
 Source engine are trademarks and property of Valve Corporation. No game files are included in this repository.
 
 ## Valve Source 1 SDK
