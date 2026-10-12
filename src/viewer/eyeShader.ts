@@ -92,6 +92,9 @@ uniform sampler2D tIris;
 uniform sampler2D tAO;
 uniform sampler2D tWarp;
 uniform samplerCube tCube;
+uniform samplerCube tWorldCube;
+uniform float uWorldCube;
+uniform bool uEnvWorld;
 uniform bool uHasWarp;
 uniform bool uHasCube;
 
@@ -187,12 +190,14 @@ void main() {
   vec3 reflection = vec3(0.0);
   vec3 corneaReflect = reflect(worldView, corneaWorldNormal);
   if (uHasCube) {
-    reflection = uGlossiness * textureCube(tCube, vec3(corneaReflect.z, corneaReflect.x, corneaReflect.y)).rgb;
+    vec3 cubeDir = vec3(corneaReflect.z, corneaReflect.x, corneaReflect.y);
+    reflection = uGlossiness * (uEnvWorld && uWorldCube > 0.0 ? textureCube(tWorldCube, cubeDir).rgb * uWorldCube : textureCube(tCube, cubeDir).rgb);
   }
 
   // Glint specular from the local light
   vec3 glint = pow(clamp(dot(corneaReflect, L), 0.0, 1.0), 128.0) * uLightColor;
 
+  rigNormal = N;
   for (int i = 0; i < 8; i++) {
     if (i >= uRigCount) break;
     vec3 direction, color; rigLight(i, vWorldPos, direction, color);

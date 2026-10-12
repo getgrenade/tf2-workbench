@@ -107,9 +107,27 @@ export class CameraRig {
     if (this.active === id) { this.navigation = null; this.resetOrbitMotion(); this.update(true); }
     this.onChange();
   }
+  /** The turn about its own view axis that the camera being navigated has: the orbit controls always hold the camera upright, so it is put back after them. */
+  private navRoll = new THREE.Quaternion();
+  /** The way the orbit controls hold a camera that looks along `quaternion`: upright, without any turn about the view axis. */
+  private static upright(quaternion: THREE.Quaternion) {
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(quaternion);
+    if (Math.abs(forward.y) > 0.9999) return null;
+    return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(new THREE.Vector3(), forward, new THREE.Vector3(0, 1, 0)));
+  }
+  private static rollOf(quaternion: THREE.Quaternion) {
+    const upright = CameraRig.upright(quaternion);
+    return upright ? upright.invert().multiply(quaternion) : new THREE.Quaternion();
+  }
+  /** Puts the turn back on the camera after the orbit controls have held it upright (it can be done any number of times). */
+  private applyRoll() {
+    const upright = CameraRig.upright(this.camera.quaternion);
+    if (upright) this.camera.quaternion.copy(upright).multiply(this.navRoll);
+  }
   private readonly saveNavigation = () => {
     const data = this.activeCamera;
     if (!data?.navigateView || this.resettingOrbit || this.overlayEditing) return;
+    this.applyRoll();
     if (this.camera.position.equals(new THREE.Vector3().fromArray(data.position)) && this.camera.quaternion.equals(new THREE.Quaternion().fromArray(data.quaternion))) return;
     data.position = this.camera.position.toArray(); data.quaternion = this.camera.quaternion.toArray();
     const helper = this.visuals.children[this.cameras.indexOf(data)] as THREE.CameraHelper;
@@ -243,7 +261,7 @@ export class CameraRig {
   update(resetTarget = false) {
     const data = this.activeCamera;
     this.visuals.visible = !data;
-    if (!data) { this.backdrop.hide(); return; }
+    if (!data) { this.backdrop.hide(); this.shotFrame = null; return; }
     const width = Math.max(1, this.container.clientWidth), height = Math.max(1, this.container.clientHeight);
     const size = cameraSize(data), rect = cameraFrame(width, height, size.w / size.h);
     this.camera.position.fromArray(data.position); this.camera.quaternion.fromArray(data.quaternion);
@@ -254,19 +272,23 @@ export class CameraRig {
     if (this.viewPan.x || this.viewPan.y) this.camera.setViewOffset(width, height, -this.viewPan.x, -this.viewPan.y, width, height);
     else if (this.camera.view?.enabled) this.camera.clearViewOffset();
     if (resetTarget || !data.navigateView) {
+      this.navRoll = CameraRig.rollOf(this.camera.quaternion);
       const direction = this.camera.getWorldDirection(new THREE.Vector3());
       this.orbit.target.copy(this.camera.position).addScaledVector(direction, 100);
     }
     this.orbit.enabled = !this.overlayEditing && (!!data.navigateView || !!this.navigation);
     // Apply damping and save the shot before particles and rendering.
-    if (data.navigateView && !this.overlayEditing && !resetTarget) { this.orbit.update(); this.camera.updateMatrixWorld(true); }
+    if (data.navigateView && !this.overlayEditing && !resetTarget) { this.orbit.update(); this.applyRoll(); this.camera.updateMatrixWorld(true); }
     this.frame.hidden = false;
     // the border of the shot is the size of the shot on the screen: it grows when the view zooms in and shrinks when it zooms out, with the world around it
     const z = this.viewZoom, w = rect.w * z, h = rect.h * z;
     const fx = (width - w) / 2 + this.viewPan.x, fy = (height - h) / 2 + this.viewPan.y;
     Object.assign(this.frame.style, { left: `${fx}px`, top: `${fy}px`, width: `${w}px`, height: `${h}px` });
     this.backdrop.update(data.overlay?.background, { x: fx, y: fy, w, h }, { w: width, h: height });
+    this.shotFrame = { x: fx / width, y: 1 - (fy + h) / height, w: w / width, h: h / height, pixels: size };
   }
+  /** While looking through a camera: where the picture is in the view (fractions, y up) and its size in pixels. */
+  shotFrame: { x: number; y: number; w: number; h: number; pixels: { w: number; h: number } } | null = null;
   captureCamera() {
     const data = this.activeCamera;
     return data ? { camera: cameraProjection(data, this.camera.near, this.camera.far), size: cameraSize(data) } : null;

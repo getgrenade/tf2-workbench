@@ -68,6 +68,9 @@ uniform sampler2D tPhongWarp;   // $phongwarptexture: a ramp of (specular, fresn
 uniform bool uHasPhongWarp;
 uniform sampler2D tExp;
 uniform samplerCube tCube;
+uniform samplerCube tWorldCube;        // the cubemap the world setting picked ...
+uniform float uWorldCube;               // ... when one is (its brightness; 0: none)
+uniform bool uEnvWorld;                 // this material reflects "the cubemap of the level" ($envmap env_cubemap)
 uniform bool uHasBump;
 uniform bool uHasWarp;
 uniform bool uHasExp;
@@ -158,7 +161,8 @@ float safePow(float x, float e) {
 
 vec3 sampleEnv(vec3 v) {
   // Source axes: x forward, y left, z up
-  return textureCube(tCube, vec3(v.z, v.x, v.y)).rgb;
+  vec3 d = vec3(v.z, v.x, v.y);
+  return uEnvWorld && uWorldCube > 0.0 ? textureCube(tWorldCube, d).rgb * uWorldCube : textureCube(tCube, d).rgb;
 }
 
 varying float vHideW;
@@ -196,6 +200,7 @@ ${bodyMaskDiscard}
   float pointWin = clamp(1.0 - (pointDist * pointDist) / (uPointRange * uPointRange), 0.0, 1.0);
   vec3 pointLight = uPointColor * safePow(pointWin, uPointFalloff);
   diffuseLighting += pointLight * diffuseTerm(N, Lp);
+  rigNormal = Nv; // the vertex normal: a bump map must not roughen the shadow's offset
   for (int i = 0; i < 8; i++) {
     if (i >= uRigCount) break;
     vec3 direction, color; rigLight(i, vWorldPos, direction, color);

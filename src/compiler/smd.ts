@@ -9,7 +9,7 @@ import { turnedWorld, type BoneTurn } from "./boneAxes";
  */
 
 /** The bones of the file the skin refers to, with their ancestors (an SMD's bone list must be closed under parent). */
-function usedBones(model: ImportedModel, parts: ImportedPart[]) {
+export function usedBones(model: ImportedModel, parts: ImportedPart[]) {
   const byName = new Map(model.skeleton.map((b) => [b.name, b]));
   const keep = new Set<string>();
   for (const part of parts) {

@@ -2,6 +2,7 @@ import type { LightState, PointLightState } from "./viewer";
 import type { ShadowParams } from "./shadowMath";
 import type { FogState } from "./fog";
 import { parseSky, type SkyState } from "./skyState";
+import { parseReflection, type ReflectionState } from "./reflectionState";
 import { parseGround, type GroundState } from "./groundPlane";
 import type { AoState } from "./aoMath";
 import { parseRimLight, type RimLightState } from "./rimLight";
@@ -85,6 +86,8 @@ export interface SceneFile {
   look?: Record<string, unknown>;
   /** The skybox behind the scene. */
   sky?: SkyState;
+  /** The cubemap the shiny materials reflect. */
+  reflection?: ReflectionState;
   /** The plane at the floor. */
   ground?: GroundState;
   /** The colour behind everything when there is no skybox ("#rrggbb"; the usual grey when missing). */
@@ -184,6 +187,7 @@ export function parseScene(text: string): SceneFile {
     aos: Array.isArray(raw.aos) ? raw.aos : undefined,
     look: raw.look && typeof raw.look === "object" && !Array.isArray(raw.look) ? raw.look : undefined,
     sky: parseSky(raw.sky),
+    reflection: parseReflection(raw.reflection),
     ground: parseGround(raw.ground),
     background: typeof raw.background === "string" && /^#[0-9a-f]{6}$/i.test(raw.background) ? raw.background.toLowerCase() : undefined,
     wireframe: raw.wireframe === true,

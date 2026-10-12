@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import type { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { spotLightRotation, type RigLight, worldDirection } from "./lighting";
+import { defaultLightRange, spotLightRotation, type RigLight, worldDirection } from "./lighting";
 import { GizmoSet, gizmoKey } from "./gizmos";
 import { keyboardScaleFactor } from "./scaleGizmo";
 
@@ -110,7 +110,7 @@ export class LightGizmos {
       halo.visible = !!light;
       if (!light) return;
       halo.position.fromArray(light.position);
-      halo.scale.setScalar(2.7);
+      halo.scale.setScalar(1.5);
       (halo.material as THREE.MeshBasicMaterial).color.copy(this.highlightColour);
     });
   }
@@ -126,7 +126,7 @@ export class LightGizmos {
       const light = lights[i];
       bulb.visible = !!light;
       if (!light) return;
-      bulb.position.fromArray(light.position); bulb.scale.setScalar(1.6); bulb.material.color.set(light.color);
+      bulb.position.fromArray(light.position); bulb.scale.setScalar(.8); bulb.material.color.set(light.color);
     });
   }
   /** True while a mouse transform (Shift + W / E / R) is in progress: the next click belongs to it. */
@@ -149,8 +149,9 @@ export class LightGizmos {
     if (this.modal && (!active || light !== this.modal.light)) this.finish(false);
     // the selected light shows its marker (bulb, reach) whenever indicators are on, and while it has the gizmo
     const directional = light?.type === "directional";
-    const marked = !!light && light.enabled && (directional ? active : this.indicators());
-    this.marker.visible = marked || active;
+    // the toggle hides the marker even while the light has the gizmo (which stays)
+    const marked = !!light && light.enabled && this.indicators() && (directional ? active : true);
+    this.marker.visible = marked;
     if (light && (marked || active)) {
       const quaternion = light.type === "spot" ? spotLightRotation(light) : directional ? this.directionalRotation(light) : new THREE.Quaternion();
       const place = this.placeOf(light);
@@ -158,7 +159,7 @@ export class LightGizmos {
         this.pivot.position.copy(place); this.pivot.quaternion.copy(quaternion); this.pivot.scale.setScalar(1);
       }
       this.marker.position.copy(place); this.marker.quaternion.copy(quaternion);
-      this.bulb.scale.setScalar(directional ? 3 : 2);
+      this.bulb.scale.setScalar(directional ? 1.6 : 1);
       // a directional light is drawn as a bulb out on the way it comes from, joined to where it turns by a line
       const reach = this.reach();
       this.bulb.position.set(0, 0, directional ? -reach : 0);
@@ -225,7 +226,7 @@ export class LightGizmos {
         if (e.altKey) {
           if (tool === "move") { if (light.type === "directional") delete light.pivot; else light.position = [60, 100, 100]; }
           else if (tool === "rotate") { light.azimuth = 0; light.elevation = 20; delete light.rotation; }
-          else light.range = 250;
+          else light.range = defaultLightRange(light.type);
           this.changed();
         } else {
           const position = this.placeOf(light), plane = new THREE.Plane().setFromNormalAndCoplanarPoint(this.camera.getWorldDirection(new THREE.Vector3()), position);

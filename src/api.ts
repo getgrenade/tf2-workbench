@@ -143,15 +143,15 @@ export const listItems = () => invoke<ArrayBuffer>("list_items");
 /** Writes a text file (scene) the user picked with the save dialog. */
 export const writeTextFile = (path: string, contents: string) => invoke<void>("write_text_file", { path, contents });
 export const readTextFile = (path: string) => invoke<string>("read_text_file", { path });
-/** A source model (.fbx) or texture (.tga) from the artist's folders, for the item compiler. */
+/** A source model (.fbx, .smd, .dmx) or texture (.tga) from the artist's folders, for the item compiler. */
 export const readSourceFile = (path: string) => invoke<ArrayBuffer>("read_source_file", { path });
-/** The names of the .fbx and .tga files in the folder of a source file. */
+/** The names of the model (.fbx, .smd, .dmx) and .tga files in the folder of a source file. */
 export const sourceSiblings = (path: string) => invoke<string[]>("source_siblings", { path });
 /** What the compiler sends to build an item; see src-tauri commands.rs ItemBuildRequest. */
 export interface ItemBuildRequest {
   name: string; displayName: string; prefab: string; equipRegion: string; bodygroups: string[]; paintable: boolean;
   /** The classes with a model of their own (one: that class's folder; several: an all-class item), each with its LODs. */
-  classes: { folder: string; /** QC commands added to the class's QC (the `$jigglebone` blocks). */ qcExtra: string; lods: { sourcePath: string; smd: string; triangles: number; vertices: number }[] }[];
+  classes: { folder: string; /** QC commands added to the class's QC (the `$jigglebone` blocks). */ qcExtra: string; lods: { sourcePath: string; smd: string; /** The model as a binary .dmx (bytes) when it has flexes: the smd is empty then. */ dmx?: number[]; triangles: number; vertices: number }[] }[];
   materials: { sourceName: string; vmt: string; color: string | null; normal: string | null; phongexponent: string | null; illum: string | null; blue: { vmt: string; color: string | null } | null }[];
   icon: string;
 }

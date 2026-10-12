@@ -49,13 +49,15 @@ export interface LightingRig {
   selected: string | null;
   marker: boolean;
 }
+/** How far a new light reaches: a point light starts small (a fifth of a spot's reach) so it lights what is near it. */
+export const defaultLightRange = (type: RigLight["type"]) => type === "point" ? 50 : 250;
 export function newRigLight(id: string, type: RigLight["type"] = "point", position: [
   number,
   number,
   number
 ] = [60, 100, 100]): RigLight {
   // a directional light turns with the camera unless it is told not to, as in hlmv
-  return { id, name: `${type[0].toUpperCase() + type.slice(1)} light`, type, enabled: true, azimuth: 0, elevation: 20, intensity: 1, color: "#ffffff", position: [...position], range: 250, falloff: 1.5, cone: 45, shadows: false, ...(type === "directional" ? { followCamera: true } : {}) };
+  return { id, name: `${type[0].toUpperCase() + type.slice(1)} light`, type, enabled: true, azimuth: 0, elevation: 20, intensity: 1, color: "#ffffff", position: [...position], range: defaultLightRange(type), falloff: 1.5, cone: 45, shadows: false, ...(type === "directional" ? { followCamera: true } : {}) };
 }
 export function defaultLightingRig(primary?: {
   azimuth: number;

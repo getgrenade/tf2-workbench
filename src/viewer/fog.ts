@@ -14,9 +14,11 @@ export interface FogState {
   /** Where the change from the bottom density to the top density is centred and how wide it is, in character heights above the floor. */
   middle: number;
   softness: number;
+  /** The gradient lies over the picture (bottom edge to top edge, a screenshot's frame when looking through a camera) instead of in the world. */
+  view: boolean;
 }
 
-export const DEFAULT_FOG: FogState = { enabled: false, color: "#bdbdbd", top: 0, bottom: 0.28, middle: 0, softness: 0.76 };
+export const DEFAULT_FOG: FogState = { enabled: false, color: "#bdbdbd", top: 0, bottom: 0.28, middle: 0, softness: 0.76, view: false };
 
 const unit = (v: unknown, fallback: number) => (typeof v === "number" && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : fallback);
 
@@ -30,6 +32,7 @@ export function parseFog(raw: any): FogState | undefined {
     bottom: unit(raw.bottom, DEFAULT_FOG.bottom),
     middle: typeof raw.middle === "number" && Number.isFinite(raw.middle) ? Math.min(2, Math.max(0, raw.middle)) : DEFAULT_FOG.middle,
     softness: Math.max(0.02, unit(raw.softness, DEFAULT_FOG.softness)),
+    view: raw.view === true,
   };
 }
 
@@ -55,6 +58,8 @@ uniform vec3 uCamForward;
 uniform float uBackDist;   // distance of the backdrop plane (camera to target)
 uniform float uFogBase;    // world height of the floor
 uniform float uFogHeight;  // world height of a character
+uniform float uFogView[${MAX_FOGS}]; // 1 where a fog lies over the picture instead of in the world
+uniform vec4 uFogFrame;    // where the picture is in the view (x, y, width, height), for the fogs that follow the view
 float fogFree(vec2 uv) {
   return uFogMaskOn > 0.5 ? texture2D(tFogMask, uv).r : 0.0;
 }
@@ -73,11 +78,13 @@ float fogLayers(vec2 uv, out vec3 over) {
     y = p.y / p.w;
   }
   float h = (y - uFogBase) / max(uFogHeight, 0.001);
+  // a fog of the view: the picture's height from 0 (bottom edge) to 2 (top edge), the range of the Height setting
+  float hv = (uv.y - uFogFrame.y) / uFogFrame.w * 2.0;
   float clear = 1.0;
   for (int i = 0; i < ${MAX_FOGS}; i++) {
     if (i >= uFogCount) break;
     float w = max(uFogShape[i].y * 0.5, 0.001);
-    float a = mix(uFogDensity[i].y, uFogDensity[i].x, smoothstep(uFogShape[i].x - w, uFogShape[i].x + w, h));
+    float a = mix(uFogDensity[i].y, uFogDensity[i].x, smoothstep(uFogShape[i].x - w, uFogShape[i].x + w, uFogView[i] > 0.5 ? hv : h));
     over = over * (1.0 - a) + uFogColor[i] * a;
     clear *= 1.0 - a;
   }
@@ -90,6 +97,7 @@ interface FogUniforms {
   uFogColor: { value: { set(c: string): unknown }[] };
   uFogDensity: { value: { set(a: number, b: number): unknown }[] };
   uFogShape: { value: { set(a: number, b: number): unknown }[] };
+  uFogView: { value: number[] };
 }
 
 /** The uniform values for the fogs that are on (the others do not take part), at most MAX_FOGS of them. */
@@ -100,5 +108,6 @@ export function applyFogUniforms(u: FogUniforms, fogs: readonly FogState[]) {
     u.uFogColor.value[i].set(f.color);
     u.uFogDensity.value[i].set(f.top, f.bottom);
     u.uFogShape.value[i].set(f.middle, f.softness);
+    u.uFogView.value[i] = f.view ? 1 : 0;
   });
 }

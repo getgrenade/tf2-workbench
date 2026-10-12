@@ -62,7 +62,7 @@ pub struct ItemBuildRequest {
 pub struct ClassRequest { folder: String, #[serde(default)] qc_extra: String, lods: Vec<LodRequest> }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LodRequest { source_path: String, smd: String, triangles: u32, vertices: u32 }
+pub struct LodRequest { source_path: String, smd: String, #[serde(default)] dmx: Option<Vec<u8>>, triangles: u32, vertices: u32 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlueRequest { vmt: String, color: Option<String> }
@@ -84,7 +84,7 @@ pub async fn build_item(state: State<'_, AppState>, request: ItemBuildRequest) -
     let spec = ItemSpec {
         name: request.name, display_name: request.display_name, prefab: request.prefab, equip_region: request.equip_region,
         bodygroups: request.bodygroups, paintable: request.paintable, icon: PathBuf::from(request.icon),
-        classes: request.classes.into_iter().map(|c| ClassSpec { folder: c.folder, qc_extra: c.qc_extra, lods: c.lods.into_iter().map(|l| LodSpec { source_path: l.source_path, smd: l.smd, triangles: l.triangles, vertices: l.vertices }).collect() }).collect(),
+        classes: request.classes.into_iter().map(|c| ClassSpec { folder: c.folder, qc_extra: c.qc_extra, lods: c.lods.into_iter().map(|l| LodSpec { source_path: l.source_path, smd: l.smd, dmx: l.dmx, triangles: l.triangles, vertices: l.vertices }).collect() }).collect(),
         materials: request.materials.into_iter().map(|m| MaterialSpec { source_name: m.source_name, vmt: m.vmt, color: path(m.color), normal: path(m.normal), phongexponent: path(m.phongexponent), illum: path(m.illum), blue: m.blue.map(|b| BlueSpec { vmt: b.vmt, color: path(b.color) }) }).collect(),
     };
     let out = tf.join("workshop").join("import_source");
@@ -439,8 +439,8 @@ pub fn read_text_file(path: String) -> Result<String, String> {
 fn source_path(path: &str) -> Result<PathBuf, String> {
     let p = PathBuf::from(path);
     match p.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
-        Some("fbx") | Some("tga") => Ok(p),
-        _ => Err(format!("refusing to read {path}: only .fbx and .tga files")),
+        Some("fbx") | Some("smd") | Some("dmx") | Some("tga") => Ok(p),
+        _ => Err(format!("refusing to read {path}: only .fbx, .smd, .dmx and .tga files")),
     }
 }
 
@@ -456,7 +456,7 @@ pub async fn read_source_file(path: String) -> Result<tauri::ipc::Response, Stri
     Ok(tauri::ipc::Response::new(bytes))
 }
 
-/// The model and texture files (.fbx, .tga) that share a folder with a source file: the compiler fills in the LODs and textures that go with the one picked.
+/// The model and texture files (.fbx, .smd, .dmx, .tga) that share a folder with a source file: the compiler fills in the LODs and textures that go with the one picked.
 #[tauri::command]
 pub fn source_siblings(path: String) -> Vec<String> {
     let Ok(p) = source_path(&path) else { return Vec::new() };
@@ -464,7 +464,7 @@ pub fn source_siblings(path: String) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
     entries.filter_map(|e| e.ok()).filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
         .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|n| { let l = n.to_ascii_lowercase(); l.ends_with(".fbx") || l.ends_with(".tga") })
+        .filter(|n| { let l = n.to_ascii_lowercase(); l.ends_with(".fbx") || l.ends_with(".smd") || l.ends_with(".dmx") || l.ends_with(".tga") })
         .take(5000).collect()
 }
 

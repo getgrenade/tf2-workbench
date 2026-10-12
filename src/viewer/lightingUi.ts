@@ -19,6 +19,7 @@ export function createLightingUi(pane: HTMLElement, host: LightingHost) {
   const root = document.createElement("div");
   root.className = "lightingEditor";
   root.innerHTML = `<section class="lightCol worldSky"></section>
+<section class="lightCol worldReflection"></section>
 <section class="lightCol worldGround"></section>
 <section class="lightCol lightingAmbient"><h3>Ambient &amp; shadows</h3><div class="lightAmbientFields"><span>Ambient</span><input type="color" data-control="ambientColor" aria-label="Ambient colour" /><input type="range" data-control="ambient" aria-label="Ambient intensity" min="0" max="1" step=".01" /><input class="lightValue" type="number" data-value="ambient" aria-label="Ambient value" min="0" max="1" step="any" /></div>
 <div class="lightShadowQuality"><label class="lightShadowRes" title="The size of the picture each light's shadows are drawn into (a bigger one is sharper and takes more memory)">Real shadows <select data-control="shadowRes"><option value="512">Low · 512</option><option value="1024">Medium · 1024</option><option value="2048">High · 2048</option><option value="4096">Ultra · 4096</option></select></label>

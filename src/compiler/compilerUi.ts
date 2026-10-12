@@ -116,7 +116,7 @@ export function createCompilerUi(host: CompilerHost) {
 
   /** A file row: a label, the path, and buttons to browse for another and to clear it. */
   function fileRow(label: string, path: string, kind: "fbx" | "tga", set: (path: string) => void, note = "", problem = "", compact = false) {
-    const input = h("input", { className: "text", type: "text", value: path, placeholder: kind === "fbx" ? "model (.fbx)" : "texture (.tga)", spellcheck: false });
+    const input = h("input", { className: "text", type: "text", value: path, placeholder: kind === "fbx" ? "model (.fbx, .smd, .dmx)" : "texture (.tga)", spellcheck: false });
     input.onchange = () => set(input.value.trim());
     const browse = h("button", { textContent: "…", title: `Choose a .${kind} file` });
     browse.onclick = async () => { const chosen = await host.pick(kind, path); if (chosen) set(chosen); };

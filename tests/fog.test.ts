@@ -15,6 +15,11 @@ test("a scene without fog gives none, and bad values are replaced", () => {
 });
 
 test("a good fog is kept as it is", () => {
-  const f = { enabled: true, color: "#112233", top: 0.4, bottom: 0.1, middle: 0.3, softness: 0.5 };
+  const f = { enabled: true, color: "#112233", top: 0.4, bottom: 0.1, middle: 0.3, softness: 0.5, view: false };
   assert.deepEqual(parseFog(f), f);
+});
+
+test("a fog of the view is kept, and an older fog (without the setting) lies in the world", () => {
+  assert.equal(parseFog({ enabled: true, view: true })?.view, true);
+  assert.equal(parseFog({ enabled: true, color: "#112233", top: 0.4, bottom: 0.1, middle: 0.3, softness: 0.5 })?.view, false);
 });

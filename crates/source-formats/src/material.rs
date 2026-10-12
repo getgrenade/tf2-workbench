@@ -72,8 +72,25 @@ fn load_texture(vpk: &VpkSet, name: &str) -> Result<vtf::Image> {
     vtf::decode(&bytes, 0).map_err(|e| ParseError(format!("{path}: {e}")))
 }
 
+/// A cubemap texture of the game as a material of its own, so that it travels like any other: `materials/__cubemap__/<name>.vmt` (no such file
+/// exists) holds the six faces of `materials/<name>.vtf` as `env0`..`env5`. The viewer asks for one to light the scene with it.
+pub const CUBEMAP_PREFIX: &str = "materials/__cubemap__/";
+/// The size of the faces of those (reflections are blurry, so this is plenty).
+const CUBEMAP_FACE: u32 = 512;
+
+fn cubemap_material(vpk: &VpkSet, vmt_path: &str) -> Result<Material> {
+    let name = vmt_path[CUBEMAP_PREFIX.len()..].trim_end_matches(".vmt");
+    let faces = load_cubemap(vpk, name, CUBEMAP_FACE)?;
+    let textures = faces.into_iter().enumerate().map(|(i, img)| (format!("env{i}"), img)).collect();
+    Ok(Material { path: vmt_path.to_string(), shader: "cubemap".to_string(), params: HashMap::new(), proxies: Vec::new(), textures, errors: Vec::new() })
+}
+
 fn load_cubemap(vpk: &VpkSet, name: &str, max_face: u32) -> Result<Vec<vtf::Image>> {
-    let path = vtf_path(name);
+    let mut path = vtf_path(name);
+    // some cubemaps exist only in their HDR form (the goggles of Pyroland)
+    if !vpk.contains(&path) && vpk.contains(&path.replace(".vtf", ".hdr.vtf")) {
+        path = path.replace(".vtf", ".hdr.vtf");
+    }
     if !vpk.contains(&path) {
         return fail(format!("cubemap not found: {path}"));
     }
@@ -102,6 +119,9 @@ pub fn texture_frames(vpk: &VpkSet, name: &str, max_frames: usize) -> Result<Vec
 
 /// Loads `materials/.../x.vmt` and decodes the textures its shading uses.
 pub fn load(vpk: &VpkSet, vmt_path: &str) -> Result<Material> {
+    if vmt_path.starts_with(CUBEMAP_PREFIX) {
+        return cubemap_material(vpk, vmt_path);
+    }
     let vmt = vmt::load(vpk, vmt_path)?;
     let mut textures = Vec::new();
     let mut errors = Vec::new();

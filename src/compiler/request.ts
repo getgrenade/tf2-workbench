@@ -1,9 +1,10 @@
 import type { ItemBuildRequest } from "../api";
 import { writeSmd } from "./smd";
+import { writeDmx } from "./dmxWrite";
 import { materialFileName, NUM_LODS, type CompilerSession } from "./session";
 
 /**
- * What the native side needs to build the item: the model of each LOD of each class as an .smd, the finished material files, the paths
+ * What the native side needs to build the item: the model of each LOD of each class as an .smd (a .dmx for a model with flexes, which an .smd cannot carry), the finished material files, the paths
  * of the textures and icon (it reads and converts those itself), and the item's schema data. Throws when something is missing; the
  * session's own checks (`issues`) are what the interface shows before the artist gets here.
  */
@@ -16,10 +17,13 @@ export function makeBuildRequest(session: CompilerSession, current: string): Ite
     for (let i = 0; i < NUM_LODS; i++) {
       const model = session.model(cls, i);
       if (!model) continue;
+      // the materials of a class's model are the item's by their position
+      const slot = (material: string) => materialFileName(session.itemName, session.materialSlot(cls, material));
+      const flexed = !!model.flexes?.length;
       lods.push({
         sourcePath: session.lods(cls)[i],
-        // the materials of a class's model are the item's by their position
-        smd: writeSmd(model, (material) => materialFileName(session.itemName, session.materialSlot(cls, material)), "bip_head", d.turns),
+        smd: flexed ? "" : writeSmd(model, slot, "bip_head", d.turns),
+        ...(flexed ? { dmx: Array.from(writeDmx(model, slot, "bip_head", d.turns)) } : {}),
         triangles: model.triangles,
         vertices: model.vertices,
       });

@@ -228,6 +228,15 @@ fn main() {
             crawl.material(&p);
         }
     }
+    // the cubemaps that can light a scene (the viewer asks for each as a material of its own, see `material::CUBEMAP_PREFIX`)
+    let cubemaps: Vec<String> = vpk.search("materials/cubemaps/cubemap_", usize::MAX).into_iter()
+        .filter(|p| p.ends_with(".vtf") && !p.ends_with(".hdr.vtf") && !p.contains("render_source")).map(str::to_owned).collect();
+    for p in cubemaps {
+        crawl.material(&format!("{}{}.vmt", source_formats::material::CUBEMAP_PREFIX, p.trim_start_matches("materials/").trim_end_matches(".vtf")));
+    }
+    for name in ["hlmv/cubemap", "effects/saxxy/saxxy_gold", "effects/pyrocube"] {
+        crawl.material(&format!("{}{name}.vmt", source_formats::material::CUBEMAP_PREFIX));
+    }
     // the buildings, the shells and gibs, the screens of the dispenser, the blood decals and the glow of an uber charge
     for prefix in ["models/buildables/", "models/weapons/shells/", "models/effects/", "models/player/gibs/"] {
         let found: Vec<String> = vpk.search(prefix, usize::MAX).into_iter().filter(|p| p.ends_with(".mdl")).map(str::to_owned).collect();

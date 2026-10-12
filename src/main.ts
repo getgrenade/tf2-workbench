@@ -78,6 +78,7 @@ app.innerHTML = `
         <section class="lightCol" data-effect="fog" hidden>
           <h3>Fog <button id="fogReset" title="Reset the fog settings">Reset</button></h3>
           <div class="checks"><label title="A fog in the scene, measured from the floor in character heights: it keeps its place when the camera moves or zooms, and shows in screenshots"><input type="checkbox" id="fogOn" /> Gradient fog</label></div>
+          <div class="checks"><label title="Off: the fog lies in the world, measured from the floor. On: it lies over the picture, from its bottom edge to its top edge, and stays put as the camera moves"><input type="checkbox" id="fogView" /> Follow the view</label></div>
           <label class="colorRow">Colour <input type="color" id="fogColor" value="#bdbdbd" /></label>
           <label class="slider">Floor density <output></output><input type="range" id="fogBottom" min="0" max="1" step="0.01" value="0.28" /></label>
           <label class="slider">High density <output></output><input type="range" id="fogTop" min="0" max="1" step="0.01" value="0" /></label>
@@ -333,6 +334,7 @@ const viewTab = createViewTab({
     bottom: $<HTMLInputElement>("fogBottom"),
     middle: $<HTMLInputElement>("fogMid"),
     softness: $<HTMLInputElement>("fogSoft"),
+    view: $<HTMLInputElement>("fogView"),
     reset: $<HTMLButtonElement>("fogReset"),
   },
   shadow: {

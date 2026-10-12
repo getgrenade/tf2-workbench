@@ -38,7 +38,8 @@ gl_FragColor = packDepthToRGBA(gl_FragCoord.z); }`,
       uRigParams: { value: Array.from({ length: MAX_LIGHTS }, () => new THREE.Vector4(0, 1, 1, 0)) }, uRigShadow: { value: new Array(MAX_LIGHTS).fill(0) },
       uRigShadowMatrix: { value: Array.from({ length: MAX_LIGHTS * 6 }, () => new THREE.Matrix4()) },
       tRigShadow: { value: null }, uRigShadowSlot: { value: new Array(MAX_LIGHTS).fill(0) }, uRigShadowGrid: { value: new THREE.Vector2(1, 1) },
-      uRigShadowBias: { value: DEFAULT_SHADOW_QUALITY.bias }, uRigShadowSoft: { value: 0 },
+      uRigShadowBias: { value: DEFAULT_SHADOW_QUALITY.bias }, uRigShadowSoft: { value: 0 }, uRigShadowTexel: { value: new Array(MAX_LIGHTS).fill(0) },
+      uRigShadowNearFar: { value: Array.from({ length: MAX_LIGHTS }, () => new THREE.Vector2(.1, 1)) },
     });
     const uploadMask = this.depth.onBeforeRender.bind(this.depth);
     this.depth.onBeforeRender = (...args) => {
@@ -145,13 +146,20 @@ gl_FragColor = packDepthToRGBA(gl_FragCoord.z); }`,
         for (let face = 0; face < count; face++) {
           let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera;
           if (light.type === "directional") {
+            // a tight depth range keeps the bias (a fraction of it) small in world units: a deep range makes a contact shadow let go of its caster
             const span = Math.max(20, radius * 1.4);
-            camera = new THREE.OrthographicCamera(-span, span, span, -span, .1, span * 10);
-            camera.position.copy(center).addScaledVector(direction, span * 4);
+            camera = new THREE.OrthographicCamera(-span, span, span, -span, span * .5, span * 3.5);
+            camera.position.copy(center).addScaledVector(direction, span * 2);
             camera.lookAt(center);
+            this.shared.uRigShadowTexel.value[index] = 2 * span / tile;
+            this.shared.uRigShadowNearFar.value[index].set(span * .5, span * 3.5);
           }
           else {
-            camera = new THREE.PerspectiveCamera(light.type === "point" ? 90 : light.cone * 2, 1, .5, light.range);
+            const fov = light.type === "point" ? 90 : light.cone * 2;
+            camera = new THREE.PerspectiveCamera(fov, 1, .5, light.range);
+            // world size of a texel per unit of distance from the light
+            this.shared.uRigShadowTexel.value[index] = 2 * Math.tan(fov * Math.PI / 360) / tile;
+            this.shared.uRigShadowNearFar.value[index].set(.5, light.range);
             camera.position.fromArray(light.position);
             if (light.type === "point") {
               camera.up.fromArray(CUBE_UP[face]);

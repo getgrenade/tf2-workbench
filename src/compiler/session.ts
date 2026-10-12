@@ -1,5 +1,6 @@
 import type { MaterialData, ModelData, TextureData } from "../viewer/payload";
-import { importFbx, type ImportedModel } from "./fbx";
+import type { ImportedModel } from "./fbx";
+import { importModel } from "./importModel";
 import { decodeTga, iconProblem, textureProblem, type TextureKind, type TgaImage } from "./tga";
 import { buildPreviewMaterial, buildPreviewModel, type PreviewBone, type PreviewTextures } from "./preview";
 import { smdBoneNames } from "./smd";
@@ -95,6 +96,8 @@ export interface SessionIo {
   siblings(path: string): Promise<string[]>;
   /** A texture of the game (a light warp ramp), decoded. */
   gameTexture(name: string): Promise<TextureData | null>;
+  /** The six faces of a cubemap of the game (a reflection a material can have), decoded. */
+  gameCubemap?(name: string): Promise<TextureData[] | null>;
 }
 
 interface LoadedModel { path: string; stamp: number; model: ImportedModel }
@@ -117,6 +120,7 @@ export class CompilerSession {
   readonly failures = new Map<string, string>();
   icon: LoadedImage | null = null;
   private readonly ramps = new Map<string, TextureData | null>();
+  private readonly cubemaps = new Map<string, TextureData[] | null>();
   onChange: () => void = () => {};
   /** What was filled in from the names of the files rather than picked: it is replaced by the next fill, not by hand-picked files. */
   private readonly auto = new Set<string>();
@@ -158,7 +162,7 @@ export class CompilerSession {
     const path = this.lods(cls)[index];
     try {
       const stamp = (await this.io.stamp(path)) ?? 0;
-      const model = importFbx(await this.io.read(path));
+      const model = importModel(path, await this.io.read(path));
       this.loaded(cls)[index] = { path, stamp, model };
       this.failures.delete(path);
     } catch (error) {
@@ -500,8 +504,12 @@ export class CompilerSession {
       };
       const m = this.data.materials[material];
       if (!this.ramps.has(settings.lightwarp)) this.ramps.set(settings.lightwarp, await this.io.gameTexture(settings.lightwarp).catch(() => null));
+      // the reflection: the preview has no level, so "the cubemap of the level" is the viewer's own (the world setting can replace it)
+      const cubemap = settings.envmap === "env_cubemap" ? "hlmv/cubemap" : settings.envmap;
+      if (cubemap && this.io.gameCubemap && !this.cubemaps.has(cubemap)) this.cubemaps.set(cubemap, await this.io.gameCubemap(cubemap).catch(() => null));
       for (const team of (this.data.teamColors ? [0, 1] : [0]) as Team[]) {
         const textures: PreviewTextures = {};
+        textures.env = cubemap ? this.cubemaps.get(cubemap) ?? undefined : undefined;
         textures.base = take(team === 1 && this.blueIsOwn(material) ? m?.blueColor : m?.color);
         textures.bump = take(m?.normal);
         textures.exponent = take(m?.phongexponent);

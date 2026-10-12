@@ -249,6 +249,8 @@ export function createLookUniforms() {
     uDust: { value: new THREE.Vector4() },
     uDustColor: { value: new THREE.Color(0xffffff) },
     uDither: { value: 0 },
+    // where the picture of a camera is on the screen (x, y, width, height as fractions of the view): the effects belong to the picture, not to the view around it
+    uLookFrame: { value: new THREE.Vector4(0, 0, 1, 1) },
   };
 }
 export type LookUniforms = ReturnType<typeof createLookUniforms>;
@@ -295,7 +297,10 @@ export function applyLookUniforms(u: LookUniforms, s: LookStates) {
 
 /** The GLSL of the effects. \`tBloom\` and \`uLookRes\` (the size of the picture in pixels) come from whoever draws the picture. */
 export const LOOK_GLSL = /* glsl */ `
-uniform vec2 uLookRes;
+uniform vec2 uLookRes;   // the size of the picture (a camera's frame when one is looked through) in pixels
+uniform vec4 uLookFrame; // where that picture is in the view
+vec2 lookLocal(vec2 uv) { return (uv - uLookFrame.xy) / uLookFrame.zw; }
+vec2 lookGlobal(vec2 uv) { return uLookFrame.xy + uv * uLookFrame.zw; }
 uniform sampler2D tBloom;
 uniform float uBloomK;
 uniform float uAberr;
@@ -327,16 +332,17 @@ float lookHash(vec2 p) {
 vec2 lookDistort(vec2 uv) {
   if (uDist == 0.0) return uv;
   float asp = uLookRes.x / uLookRes.y;
+  uv = lookLocal(uv);
   vec2 p = (uv - 0.5) * vec2(asp, 1.0) / (0.5 * length(vec2(asp, 1.0)));
   float r2 = dot(p, p);
-  return 0.5 + (uv - 0.5) * (1.0 + uDist * r2) / max(1.0, 1.0 + uDist);
+  return lookGlobal(0.5 + (uv - 0.5) * (1.0 + uDist * r2) / max(1.0, 1.0 + uDist));
 }
 // ... and the big pixels
 vec2 lookUv(vec2 uv) {
   uv = lookDistort(uv);
   if (uPixel > 0.0) {
     vec2 cell = vec2(max(uPixel * uLookRes.y / 1080.0, 1.0));
-    uv = (floor(uv * uLookRes / cell) + 0.5) * cell / uLookRes;
+    uv = lookGlobal((floor(lookLocal(uv) * uLookRes / cell) + 0.5) * cell / uLookRes);
   }
   return uv;
 }
@@ -345,7 +351,7 @@ vec4 lookScene(sampler2D s, vec2 uv) {
   uv = lookUv(uv);
   vec4 g = texture2D(s, uv);
   if (uAberr <= 0.0) return g;
-  vec2 d = (uv - 0.5) * uAberr;
+  vec2 d = (lookLocal(uv) - 0.5) * uAberr * uLookFrame.zw;
   return vec4(texture2D(s, uv + d).r, g.g, texture2D(s, uv - d).b, g.a);
 }
 // the triangular noise that is added to the finished colours (in steps of 1/255)
@@ -397,6 +403,7 @@ vec3 lookTone(vec3 c, float cover) {
 }
 vec3 lookColor(vec3 c, vec2 uv, float cover) {
   if (uBloomK > 0.0) c += texture2D(tBloom, uv).rgb * uBloomK;
+  uv = lookLocal(uv); // from here on the picture is the frame
   c = lookTone(c, cover);
   if (uVig.x > 0.0) {
     vec2 p = uv - 0.5;

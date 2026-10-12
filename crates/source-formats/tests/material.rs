@@ -176,3 +176,20 @@ fn burn_fire_layer_loads_as_one_block_of_frames() {
     let scout = material::load(&vpk, "materials/models/player/scout/scout_red.vmt").unwrap();
     assert!(!scout.textures.iter().any(|(slot, _)| slot.contains("detail")));
 }
+
+#[test]
+fn a_cubemap_of_the_game_loads_as_a_material_of_its_own() {
+    let Some(tf) = steam::find_tf2() else { return };
+    let vpk = VpkSet::open_folder(&tf).unwrap();
+    // a plain one, and one that exists only as an HDR file (the goggles of Pyroland)
+    for name in ["cubemaps/cubemap_gold001", "effects/pyrocube", "hlmv/cubemap"] {
+        let m = material::load(&vpk, &format!("{}{name}.vmt", material::CUBEMAP_PREFIX)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let faces: Vec<_> = m.textures.iter().filter(|(slot, _)| slot.starts_with("env")).collect();
+        assert_eq!(faces.len(), 6, "{name}: {:?}", m.errors);
+        for (_, img) in &faces {
+            assert!(img.width <= 512 && img.width == img.height, "{name}: {}x{}", img.width, img.height);
+            let sum: u64 = img.rgba.chunks_exact(4).map(|p| p[0] as u64 + p[1] as u64 + p[2] as u64).sum();
+            assert!(sum > 0, "{name}: a face is black");
+        }
+    }
+}

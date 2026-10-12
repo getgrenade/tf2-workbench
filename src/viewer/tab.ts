@@ -1,5 +1,6 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { createCompilerUi, type PreviewApplication } from "../compiler/compilerUi";
+import { MODEL_EXTENSIONS } from "../compiler/importModel";
 import { decodeTga, encodeTga, iconProblem, ICON_SAFE_ROWS } from "../compiler/tga";
 import { fadeAmount, maskIcon, type IconFade } from "../compiler/iconMask";
 import { importSourceDir, readItemSession, saveItemIcon, buildItem, loadTextureFrames, readSourceFile, revealFile, sourceSiblings, sourceStamp } from "../api";
@@ -27,6 +28,9 @@ import { recordVideo, type VideoOptions } from "./videoRecorder";
 import { toggleVideoPanel } from "./videoUi";
 import { createPostUi } from "./postEffects";
 import { createSkyUi } from "./skyUi";
+import { createReflectionUi } from "./reflectionUi";
+import { CUBEMAP_MATERIAL, loadCubemapTexture } from "./reflection";
+import { DEFAULT_REFLECTION, type ReflectionState } from "./reflectionState";
 import { createOverlayPanel } from "./overlayPanel";
 import { createGroundUi } from "./groundUi";
 import { DEFAULT_GROUND, type GroundState } from "./groundPlane";
@@ -114,6 +118,7 @@ interface Els {
     bottom: HTMLInputElement;
     middle: HTMLInputElement;
     softness: HTMLInputElement;
+    view: HTMLInputElement;
     reset: HTMLButtonElement;
   };
   shadow: {
@@ -244,6 +249,10 @@ export function createViewTab(els: Els) {
   let skyUi: ReturnType<typeof createSkyUi> | null = null;
   let skyShown: { name: string; texture: import("three").CubeTexture } | null = null;
   let skyToken = 0;
+  // the cubemap the shiny materials reflect (null: their own)
+  let reflection: ReflectionState = { ...DEFAULT_REFLECTION };
+  let reflectionUi: ReturnType<typeof createReflectionUi> | null = null;
+  let reflectionToken = 0;
   // the plane at the floor
   const DEFAULT_BACKGROUND = "#404040";
   const bgInput = document.getElementById("bgColor") as HTMLInputElement;
@@ -280,6 +289,22 @@ export function createViewTab(els: Els) {
     v.setSky(texture, sky.rotation, sky.brightness);
     if (skyShown && skyShown.texture !== texture) skyShown.texture.dispose();
     skyShown = { name: sky.name, texture };
+  }
+  /** Shows the reflections of `reflection` in the view. */
+  async function applyReflection() {
+    const v = viewer;
+    if (!v) return;
+    const token = ++reflectionToken;
+    if (!reflection.cubemap) { v.setWorldCube(null); return; }
+    const texture = await loadCubemapTexture(v.mats, reflection.cubemap);
+    if (token !== reflectionToken) return;
+    v.setWorldCube(texture, reflection.brightness);
+  }
+  /** Makes `next` the reflections of the scene (a scene was opened or started, or the panel changed it). */
+  async function setReflectionState(next: ReflectionState) {
+    reflection = { ...next };
+    reflectionUi?.sync();
+    await applyReflection();
   }
   /** Makes `next` the sky of the scene (a scene was opened or started, or the panel changed it). */
   async function setSkyState(next: SkyState) {
@@ -342,6 +367,11 @@ export function createViewTab(els: Els) {
       stamp: sourceStamp,
       siblings: sourceSiblings,
       gameTexture: async (name) => parseTextureFrames(await loadTextureFrames(name, 1))[0] ?? null,
+      gameCubemap: async (name) => {
+        const m = parseMaterial(await loadMaterial(CUBEMAP_MATERIAL(name)));
+        const faces = [0, 1, 2, 3, 4, 5].map((i) => m.textures[`env${i}`]);
+        return faces.every(Boolean) ? faces : null;
+      },
     },
     selection: () => {
       const e = selected;
@@ -361,7 +391,7 @@ export function createViewTab(els: Els) {
     },
     setPreview: showCompilerItem,
     pick: async (kind, current) => {
-      const picked = await open({ multiple: false, directory: false, defaultPath: current || undefined, filters: [{ name: kind === "fbx" ? "Model" : "Texture", extensions: [kind] }] });
+      const picked = await open({ multiple: false, directory: false, defaultPath: current || undefined, filters: [{ name: kind === "fbx" ? "Model" : "Texture", extensions: kind === "fbx" ? [...MODEL_EXTENSIONS] : [kind] }] });
       return typeof picked === "string" ? picked : null;
     },
     build: async (request) => {
@@ -1345,6 +1375,7 @@ export function createViewTab(els: Els) {
       viewer.setFov(+els.fov.value);
       pushPost();
       void applySky().catch(() => {});
+      void applyReflection().catch(() => {});
       viewer.setGround(ground);
       viewer.setBackdropColor(bgInput.value);
       viewer.setSpacing(+els.entities.spacing.value);
@@ -3370,6 +3401,7 @@ export function createViewTab(els: Els) {
       pointLight: v.getPointLight(),
       ...capturePost(),
       sky: { ...sky },
+      reflection: { ...reflection },
       ground: { ...ground },
       background: bgInput.value,
       wireframe: els.wire.checked,
@@ -3455,6 +3487,7 @@ export function createViewTab(els: Els) {
     applyLights(scene.light, scene.pointLight);
     setPostItems(postItemsOf(scene));
     void setSkyState(scene.sky ?? DEFAULT_SKY).catch(() => {});
+    void setReflectionState(scene.reflection ?? DEFAULT_REFLECTION).catch(() => {});
     setGroundState(scene.ground ?? DEFAULT_GROUND);
     setBackgroundColor(scene.background ?? DEFAULT_BACKGROUND);
     els.wire.checked = scene.wireframe;
@@ -3586,6 +3619,7 @@ export function createViewTab(els: Els) {
     v.cameras.restore(null);
     setPostItems([{ id: "post-1", kind: "shadow", state: { ...DEFAULT_SHADOW } }]); // a new scene starts with the ground shadow and without fog
     void setSkyState(DEFAULT_SKY);
+    void setReflectionState(DEFAULT_REFLECTION).catch(() => {});
     setGroundState(DEFAULT_GROUND);
     for (const e of [...entities]) v.removeActor(e.actor);
     entities.length = 0;
@@ -3601,6 +3635,43 @@ export function createViewTab(els: Els) {
     renderEntities();
     await show(e, e.cls);
     v.focusBody();
+  }
+
+  /** The world settings of a new scene: the lights, the background, the field of view, the spacing and the view switches at their defaults (the scene itself is made by applyBlank). */
+  function resetWorldToDefaults() {
+    pendingLight = { ...DEFAULT_LIGHT, rig: defaultLightingRig(DEFAULT_LIGHT) };
+    syncSliders(pendingLight);
+    applySliders();
+    lightingUi?.sync();
+    setPointControls(DEFAULT_POINT_LIGHT);
+    applyPoint();
+    setBackgroundColor(DEFAULT_BACKGROUND);
+    for (const input of [els.fov, els.entities.spacing]) {
+      input.value = input.defaultValue;
+      input.oninput?.(new Event("input"));
+    }
+    els.jiggle.checked = els.jiggle.defaultChecked;
+    els.jiggle.onchange?.(new Event("change"));
+    els.wire.checked = false;
+    viewer?.setWireframe(false);
+    syncWireButton();
+  }
+
+  /** A new tab with a copy of the scene that is open. */
+  async function newSceneCopy() {
+    if (!activeTab) return;
+    captureActive();
+    const scene = serializeScene();
+    if (!scene) return;
+    await openTab(parseScene(JSON.stringify(scene)), `${activeTab.name} copy`);
+  }
+
+  /** A new tab with the default scene: a Soldier, the default lights, background, sky, ground and post-processing, no cameras. */
+  async function newSceneDefault() {
+    await openTab(null, undefined, undefined, async () => {
+      await applyBlank();
+      resetWorldToDefaults();
+    });
   }
 
   /** "Scene N" with the lowest N no open tab uses. */
@@ -3788,6 +3859,7 @@ export function createViewTab(els: Els) {
       applyPoint();
       setPostItems([]);
       void setSkyState(DEFAULT_SKY);
+      void setReflectionState(DEFAULT_REFLECTION).catch(() => {});
     setGroundState(DEFAULT_GROUND);
       els.wire.checked = false;
       v.setWireframe(false);
@@ -4059,6 +4131,10 @@ export function createViewTab(els: Els) {
 
   els.capture.paintChart.onclick = () => void makePaintChart();
   els.capture.menu.onclick = () => openMenu(els.capture.menu, [
+    { label: "New scene", children: [
+      { label: "Copy", hint: "of this scene", run: () => void newSceneCopy() },
+      { label: "Default", hint: "a fresh scene", run: () => void newSceneDefault() },
+    ] },
     { label: "Save scene", children: [
       { label: "All", hint: ".json", run: () => void saveSceneToFile() },
       { label: "Lights", hint: PART_SUFFIX.lights, run: () => void saveScenePart("lights") },
@@ -4548,7 +4624,7 @@ export function createViewTab(els: Els) {
   // --- fog ---
   function applyFog() {
     const f = els.fog;
-    editedPost("fog", { enabled: f.on.checked, color: f.color.value, top: +f.top.value, bottom: +f.bottom.value, middle: +f.middle.value, softness: +f.softness.value });
+    editedPost("fog", { enabled: f.on.checked, color: f.color.value, top: +f.top.value, bottom: +f.bottom.value, middle: +f.middle.value, softness: +f.softness.value, view: f.view.checked });
     const label = (el: HTMLInputElement, text: string) => {
       const out = el.parentElement?.querySelector("output");
       if (out) out.textContent = text;
@@ -4567,9 +4643,10 @@ export function createViewTab(els: Els) {
     e.bottom.value = String(f.bottom);
     e.middle.value = String(f.middle);
     e.softness.value = String(f.softness);
+    e.view.checked = f.view === true;
     applyFog();
   }
-  for (const el of [els.fog.on, els.fog.color, els.fog.top, els.fog.bottom, els.fog.middle, els.fog.softness]) el.oninput = applyFog;
+  for (const el of [els.fog.on, els.fog.color, els.fog.top, els.fog.bottom, els.fog.middle, els.fog.softness, els.fog.view]) el.oninput = applyFog;
   els.fog.reset.onclick = () => showFog({ ...DEFAULT_FOG, enabled: els.fog.on.checked });
   applyFog();
 
@@ -4754,6 +4831,10 @@ export function createViewTab(els: Els) {
   skyUi = createSkyUi(document.querySelector<HTMLElement>("#lightPane .worldSky")!, {
     get: () => sky,
     set: async (next) => { await setSkyState(next); },
+  });
+  reflectionUi = createReflectionUi(document.querySelector<HTMLElement>("#lightPane .worldReflection")!, {
+    get: () => reflection,
+    set: async (next) => { await setReflectionState(next); },
   });
   groundUi = createGroundUi(document.querySelector<HTMLElement>("#lightPane .worldGround")!, {
     get: () => ground,

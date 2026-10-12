@@ -300,6 +300,9 @@ export class Viewer {
     uPointFalloff: { value: 1.5 },
     // 0 shaded, 1 diffuse colour only, 2 grayscale (see the fragment shaders)
     uViewMode: { value: 0 },
+    // the cubemap that the materials which reflect "the cubemap of the level" (env_cubemap) show instead of their own, when one is picked
+    tWorldCube: { value: null as THREE.CubeTexture | null },
+    uWorldCube: { value: 0 },
   };
   /** Textures and Source materials, shared by every character. */
   readonly mats: SourceMaterials;
@@ -375,6 +378,7 @@ export class Viewer {
   private readonly fogMaskTarget = new THREE.WebGLRenderTarget(1, 1, { colorSpace: THREE.NoColorSpace, samples: 4 });
   private fogFreeMaterial: THREE.ShaderMaterial | null = null;
   private fogHeldMaterial: THREE.ShaderMaterial | null = null;
+  private readonly lookUniforms = createLookUniforms();
   private readonly fogUniforms = {
     tFogMask: { value: this.fogMaskTarget.texture },
     uFogMaskOn: { value: 0 },
@@ -384,6 +388,9 @@ export class Viewer {
     uFogColor: { value: Array.from({ length: MAX_FOGS }, () => new THREE.Color()) },
     uFogDensity: { value: Array.from({ length: MAX_FOGS }, () => new THREE.Vector2()) },
     uFogShape: { value: Array.from({ length: MAX_FOGS }, () => new THREE.Vector2()) },
+    uFogView: { value: new Array<number>(MAX_FOGS).fill(0) },
+    // the same object as the look's frame: the effects and the fogs of the view both belong to a camera's picture
+    uFogFrame: this.lookUniforms.uLookFrame,
   };
   /** Some fog is on (what the passes that need the depth and the fog mask ask). */
   private fogOn = false;
@@ -393,7 +400,6 @@ export class Viewer {
   private readonly aoUniforms = { tAo: { value: null as THREE.Texture | null }, uAoOn: { value: 0 }, uAoStrength: { value: 0.8 }, uAoPower: { value: 1.5 } };
   /** The look effects (vignette, chromatic aberration, grain, colour grading, bloom) over the finished picture. */
   private look: LookStates = {};
-  private readonly lookUniforms = createLookUniforms();
   private readonly lookRes = new THREE.Vector2(1, 1);
   private bloomPass: BloomPass | null = null;
   private dofPass: DofPass | null = null;
@@ -2228,6 +2234,10 @@ void main() {
   /** The size of the picture for the effects, and the glow of bloom while it is on. */
   private updateLook() {
     const buf = this.renderer.getDrawingBufferSize(this.lookRes);
+    // through a camera the effects belong to its picture (vignette, grain and the rest are laid out on the frame, as in a screenshot)
+    const shot = this.cameras.active ? this.cameras.shotFrame : null;
+    if (shot) { this.lookUniforms.uLookFrame.value.set(shot.x, shot.y, shot.w, shot.h); this.lookRes.set(shot.pixels.w, shot.pixels.h); }
+    else this.lookUniforms.uLookFrame.value.set(0, 0, 1, 1);
     // the picture the final pass reads: the scene (or the average of its moments), blurred by the depth of field when that is on
     let source: THREE.Texture = this.motionTexture ?? this.sceneTarget.texture;
     const dof = this.look.dof;
@@ -2454,6 +2464,12 @@ void main() {
   /** The plane at the floor (see groundPlane.ts). */
   setGround(state: GroundState) {
     this.groundState = { ...state };
+  }
+
+  /** The cubemap that "the cubemap of the level" (env_cubemap) shows, `brightness` times as bright (null: the materials' own). */
+  setWorldCube(texture: THREE.CubeTexture | null, brightness = 1) {
+    this.shared.tWorldCube.value = texture;
+    this.shared.uWorldCube.value = texture ? brightness : 0;
   }
 
   /** The sky behind everything (null: none); it turns by `rotation` degrees around the vertical axis and is `brightness` times as bright. */
@@ -2974,7 +2990,7 @@ void main() {
     let captureDof: DofPass | null = null;
     let captureMotion: MotionAccumulator | null = null;
     const material = new THREE.ShaderMaterial({
-      uniforms: { tScene: { value: sceneRT.texture }, tDepth: { value: sceneRT.depthTexture }, uInvViewProj: { value: cam.matrixWorld.clone().multiply(cam.projectionMatrixInverse) }, uCamPos: { value: cam.getWorldPosition(new THREE.Vector3()) }, uCamForward: { value: cam.getWorldDirection(new THREE.Vector3()) }, uBackDist: { value: Math.max(1, this.camera.position.distanceTo(this.controls.target)) }, uTransparent: { value: transparent }, ...this.fogUniforms, ...(withLook ? this.lookUniforms : createLookUniforms()), uLookRes: { value: new THREE.Vector2(w, h) }, tBloom: { value: null }, uFogCount: { value: opts?.camera && !opts.fullScene ? 0 : this.fogUniforms.uFogCount.value }, tAo: { value: aoTexture }, uAoOn: { value: aoTexture ? 1 : 0 }, uAoStrength: { value: this.ao.strength }, uAoPower: { value: this.ao.power }, tFogMask: { value: maskRT?.texture ?? this.fogMaskTarget.texture }, uFogMaskOn: { value: maskRT ? 1 : 0 }, uLayer: { value: 0 }, uLayerAlt: { value: 0 } },
+      uniforms: { tScene: { value: sceneRT.texture }, tDepth: { value: sceneRT.depthTexture }, uInvViewProj: { value: cam.matrixWorld.clone().multiply(cam.projectionMatrixInverse) }, uCamPos: { value: cam.getWorldPosition(new THREE.Vector3()) }, uCamForward: { value: cam.getWorldDirection(new THREE.Vector3()) }, uBackDist: { value: Math.max(1, this.camera.position.distanceTo(this.controls.target)) }, uTransparent: { value: transparent }, ...this.fogUniforms, ...(withLook ? this.lookUniforms : createLookUniforms()), uLookFrame: { value: new THREE.Vector4(0, 0, 1, 1) }, uFogFrame: { value: new THREE.Vector4(0, 0, 1, 1) }, uLookRes: { value: new THREE.Vector2(w, h) }, tBloom: { value: null }, uFogCount: { value: opts?.camera && !opts.fullScene ? 0 : this.fogUniforms.uFogCount.value }, tAo: { value: aoTexture }, uAoOn: { value: aoTexture ? 1 : 0 }, uAoStrength: { value: this.ao.strength }, uAoPower: { value: this.ao.power }, tFogMask: { value: maskRT?.texture ?? this.fogMaskTarget.texture }, uFogMaskOn: { value: maskRT ? 1 : 0 }, uLayer: { value: 0 }, uLayerAlt: { value: 0 } },
       vertexShader: "varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }",
       // Preserve all light, including emission at zero alpha. Resolve PNG coverage after readback.
       fragmentShader: `uniform sampler2D tScene;

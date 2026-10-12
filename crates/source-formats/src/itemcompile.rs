@@ -23,8 +23,20 @@ pub struct LodSpec {
     /// The artist's file (recorded in the manifest).
     pub source_path: String,
     pub smd: String,
+    /// The model as a binary Datamodel file instead, for a model that has flexes (shape keys): the game's compiler reads those from a .dmx only.
+    pub dmx: Option<Vec<u8>>,
     pub triangles: u32,
     pub vertices: u32,
+}
+
+impl LodSpec {
+    /// The name of the file of the LOD in the item's content folder.
+    fn file(&self, model: &str, lod: usize) -> String {
+        let ext = if self.dmx.is_some() { "dmx" } else { "smd" };
+        if lod == 0 { format!("{model}.{ext}") } else { format!("{model}_lod{lod}.{ext}") }
+    }
+    /// What is written to that file (the text of an .smd gets the line ends of Windows).
+    fn bytes(&self) -> Vec<u8> { match &self.dmx { Some(d) => d.clone(), None => crlf(&self.smd) } }
 }
 
 /// The models of one class: `scout`, `sniper`, `soldier`, `demo`, `medic`, `heavy`, `pyro`, `spy` or `engineer`, and its LODs.
@@ -120,7 +132,7 @@ pub fn validate(spec: &ItemSpec) -> Result<(), String> {
         if !CLASSES.contains(&c.folder.as_str()) { return Err(format!("unknown class {}", c.folder)); }
         if spec.classes[..i].iter().any(|o| o.folder == c.folder) { return Err(format!("class {} is given twice", c.folder)); }
         if c.lods.is_empty() || c.lods.len() > 3 { return Err(format!("{} needs one to three LODs", c.folder)); }
-        if c.lods.iter().any(|l| l.smd.trim().is_empty()) { return Err(format!("a LOD of {} has no geometry", c.folder)); }
+        if c.lods.iter().any(|l| l.dmx.is_none() && l.smd.trim().is_empty() || l.dmx.as_ref().is_some_and(|d| d.is_empty())) { return Err(format!("a LOD of {} has no geometry", c.folder)); }
         // AreClassesLODCountMatch
         if c.lods.len() != spec.classes[0].lods.len() { return Err("every class needs the same number of LODs".into()); }
     }
@@ -144,7 +156,7 @@ fn crlf(text: &str) -> Vec<u8> { text.replace("\r\n", "\n").replace('\n', "\r\n"
 fn fill_qc(template: &str, spec: &ItemSpec, class: &ClassSpec) -> String {
     let item_dir = format!("{ITEM_DIRECTORY}/{}/{}", spec.folder(), spec.name);
     let model = spec.model_file(&class.folder);
-    let file = |lod: usize| if lod == 0 { format!("{model}.smd") } else { format!("{model}_lod{lod}.smd") };
+    let file = |lod: usize| class.lods.get(lod).map(|l| l.file(&model, lod)).unwrap_or_default();
     let mut text = template.replace("\r\n", "\n");
     text = text.replace("<ITEMTEST_REPLACE_MDLABSPATH>", &format!("{item_dir}/{model}.mdl"));
     text = text.replace("<ITEMTEST_REPLACE_LOD0>", &file(0));
@@ -234,7 +246,7 @@ fn session_text(spec: &ItemSpec, textures: &[Vec<Texture>], icon_content: &str, 
         let model = spec.model_file(&c.folder);
         for (i, lod) in c.lods.iter().enumerate() {
             kv.open(&format!("LOD{i}"));
-            let file = if i == 0 { format!("{model}.smd") } else { format!("{model}_lod{i}.smd") };
+            let file = lod.file(&model, i);
             kv.pair("file", &if in_archive { win(&format!("content/models/{item_dir}/{file}")) } else { lod.source_path.clone() });
             kv.pair("polyCount", &lod.triangles.to_string());
             kv.pair("triangleCount", &lod.triangles.to_string());
@@ -436,8 +448,7 @@ pub fn build(vpk: &VpkSet, spec: &ItemSpec, out_dir: &Path, work_root: &Path) ->
     for c in &spec.classes {
         let model = spec.model_file(&c.folder);
         for (i, lod) in c.lods.iter().enumerate() {
-            let file = if i == 0 { format!("{model}.smd") } else { format!("{model}_lod{i}.smd") };
-            fs::write(content_models.join(file), crlf(&lod.smd)).map_err(|e| e.to_string())?;
+            fs::write(content_models.join(lod.file(&model, i)), lod.bytes()).map_err(|e| e.to_string())?;
         }
     }
     // the materials where studiomdl looks for them
@@ -505,8 +516,7 @@ pub fn build(vpk: &VpkSet, spec: &ItemSpec, out_dir: &Path, work_root: &Path) ->
     for c in &spec.classes {
         let model = spec.model_file(&c.folder);
         for (i, lod) in c.lods.iter().enumerate() {
-            let file = if i == 0 { format!("{model}.smd") } else { format!("{model}_lod{i}.smd") };
-            zip.add(&format!("content/models/{item_dir}/{file}"), crlf(&lod.smd));
+            zip.add(&format!("content/models/{item_dir}/{}", lod.file(&model, i)), lod.bytes());
         }
     }
     for (model, qc_text, _) in &qcs { zip.add(&format!("content/models/{item_dir}/{model}.qc"), crlf(qc_text)); }
@@ -527,7 +537,7 @@ mod tests {
         ItemSpec {
             name: "a_cowboyhat".into(), display_name: "The Cowboy Hat".into(), prefab: "hat".into(), equip_region: "hat".into(),
             bodygroups: vec!["hat".into()], paintable: false,
-            classes: vec![ClassSpec { folder: "sniper".into(), qc_extra: String::new(), lods: vec![LodSpec { source_path: "C:\\hat.fbx".into(), smd: "version 1\n".into(), triangles: 100, vertices: 80 }, LodSpec { source_path: "C:\\hat_lod.fbx".into(), smd: "version 1\n".into(), triangles: 50, vertices: 40 }] }],
+            classes: vec![ClassSpec { folder: "sniper".into(), qc_extra: String::new(), lods: vec![LodSpec { source_path: "C:\\hat.fbx".into(), smd: "version 1\n".into(), dmx: None, triangles: 100, vertices: 80 }, LodSpec { source_path: "C:\\hat_lod.fbx".into(), smd: "version 1\n".into(), dmx: None, triangles: 50, vertices: 40 }] }],
             materials: vec![MaterialSpec { source_name: "ND_ID_MAT_TEAL".into(), vmt: "\"VertexLitGeneric\"\n{\n}\n".into(), color: Some("c.tga".into()), normal: None, phongexponent: None, illum: None, blue: None }],
             icon: "icon.tga".into(),
         }

@@ -31,7 +31,7 @@ fn builds_a_cosmetic_the_importers_way() {
     let spec = ItemSpec {
         name: "workbench_test_tile".into(), display_name: "Test Tile".into(), prefab: "hat".into(), equip_region: "hat".into(),
         bodygroups: vec!["hat".into()], paintable: false,
-        classes: vec![ClassSpec { folder: "sniper".into(), qc_extra: String::new(), lods: vec![LodSpec { source_path: "tile.fbx".into(), smd: SMD.replace("tile", "workbench_test_tile"), triangles: 2, vertices: 4 }] }],
+        classes: vec![ClassSpec { folder: "sniper".into(), qc_extra: String::new(), lods: vec![LodSpec { source_path: "tile.fbx".into(), smd: SMD.replace("tile", "workbench_test_tile"), dmx: None, triangles: 2, vertices: 4 }] }],
         materials: vec![MaterialSpec { source_name: "tile".into(), vmt: "\"VertexLitGeneric\"\n{\n\t\"$basetexture\"\t\t\"models/workshop/player/items/sniper/workbench_test_tile/workbench_test_tile_color\"\n}\n".into(),
             color: Some(color), normal: None, phongexponent: Some(exponent), illum: None, blue: None }],
         icon,
@@ -161,6 +161,21 @@ fn builds_a_cosmetic_the_importers_way() {
     let head = compiled.bones.iter().find(|b| b.name == "bip_head").expect("the head bone");
     let physics = head.jiggle.as_ref().expect("the head bone has jiggle physics");
     assert!((physics.length - 12.0).abs() < 1e-3 && (physics.yaw_stiffness - 90.0).abs() < 1e-3 && (physics.pitch_damping - 6.0).abs() < 1e-3, "{physics:?}");
+    // a model with shape keys goes in as a .dmx (an .smd cannot carry them): studiomdl makes the sliders from the file's combination operator
+    let mut flexed = spec.clone();
+    flexed.name = "workbench_test_tile".into();
+    flexed.classes[0].lods[0].smd = String::new();
+    flexed.classes[0].lods[0].dmx = Some(include_bytes!("data/tile_flex.dmx").to_vec());
+    let built_flex = build(&vpk, &flexed, &dir.join("out"), &dir.join("work")).unwrap_or_else(|e| panic!("flexed build failed: {e}"));
+    let zip = ZipFile::open(&built_flex.zip).unwrap();
+    assert!(zip.contains("content/models/workshop/player/items/sniper/workbench_test_tile/workbench_test_tile.dmx"));
+    let qc = String::from_utf8(zip.read("content/models/workshop/player/items/sniper/workbench_test_tile/workbench_test_tile.qc").unwrap()).unwrap();
+    assert!(qc.contains("$body \"default\" \"workbench_test_tile.dmx\"") && qc.contains("$sequence \"ref\" \"workbench_test_tile.dmx\""), "{qc}");
+    let compiled = mdl::parse(&zip.read("models/workshop/player/items/sniper/workbench_test_tile/workbench_test_tile.mdl").unwrap()).unwrap();
+    let controllers: Vec<&str> = compiled.flex_controllers.iter().map(|c| c.name.as_str()).collect();
+    assert!(controllers.contains(&"AU_1") && controllers.contains(&"WQ"), "controllers: {controllers:?}");
+    assert!(compiled.flex_desc_count >= 2 && !compiled.flex_rules.is_empty(), "{} descriptors, {} rules", compiled.flex_desc_count, compiled.flex_rules.len());
+    assert!(compiled.textures.iter().any(|t| t == "workbench_test_tile"), "the material of the model is the item's: {:?}", compiled.textures);
     // building again replaces the archive
     build(&vpk, &spec, &dir.join("out"), &dir.join("work")).unwrap();
     assert!(!built.zip.with_extension("zip.bak").exists());
