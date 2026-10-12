@@ -1,6 +1,8 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { createCompilerUi, type PreviewApplication } from "../compiler/compilerUi";
 import { MODEL_EXTENSIONS } from "../compiler/importModel";
+import { createPropPanel, PROP_DRAG_TYPE } from "../props/propPanel";
+import { propLabel } from "../props/propList";
 import { decodeTga, encodeTga, iconProblem, ICON_SAFE_ROWS } from "../compiler/tga";
 import { fadeAmount, maskIcon, type IconFade } from "../compiler/iconMask";
 import { importSourceDir, readItemSession, saveItemIcon, buildItem, loadTextureFrames, readSourceFile, revealFile, sourceSiblings, sourceStamp } from "../api";
@@ -421,10 +423,14 @@ export function createViewTab(els: Els) {
   const gameClassOf = (mdl: string) => CLASSES.find(([, m]) => m === mdl)?.[2] ?? mdl;
   const classLabelOf = (mdl: string) => {
     const building = buildingOf(mdl);
-    return building ? buildingLabel(building) : CLASSES.find(([, m]) => m === mdl)?.[0] ?? "…";
+    if (building) return buildingLabel(building);
+    // any other model of a path is a prop: it goes by its model's name
+    return CLASSES.find(([, m]) => m === mdl)?.[0] ?? (isBuildingCls(mdl) ? propLabel(mdl.split("#")[0]) : "…");
   };
 
   function newEntity(actor: Actor, cls: string, team: number): Entity {
+    // a model of a path that is not a building is a prop: its geometry is in Source's frame
+    actor.sourceBind = isBuildingCls(cls) && !buildingOf(cls);
     return {
       id: nextEntity++,
       hidden: false,
@@ -1250,6 +1256,20 @@ export function createViewTab(els: Els) {
     if (!viewer) {
       viewer = new Viewer(els.wrap, () => [models, materials]);
       viewer.setSelectionOutline(document.getElementById("hudOutline")?.classList.contains("on") ?? true);
+      if (!__WEB__) {
+        // a prop dragged out of the browser and dropped on the view is put where it is dropped
+        els.wrap.addEventListener("dragover", (ev) => {
+          if (!ev.dataTransfer?.types.includes(PROP_DRAG_TYPE)) return;
+          ev.preventDefault();
+          ev.dataTransfer.dropEffect = "copy";
+        });
+        els.wrap.addEventListener("drop", (ev) => {
+          const path = ev.dataTransfer?.getData(PROP_DRAG_TYPE);
+          if (!path) return;
+          ev.preventDefault();
+          void addProp(path, { clientX: ev.clientX, clientY: ev.clientY });
+        });
+      }
       const boxButton = document.getElementById("boxSelect") as HTMLButtonElement;
       boxButton.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h3M10 4h4M17 4h3M20 7v3M20 14v3M4 7v3M4 14v3M4 20h3M10 20h2" stroke-dasharray="0"/><path d="M14 13l7 3-3 1.600L16 21z" fill="currentColor"/></svg>';
       boxTool = createBoxSelect<Actor>({
@@ -4243,6 +4263,10 @@ export function createViewTab(els: Els) {
     spot: "M7 2.500h4v3H7zM8 5.500 3.500 15.500M10 5.500l4.500 10M3.500 15.500h11",
     folder: "M2 5h5l2-2h7v12H2zM2 7h14",
   };
+  if (!__WEB__) {
+    const propsRoot = document.getElementById("propsPane");
+    if (propsRoot) createPropPanel(propsRoot, { add: (path, at) => void addProp(path, at) });
+  }
   els.entities.add.onclick = () => {
     openMenu(els.entities.add, [
       { label: "Character", icon: ICON.character, hint: "Ctrl: copy of the selected", run: ({ ctrl }) => void addEntity(ctrl) },
@@ -4255,6 +4279,7 @@ export function createViewTab(els: Els) {
           { label: "Teleporter", run: () => void addBuilding("teleporter") },
         ],
       },
+      ...(__WEB__ ? [] : [{ label: "Prop…", icon: ICON.buildable, hint: "opens the prop browser", run: () => document.dispatchEvent(new CustomEvent("workbench:reveal-panel", { detail: "props" })) }]),
       {
         label: "Light",
         icon: ICON.light,
@@ -4294,6 +4319,31 @@ export function createViewTab(els: Els) {
     const folder = hierarchy().activeGroup();
     if (made && folder) lightingUi?.setGroup([made.id], folder);
     if (made) selectPicks([{ kind: "light", id: made.id }], { kind: "light", id: made.id });
+  }
+
+  /**
+   * Puts a prop model (`models/props_c17/barrel001.mdl`) in the scene, on the floor where it was dropped (a position of the view) or, with
+   * none, in front of the camera. It is a character whose "class" is the model's path, as a building is, and the camera stays where it is.
+   */
+  async function addProp(path: string, at?: { clientX: number; clientY: number }) {
+    if (__WEB__) return;
+    const v = ensureViewer();
+    const base = selected;
+    if (base) saveUi(base);
+    const cls = path.replace(/^models\//i, "").replace(/\.mdl$/i, "");
+    const e = newEntity(v.addActor(), cls, 0);
+    e.group = hierarchy().activeGroup();
+    const place = (at ? v.floorPointAt(at.clientX, at.clientY) : null) ?? v.floorInFront();
+    v.placeActorAt(e.actor, place.x, 0, place.z);
+    entities.push(e);
+    selected = e;
+    soleSelection(e);
+    v.select(e.actor);
+    restoreUi(e);
+    renderEntities();
+    await show(e, e.cls);
+    // it stands on the floor, wherever the model keeps its origin
+    v.placeActorAt(e.actor, place.x, -e.actor.bindMinY, place.z);
   }
 
   async function addBuilding(kind: BuildingKind) {

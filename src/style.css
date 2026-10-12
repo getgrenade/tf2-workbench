@@ -1095,3 +1095,22 @@ div.setRow:hover { background: none; }
 /* The web build: what needs the desktop (the item compiler, the game folder, the workshop importer's zips, folders on disk) */
 .web #tabCompiler, .web #pick, .web #itemWorkshopRefresh, .web #itemScopes [data-scope="workshop"], .web #unusualLoadZip, .web #unusualCustom,
 .web #poseFolder, .web [data-action="folder"] { display: none; }
+
+/* the prop browser */
+.propPane { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; }
+.propPane[hidden] { display: none; }
+.propBar { display: flex; gap: 6px; align-items: center; }
+.propBar input.text { flex: 1; min-width: 100px; margin: 0; }
+.propBody { flex: 1; min-height: 0; display: flex; gap: 6px; }
+.propFolders { flex: 0 0 34%; min-width: 90px; max-width: 220px; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--ui-radius); background: var(--bg); display: flex; flex-direction: column; padding: 2px; }
+.propFolder { flex: none; text-align: left; border: 0; background: transparent; color: var(--dim); padding: 2px 8px; font-size: var(--ui-fs-small); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-radius: var(--ui-radius); }
+.propFolder:hover { color: var(--fg); background: var(--ui-accent-soft); }
+.propFolder.on { color: var(--fg); background: var(--ui-accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
+.propGrid { flex: 1; min-width: 0; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--ui-radius); background: var(--bg); display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: var(--ui-2); padding: 3px; align-content: start; }
+.propTile { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 3px; border: 1px solid transparent; border-radius: var(--ui-radius); cursor: grab; user-select: none; }
+.propTile:hover { background: var(--ui-accent-soft); }
+.propTile.on { border-color: var(--ui-accent-line); background: var(--ui-accent-soft); }
+.propTile .propThumb { width: 100%; aspect-ratio: 1; object-fit: contain; background: color-mix(in srgb, var(--fg) 6%, transparent); border-radius: var(--ui-radius); }
+.propTile.noThumb .propThumb { visibility: hidden; }
+.propTile span { font-size: var(--ui-fs-micro); color: var(--dim); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.propTile.on span { color: var(--fg); }

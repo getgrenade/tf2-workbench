@@ -238,8 +238,20 @@ export class Actor {
     return this.bindBounds.isEmpty() ? 0 : (this.bindBounds.max.y - this.bindBounds.min.y) * this.scale.y;
   }
 
-  /** Lowest point of the bind pose, in viewer space (the floor for the ground shadow). */
+  /**
+   * The bind pose of the models of the player (and their cosmetics) is stored in the viewer's own Y-up frame; that of a prop is in Source's, Z up, like
+   * what an animation gives. A prop is turned into the viewer's frame whatever it is doing (see props/propList.ts).
+   */
+  sourceBind = false;
+
+  /** Lowest point of the bind pose, in viewer space (the floor for the ground shadow). A prop does not set the floor: it stands on it. */
   get floorY(): number {
+    if (this.sourceBind) return Infinity;
+    return this.bindBounds.isEmpty() ? 0 : this.bindBounds.min.y * this.scale.y;
+  }
+
+  /** Lowest point of the model in its own frame (what puts a prop on the floor), 0 before there is a model. */
+  get bindMinY(): number {
     return this.bindBounds.isEmpty() ? 0 : this.bindBounds.min.y * this.scale.y;
   }
 
@@ -681,7 +693,9 @@ export class Actor {
       for (const [meshIndex, m] of sub.meshes.entries()) {
         if (m.indices.length === 0) continue;
         for (let i = 0; i < m.positions.length; i += 3) {
-          this.bindBounds.expandByPoint(p.set(m.positions[i], m.positions[i + 1], m.positions[i + 2]));
+          p.set(m.positions[i], m.positions[i + 1], m.positions[i + 2]);
+          if (this.sourceBind) p.applyMatrix4(SOURCE_TO_VIEWER);
+          this.bindBounds.expandByPoint(p);
         }
         const eye = sub.eyeballs.find((e) => e.material === m.material);
         const path = this.skinMaterial(m);
@@ -1680,7 +1694,7 @@ export class Actor {
       this.rootMatrix(this.modelGroup.matrix, true);
     } else {
       this.rig.setBindPose();
-      this.rootMatrix(this.modelGroup.matrix, false);
+      this.rootMatrix(this.modelGroup.matrix, this.sourceBind);
     }
     this.posedClip = clip;
     this.posedTime = this.playback.time;

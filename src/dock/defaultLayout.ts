@@ -15,10 +15,12 @@ export const PANEL_DEFS: { id: string; title: string; element: string }[] = [
   { id: "lightsetups", title: "Light", element: "lightSetupsPane" },
   { id: "post", title: "Post-processing", element: "postPane" },
   { id: "particles", title: "Particles", element: "particlesPane" },
+  // the prop browser is of the desktop program only (the web version has no props)
+  { id: "props", title: "Props", element: "propsPane" },
 ];
 
 /** The layout the program starts with, and what "Reset layout" goes back to. */
-export function defaultLayout(): DockLayout {
+export function defaultLayout({ props = true }: { props?: boolean } = {}): DockLayout {
   const l = emptyLayout();
   l.docks.left.groups = [
     { tabs: ["outliner"], active: "outliner", weight: 0.73 },
@@ -27,7 +29,7 @@ export function defaultLayout(): DockLayout {
   ];
   l.docks.right.groups = [
     { tabs: ["cosmetics"], active: "cosmetics", weight: 1.34 },
-    { tabs: ["weapons"], active: "weapons", weight: 0.66 },
+    { tabs: props ? ["weapons", "props"] : ["weapons"], active: "weapons", weight: 0.66 },
   ];
   l.docks.bottom.groups = [
     { tabs: ["animation", "flex", "poses"], active: "flex", weight: 1.8 },

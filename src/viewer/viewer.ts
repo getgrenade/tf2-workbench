@@ -1457,6 +1457,26 @@ void main() {
     });
   }
 
+  /** The point of the floor (the plane at height `y`) under a position of the screen, or null when that part of the view looks away from it. */
+  floorPointAt(clientX: number, clientY: number, y = 0): THREE.Vector3 | null {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return null;
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(new THREE.Vector2((clientX - rect.left) / rect.width * 2 - 1, 1 - (clientY - rect.top) / rect.height * 2), this.camera);
+    return ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -y), new THREE.Vector3());
+  }
+
+  /** The floor under what the camera looks at (the middle of the view). */
+  floorInFront(): THREE.Vector3 {
+    return new THREE.Vector3(this.controls.target.x, 0, this.controls.target.z);
+  }
+
+  /** Puts a character where the artist wants it: it is then placed by hand (the row spacing leaves it alone). */
+  placeActorAt(actor: Actor, x: number, y: number, z: number) {
+    actor.setPlacement(x, y, z, actor.yaw);
+    this.placed.add(actor);
+  }
+
   private entityRayHit(plane: THREE.Plane) {
     const rect=this.renderer.domElement.getBoundingClientRect(),ray=new THREE.Raycaster();
     ray.setFromCamera(new THREE.Vector2((this.entityPointer.x-rect.left)/rect.width*2-1,1-(this.entityPointer.y-rect.top)/rect.height*2),this.camera);

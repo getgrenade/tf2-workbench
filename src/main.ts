@@ -232,6 +232,7 @@ app.innerHTML = `
         <div id="poseLibrary" class="itemlist poseList"></div>
         <div class="itemFoot" id="poseFoot"><span id="poseCount" class="dim hint"></span></div>
       </div>
+      <div id="propsPane" class="propPane" hidden></div>
       <div id="lightPane" class="lightPane" hidden>
         <section class="lightCol worldView" id="worldView">
           <h3>Scene</h3>
@@ -441,11 +442,14 @@ const docks = createDocks({
   view: $("view"),
   docks: { left: $("dockLeft"), right: $("dockRight"), bottom: $("dockBottom") },
   folds: { left: $("foldL"), right: $("foldR"), bottom: $("foldB") },
-  panels: PANEL_DEFS.map((d) => ({ id: d.id, title: d.title, el: $(d.element) })),
-  defaults: defaultLayout(),
+  panels: PANEL_DEFS.filter((d) => !(__WEB__ && d.id === "props")).map((d) => ({ id: d.id, title: d.title, el: $(d.element) })),
+  defaults: defaultLayout({ props: !__WEB__ }),
   storageKey: "tf2workbench.layout",
 });
 poseHud.library.onclick = () => docks.reveal("poses"); // the library icon in the pose toolbar
+if (__WEB__) document.getElementById("propsPane")?.remove();
+// the Add menu of the outliner opens the prop browser
+document.addEventListener("workbench:reveal-panel", (e) => { const id = (e as CustomEvent<string>).detail; if (docks.panels().some((p) => p.id === id)) docks.reveal(id); });
 $("viewOverlaysMore").onclick = () => openOverlaySettings($("viewOverlaysMore"));
 $("layoutMenu").onclick = () => {
   openMenu($("layoutMenu"), [
