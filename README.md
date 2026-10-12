@@ -1,6 +1,9 @@
+# Download https://github.com/getgrenade/tf2-workbench/releases 
+
 # TF2 Workbench
 
 A viewer and scene composer for Team Fortress 2 models. Reads everything from game files in real time. 
+
 
 - **Player models, cosmetics, weapons, taunts**: Use unlimited amount of player models in a single scene. Instantly equip & switch between cosmetics, taunts and weapons with browser system.
 - **Lighting, Cameras & Overlays**: Single directional light emulating hlmv.exe by default. Add any amount of custom lights, real time shadows, post processing layers. Camera system with preset resolutions and overlays to add custom images, text and borders.
@@ -15,8 +18,9 @@ A viewer and scene composer for Team Fortress 2 models. Reads everything from ga
 TF2 Workbench is a fan project. It is not affiliated with or endorsed by Valve. **No game files are included in this repository**:
 the app reads them from your TF2 installation, and the web version's data is extracted from it by you with `build-webapp.bat`.
 
-## Run it
+## Build your own version
 
+Do this only if you want to create your own version of this app.
 Needs Windows 10/11, [Team Fortress 2](https://store.steampowered.com/app/440/), [Node.js](https://nodejs.org/) and
 [Rust](https://rustup.rs/).
 
