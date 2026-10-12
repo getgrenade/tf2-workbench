@@ -72,6 +72,10 @@ uniform samplerCube tWorldCube;        // the cubemap the world setting picked .
 uniform float uWorldCube;               // ... when one is (its brightness; 0: none)
 uniform bool uEnvWorld;                 // this material reflects "the cubemap of the level" ($envmap env_cubemap)
 uniform bool uHasBump;
+uniform bool uUnlit;                    // UnlitGeneric / UnlitTwoTexture: the picture of the texture, no lighting
+uniform sampler2D tTex2;                // UnlitTwoTexture's $texture2 ...
+uniform bool uHasTex2;
+uniform float uMod2x;                   // ... and $mod2x (the product is doubled)
 uniform bool uHasWarp;
 uniform bool uHasExp;
 uniform bool uHasEnv;
@@ -216,7 +220,12 @@ ${bodyMaskDiscard}
   } else {
     albedo = albedo * uModulation;
   }
-  vec3 diffuseComponent = albedo * diffuseLighting;
+  if (uHasTex2) {
+    vec4 second = texture2D(tTex2, vUv);
+    albedo *= second.rgb * (uMod2x > 0.5 ? 2.0 : 1.0);
+    baseTex.a *= second.a;
+  }
+  vec3 diffuseComponent = uUnlit ? albedo : albedo * diffuseLighting;
 
   // Environment mask texture (non-skin paths): scales the reflection per channel
   vec4 envMaskTexel = vec4(1.0);
@@ -330,7 +339,7 @@ ${bodyMaskDiscard}
 
   if (uViewMode > 0.5 && uViewMode < 1.5) result = albedo;
   else if (uViewMode > 1.5) result = vec3(dot(result, vec3(0.2126, 0.7152, 0.0722)));
-  result += studioRimLight(Nv, vWorldPos);
+  if (!uUnlit) result += studioRimLight(Nv, vWorldPos);
 
   gl_FragColor = vec4(result, alpha);
   #include <colorspace_fragment>

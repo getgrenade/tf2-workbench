@@ -11,7 +11,7 @@ use crate::{
 };
 
 /// Texture slots a material can fill. Each is `(slot name, VMT parameters that may name it)`.
-const SLOTS: [(&str, &[&str]); 9] = [
+const SLOTS: [(&str, &[&str]); 10] = [
     ("base", &["$basetexture", "$iris", "$diffuse", "$texture1"]),
     ("bump", &["$bumpmap", "$normalmap"]),
     ("warp", &["$lightwarptexture"]),
@@ -21,6 +21,8 @@ const SLOTS: [(&str, &[&str]); 9] = [
     ("ao", &["$ambientocclTexture"]),
     ("envmask", &["$envmapmask"]),
     ("illum", &["$selfillummask"]),
+    // UnlitTwoTexture multiplies its second texture into the first
+    ("tex2", &["$texture2"]),
 ];
 
 /// Most frames kept of an animated base texture.

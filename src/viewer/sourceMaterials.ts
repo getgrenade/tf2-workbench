@@ -63,7 +63,7 @@ export class SourceMaterials {
     const key = `${m.path}#${slot}`;
     let tex = this.textures.get(key);
     if (!tex) {
-      tex = makeTexture(data, slot === "base" || slot.startsWith("base_f") || slot === "ao" ? "srgb" : slot === "warp" || slot === "phongwarp" ? "warp" : "linear");
+      tex = makeTexture(data, slot === "base" || slot.startsWith("base_f") || slot === "ao" || slot === "tex2" ? "srgb" : slot === "warp" || slot === "phongwarp" ? "warp" : "linear");
       tex.anisotropy = this.maxAnisotropy;
       this.textures.set(key, tex);
     }
@@ -176,15 +176,20 @@ export class SourceMaterials {
     const num = (k: string, d: number) => (p[k] !== undefined && !Number.isNaN(Number(p[k])) ? Number(p[k]) : d);
 
     const base = m ? this.texture(m, "base") : null;
-    const bump = m ? this.texture(m, "bump") : null;
+    // a self-shadowing bump map ($ssbump) holds the weights of three lighting directions, not a normal: read as one it would only darken
+    const bump = m && !flag("$ssbump") ? this.texture(m, "bump") : null;
     const warp = m ? this.texture(m, "warp") : null;
     const phongWarp = m ? this.texture(m, "phongwarp") : null;
     const exp = m ? this.texture(m, "exponent") : null;
+    const tex2 = m ? this.texture(m, "tex2") : null;
+    const unlit = m?.shader === "unlitgeneric" || m?.shader === "unlittwotexture";
     const envMask = m ? this.texture(m, "envmask") : null;
     const illumMask = m ? this.texture(m, "illum") : null;
     const [fMin, fMid, fMax] = parseVec(p["$phongfresnelranges"], [0, 0.5, 1]);
     const eyes = m?.shader === "eyerefract"; // eyerefract without eyeball data falls back to this shader
-    const translucent = flag("$translucent");
+    // Refract bends what is behind it; there is no picture of that to bend here, so it is drawn as the clear, tinted glass it stands for
+    const refract = m?.shader === "refract";
+    const translucent = flag("$translucent") || refract;
     const alphaTest = flag("$alphatest");
     const grayFallback = !base;
     const envCube = m ? this.cubemap(m) : null;
@@ -193,6 +198,10 @@ export class SourceMaterials {
     const now = performance.now() / 1000;
     const vars = evaluateMaterialVars(p, m?.proxies ?? [], { paint, time: now, fx });
     const modulation = modulationColor(vars);
+    if (refract && p["$refracttint"]) {
+      const t = parseVec(p["$refracttint"], [1, 1, 1]);
+      for (let i = 0; i < 3; i++) modulation[i] *= Math.pow(Math.min(Math.max(t[i] ?? t[0], 0), 1), 2.2);
+    }
     const xf = textureTransform(vars);
     const selfIllum = flag("$selfillum");
     // The shaders do not have a combination of $blendtintbybasealpha with $selfillum (both read the base alpha): the glowing layer of an item
@@ -234,6 +243,10 @@ export class SourceMaterials {
         uHasPhongWarp: { value: !!phongWarp },
         tExp: { value: exp ?? this.white },
         uHasBump: { value: !!bump },
+        uUnlit: { value: unlit },
+        tTex2: { value: tex2 ?? this.white },
+        uHasTex2: { value: !!tex2 && m?.shader === "unlittwotexture" },
+        uMod2x: { value: flag("$mod2x") ? 1 : 0 },
         tDetail: { value: this.white },
         uHasDetail: { value: false },
         uDetailScale: { value: num("$detailscale", 1) },
@@ -260,7 +273,7 @@ export class SourceMaterials {
         uRimMask: { value: flag("$rimmask") },
         uTint: { value: grayFallback ? new THREE.Vector3(0.72, 0.74, 0.77) : new THREE.Vector3(1, 1, 1) },
         uAlphaTest: { value: alphaTest ? num("$alphatestreference", 0.7) : 0 },
-        uOpacity: { value: num("$alpha", 1) },
+        uOpacity: { value: refract ? 0.3 : num("$alpha", 1) },
         // With self-illum or blend-tint the base alpha is a mask, not opacity.
         uUseBaseAlpha: { value: (translucent || alphaTest || additive) && !selfIllum && !blendTint },
         tCube: { value: envCube ?? this.emptyCube },
@@ -269,7 +282,7 @@ export class SourceMaterials {
         uEnvTint: { value: new THREE.Vector3(envTint[0], envTint[1], envTint[2]) },
         uEnvFresnel: { value: num("$envmapfresnel", 0) },
         uEnvMaskNormalAlpha: { value: flag("$normalmapalphaenvmapmask") },
-        uEnvMaskBaseAlpha: { value: flag("$basealphaenvmapmask") },
+        uEnvMaskBaseAlpha: { value: flag("$basealphaenvmapmask") || flag("$basemapalphaenvmapmask") },
         uEnvContrast: { value: num("$envmapcontrast", 0) },
         uEnvSaturation: { value: num("$envmapsaturation", 1) },
         uEnvScale: { value: 1 },
