@@ -133,6 +133,7 @@ const _eyeOrigin = new THREE.Vector3();
 const _eyeUp = new THREE.Vector3();
 const _eyeFwd = new THREE.Vector3();
 const _eyeLeft = new THREE.Vector3();
+const _lockCorrection = new THREE.Matrix4(), _lockInverse = new THREE.Matrix4();
 const _cosLocal = new THREE.Matrix4();
 const _rootRot = new THREE.Matrix4();
 const _tilt = new THREE.Euler();
@@ -772,6 +773,45 @@ export class Actor {
    * Bonemerges cosmetics onto the class skeleton: every cosmetic bone with the name of a class bone
    * follows that bone's current transform; extra bones follow their parent with their bind offset.
    */
+  /**
+   * A weapon that hangs on one hand's bone but is carried in the other (the bow's `weapon_bone` is a child of the right hand, and the animations
+   * place it in the left): the bones named in `follow` stay where they were relative to `hand` when the lock began. The blend between two animations
+   * (and between a gesture and the movement) mixes the two hands' own transforms separately, which would let the bow slide off the hand for a moment.
+   */
+  private handLock: { key: string; hand: number; root: number; follow: Set<number>; offset: THREE.Matrix4 | null; since: number } | null = null;
+  setHandLock(lock: { hand: string; root: string; follow: string[] } | null) {
+    if (!lock) { this.handLock = null; return; }
+    const key = `${lock.hand}|${lock.root}|${lock.follow.join(",")}`;
+    if (this.handLock?.key === key) return;
+    const names = this.boneNames.map((n) => n.toLowerCase());
+    const hand = names.indexOf(lock.hand.toLowerCase()), root = names.indexOf(lock.root.toLowerCase());
+    if (hand < 0 || root < 0) { this.handLock = null; return; }
+    this.handLock = { key, hand, root, follow: new Set(lock.follow.map((n) => names.indexOf(n.toLowerCase())).filter((i) => i >= 0)), offset: null, since: performance.now() };
+  }
+
+  /** A thrown or eaten weapon is not in the hand until it is back: the held weapon's meshes are hidden (and come back with false). */
+  private heldHidden = false;
+  /** Which model of the held weapon's first body group is drawn (a Sandvich's bites: 1 is the bitten one, CTFLunchBox::SwitchBodyGroups). */
+  private heldBodyState = 0;
+  setHeldBodyState(state: number) {
+    if (this.heldBodyState === state) return;
+    this.heldBodyState = state;
+    if (this.cosmeticList.some((c) => c.weapon)) this.setCosmetics(this.cosmeticList);
+  }
+  setHeldHidden(hidden: boolean) {
+    if (this.heldHidden === hidden) return;
+    this.heldHidden = hidden;
+    this.applyHeldHidden();
+    this.changed = true;
+  }
+  private applyHeldHidden() {
+    if (!this.cosmeticGroup) return;
+    for (const child of this.cosmeticGroup.children) {
+      const slot = child.userData.cosmeticSlot as number | undefined;
+      if (slot && this.cosmeticList[slot - 1]?.weapon) child.visible = !this.heldHidden;
+    }
+  }
+
   setCosmetics(list: CosmeticSpec[]) {
     if (!this.cosmeticGroup || !this.classData) return;
     for (const child of [...this.cosmeticGroup.children]) {
@@ -805,8 +845,8 @@ export class Actor {
         own.clip = clip;
       }
       this.cosmetics.push({ rig, bones, bindLocal, map, jiggles, own });
-      for (const bp of data.bodyParts) {
-        const sub = bp.models[0];
+      for (const [partIndex, bp] of data.bodyParts.entries()) {
+        const sub = (list[index].weapon && partIndex === 0 ? bp.models[this.heldBodyState] : null) ?? bp.models[0];
         if (!sub) continue;
         for (const m of sub.meshes) {
           if (m.indices.length === 0) continue;
@@ -821,6 +861,7 @@ export class Actor {
     this.updateFlexes();
     this.posedTime = NaN;
     this.updateCosmetics();
+    if (this.heldHidden) this.applyHeldHidden();
     if (anyCondition(this.conditions)) this.applyConditions();
     this.changed = true;
   }
@@ -1558,6 +1599,13 @@ export class Actor {
     const classWorld = this.rig.boneWorld;
     const jiggleOn = this.ctx.jiggle();
     const now = performance.now() / 1000;
+    let correction: THREE.Matrix4 | null = null;
+    const lock = this.handLock;
+    if (lock && classWorld[lock.hand] && classWorld[lock.root]) {
+      // the offset of the weapon's root from the hand is taken once the animations have settled after the lock began (the crossfade into the idle is over)
+      if (!lock.offset) { if (performance.now() - lock.since > 500) lock.offset = new THREE.Matrix4().copy(classWorld[lock.hand]).invert().multiply(classWorld[lock.root]); }
+      else correction = _lockCorrection.multiplyMatrices(classWorld[lock.hand], lock.offset).multiply(_lockInverse.copy(classWorld[lock.root]).invert());
+    }
     for (const c of this.cosmetics) {
       const world = c.rig.boneWorld;
       for (let i = 0; i < world.length; i++) {
@@ -1569,6 +1617,7 @@ export class Actor {
           else world[i].copy(_cosLocal);
         } else if (j >= 0 && j < classWorld.length) {
           world[i].copy(classWorld[j]); // merged bone: identical transform
+          if (correction && lock!.follow.has(j)) world[i].premultiply(correction);
         } else if (c.own && this.playback.clip) {
           // extra bone of a model with its own animation (the tank's tracks): the clip's local transform under the parent
           const p = c.own;

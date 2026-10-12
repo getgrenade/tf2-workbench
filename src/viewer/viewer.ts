@@ -137,6 +137,9 @@ export class Viewer {
   private readonly dispenserScreens = new Map<Actor, DispenserScreens>();
   private readonly conditionTokens = new Map<Actor, number>();
   private readonly conditionTimers = new Map<Actor, Map<ConditionKey, number>>();
+  /** Play mode is paused (left): the conditions it started stop where they are, with their particles, until it goes on. */
+  private conditionsPaused = false;
+  setConditionsPaused(paused: boolean) { this.conditionsPaused = paused; }
   /** Told when Play mode starts a condition or a timed one ends by itself. */
   onConditionsChanged: (actor: Actor) => void = () => {};
   private readonly storedWeaponEffects=new Map<Actor,WeaponEffects[]>();
@@ -575,9 +578,9 @@ void main() {
       }
       if (!moved && this.reactions?.animating) moved = true;
       for (const entry of this.unusualEffects.values()) entry.effect?.step(dt, this.camera);
-      this.conditionParticles.step(dt, this.camera);
+      this.conditionParticles.step(this.conditionsPaused && this.conditionTimers.size ? 0 : dt, this.camera);
       for (const screens of this.dispenserScreens.values()) screens.step(dt);
-      if (this.conditionTimers.size) this.stepConditions(dt);
+      if (this.conditionTimers.size && !this.conditionsPaused) this.stepConditions(dt);
       for (const effect of this.weaponEffectList()) effect.step(dt,this.camera);
       this.reactions?.step(dt,this.camera);
       if (this.selectionTouched) {
@@ -1023,13 +1026,17 @@ void main() {
     if(profile.projectile?.kind==="jar") this.conditionParticles.warm(profile.weaponClass==="tf_weapon_jar_milk" ? "peejar_drips_milk" : "peejar_drips",2);
     else if(profile.weaponClass==="tf_weapon_flamethrower") for(const system of ["burningplayer_red","burningplayer_blue"]) this.conditionParticles.warm(system,1);
   }
+  /** The splash of a drink at the can (the lunchbox's `drink_spray` attachment). */
+  drinkSplash(actor: Actor) { this.weaponEffects.get(actor)?.effect?.splash(); }
   fireWeapon(actor: Actor,direction?:THREE.Vector3,charge=0) {
     const effect=this.weaponEffects.get(actor)?.effect;effect?.shot(direction,charge);
     if(effect?.profile?.weaponClass==="tf_weapon_flamethrower" && direction)this.igniteAlong(actor,effect.muzzlePosition,direction);
-    if(effect?.profile?.hitscan && direction && this.hitReactionsEnabled){
+    if(effect?.profile?.hitscan && direction){
       const start=effect.muzzlePosition;if(!start)return;
-      const hit=this.reactionSystem().trace(actor,start,start.clone().addScaledVector(direction,effect.profile.range ?? 8192));
-      if(hit)this.reactionSystem().ragdoll(hit.actor,direction,0,hit.point);
+      const range=effect.profile.range ?? 8192,far=start.clone().addScaledVector(direction,range);
+      const hit=this.hitReactionsEnabled ? this.reactionSystem().trace(actor,start,far) : null;
+      if(hit && this.hitReactionsEnabled)this.reactionSystem().ragdoll(hit.actor,direction,0,hit.point);
+      effect.tracer(direction,hit?.point ?? null,range);
     }
   }
   /**

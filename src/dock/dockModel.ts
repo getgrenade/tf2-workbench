@@ -6,6 +6,10 @@
 export type DockId = "left" | "right" | "bottom";
 export const DOCKS: readonly DockId[] = ["left", "right", "bottom"];
 
+/** Where a hidden panel sat, so that it comes back to the same place: its dock, the place of its group in the dock, its own place among the
+ *  tabs, the other tabs of that group (the group is found again by them) and the share of the dock the group took. */
+export interface PanelSpot { dock: DockId; group: number; index: number; mates: string[]; weight: number }
+
 /** A set of tabs that share one area; the active one is shown. */
 export interface DockGroup {
   tabs: string[];
@@ -23,6 +27,8 @@ export interface DockLayout {
   lastDock: Record<string, DockId>;
   /** Docks that are folded away. */
   folded: DockId[];
+  /** Where each panel that was hidden sat (see PanelSpot); it is used, and forgotten, when the panel comes back. */
+  spots?: Record<string, PanelSpot>;
 }
 
 /** Where a dragged panel goes. */
@@ -114,17 +120,41 @@ export function activatePanel(layout: DockLayout, id: string): DockLayout {
 /** Takes a panel away completely. */
 export function hidePanel(layout: DockLayout, id: string): DockLayout {
   const next = clone(layout);
+  const at = findPanel(next, id);
+  if (at) {
+    const group = next.docks[at.dock].groups[at.group];
+    (next.spots ??= {})[id] = { dock: at.dock, group: at.group, index: at.index, mates: group.tabs.filter((t) => t !== id), weight: group.weight };
+  }
   detach(next, id);
   if (!next.hidden.includes(id)) next.hidden.push(id);
   tidy(next);
   return next;
 }
 
-/** Brings a hidden panel back: as a tab of the last group of the dock it was in last (a group of its own when the dock is empty). */
+/**
+ * Brings a hidden panel back to where it was: among the tabs of its group at its old place, or (when the group is gone, because it was
+ * the only tab) as a group of its own at the old place in its dock. A panel with no place on record (a saved layout from before) goes
+ * as a tab of the last group of the dock it was in last (a group of its own when the dock is empty).
+ */
 export function showPanel(layout: DockLayout, id: string, fallbackDock: DockId): DockLayout {
   if (findPanel(layout, id)) return layout;
   const next = clone(layout);
   next.hidden = next.hidden.filter((h) => h !== id);
+  const spot = next.spots?.[id];
+  if (spot) {
+    delete next.spots![id];
+    const groups = next.docks[spot.dock].groups;
+    const group = groups.find((g) => g.tabs.some((t) => spot.mates.includes(t)));
+    if (group) {
+      group.tabs.splice(Math.max(0, Math.min(spot.index, group.tabs.length)), 0, id);
+      group.active = id;
+    } else {
+      groups.splice(Math.max(0, Math.min(spot.group, groups.length)), 0, { tabs: [id], active: id, weight: spot.weight });
+    }
+    next.lastDock[id] = spot.dock;
+    tidy(next);
+    return next;
+  }
   const dock = next.lastDock[id] ?? fallbackDock;
   const groups = next.docks[dock].groups;
   const last = groups[groups.length - 1];
@@ -180,6 +210,14 @@ export function parseLayout(raw: unknown, ids: readonly string[], defaults: Dock
   }
   if (Array.isArray(r.hidden)) for (const h of r.hidden) if (typeof h === "string" && known.has(h) && !seen.has(h)) { out.hidden.push(h); seen.add(h); }
   if (r.lastDock && typeof r.lastDock === "object") for (const [id, dock] of Object.entries(r.lastDock)) if (known.has(id) && (DOCKS as readonly string[]).includes(dock as string)) out.lastDock[id] = dock as DockId;
+  if (r.spots && typeof r.spots === "object") {
+    for (const [id, s] of Object.entries(r.spots)) {
+      const spot = s as Partial<PanelSpot> | null;
+      if (!known.has(id) || !spot || !(DOCKS as readonly string[]).includes(spot.dock as string) || !Array.isArray(spot.mates)) continue;
+      const num = (v: unknown, fallback: number) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : fallback);
+      (out.spots ??= {})[id] = { dock: spot.dock as DockId, group: Math.floor(num(spot.group, 0)), index: Math.floor(num(spot.index, 0)), mates: spot.mates.filter((t): t is string => typeof t === "string" && known.has(t)), weight: num(spot.weight, 1) || 1 };
+    }
+  }
   if (Array.isArray(r.folded)) out.folded = r.folded.filter((d): d is DockId => (DOCKS as readonly string[]).includes(d as string));
   // a panel the saved layout does not know (one added since) goes to its default dock, and joins the tabs of a panel that it shares a group with there
   for (const id of ids) {

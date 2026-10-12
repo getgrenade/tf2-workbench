@@ -27,6 +27,8 @@ export function launchProjectile(profile: ProjectileProfile, position: THREE.Vec
   }
   const right = new THREE.Vector3(forward.y, -forward.x, 0).normalize(), up = right.clone().cross(forward).normalize();
   const velocity = forward.clone().multiplyScalar(profile.speed);
+  // thrown out food (CTFLunchBox::SecondaryAttack): ten degrees above the aim
+  if (profile.kind === "plate") velocity.copy(forward).multiplyScalar(Math.cos(10 * Math.PI / 180)).addScaledVector(up, Math.sin(10 * Math.PI / 180)).multiplyScalar(profile.speed);
   if (["grenade","cannon","sticky","jar"].includes(profile.kind)) velocity.addScaledVector(up, 200 + random() * 20 - 10).addScaledVector(right, random() * 20 - 10);
   // CTFCleaver::GetVelocityVector: forward * 10 + up, normalized, at 3000 units/s
   if (profile.kind === "cleaver") velocity.copy(forward).multiplyScalar(10).add(up).normalize().multiplyScalar(profile.speed);
@@ -45,7 +47,7 @@ export function stepProjectile(m: ProjectileMotion, profile: ProjectileProfile, 
     m.velocity.z -= profile.gravity * dt;
     if(["syringe","arrow"].includes(profile.kind) && m.velocity.lengthSq()>0) m.rotation.copy(projectileRotation(m.velocity));
     if (profile.spin) m.rotation.multiply(spinRotation.setFromEuler(spinEuler.set(m.angular.x * dt, m.angular.y * dt, m.angular.z * dt)));
-    const radius = ["grenade","cannon","sticky","jar","cleaver"].includes(profile.kind) ? 8 : 1;
+    const radius = ["grenade","cannon","sticky","jar","cleaver","plate"].includes(profile.kind) ? 8 : 1;
     for(const axis of ["x","y","z"] as const) {
       const min=axis==="z" ? Math.max(floor,bounds.min.z)+radius : bounds.min[axis]+radius,max=bounds.max[axis]-radius;
       if(m.position[axis]>=min && m.position[axis]<=max) continue;
@@ -53,7 +55,7 @@ export function stepProjectile(m: ProjectileMotion, profile: ProjectileProfile, 
       m.position[axis]=sign===1 ? min : max;
       m.impactNormal=new THREE.Vector3();m.impactNormal[axis]=sign;
       if(profile.kind==="sticky" || profile.kind==="arrow" || profile.kind==="cleaver") {m.settled=true;m.velocity.set(0,0,0);m.angular.set(0,0,0);}
-      else if(["grenade","cannon"].includes(profile.kind)) {
+      else if(["grenade","cannon","plate"].includes(profile.kind)) {
         m.velocity.multiplyScalar(.45);m.velocity[axis]=Math.abs(m.velocity[axis])*sign;
         if(m.velocity.lengthSq()<900 && axis==="z" && sign===1) {m.settled=true;m.velocity.set(0,0,0);m.angular.set(0,0,0);}
       } else m.active=false;
@@ -65,6 +67,7 @@ export function stepProjectile(m: ProjectileMotion, profile: ProjectileProfile, 
 
 export interface ProjectileInteractions {hit:(start:THREE.Vector3,end:THREE.Vector3)=>THREE.Vector3|null;/** An arrow's own test: it also leaves the arrow in whatever it strikes (given the flying arrow, to copy). */arrow?:(start:THREE.Vector3,end:THREE.Vector3,direction:THREE.Vector3,model:THREE.Object3D)=>THREE.Vector3|null;explosion:(position:THREE.Vector3,radius:number)=>void;/** A jar burst at this point; everything within the radius gets wet. */splash?:(position:THREE.Vector3,radius:number)=>void}
 interface Slot { group: THREE.Group; matrix: THREE.Matrix4; motion: ProjectileMotion | null; action: number; stopped: number; model: string; team: number; profile?:ProjectileProfile; pulseAction?:number; pulsed?:boolean; trailStopped?:boolean }
+const UNIT_SCALE = new THREE.Vector3(1, 1, 1);
 export class WeaponProjectiles {
   readonly group = new THREE.Group();
   private readonly geometries: THREE.BufferGeometry[] = [];
@@ -89,7 +92,7 @@ export class WeaponProjectiles {
       delete template.userData.rig;
       const count = 32;
       for (let i = 0; i < count; i++) {
-        const group = template.clone(); group.visible = false; group.updateMatrix();
+        const group = template.clone(); group.visible = false; group.scale.setScalar(profile.projectile.scale ?? 1); group.updateMatrix();
         result.group.add(group);
         result.slots.push({ group, matrix: new THREE.Matrix4(), motion: null, action: 0, stopped: -Infinity, model: profile.projectile.model, team: profile.projectile.team });
       }
@@ -169,7 +172,8 @@ export class WeaponProjectiles {
   private sync(slot: Slot) {
     const motion = slot.motion; if (!motion) return;
     slot.group.position.copy(motion.position); slot.group.quaternion.copy(motion.rotation); slot.group.updateMatrix();
-    slot.matrix.copy(slot.group.matrix).multiply(this.trailAttachment);
+    // (the trail's control point has no scale: the healing bolt is drawn three times as big, its trail is not)
+    slot.matrix.compose(motion.position, motion.rotation, UNIT_SCALE).multiply(this.trailAttachment);
   }
   /** Where a projectile was before this sub-step (the segment its hit test sweeps); one vector for all of them, they are tested one at a time. */
   private readonly stepStart = new THREE.Vector3();

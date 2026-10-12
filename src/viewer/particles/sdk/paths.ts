@@ -138,21 +138,27 @@ register("Random position within a curved cylinder", (a) => {
   });
 });
 
+/**
+ * Particles that fly from where they are made to the end control point at their own speed (units per second) and end there: a bullet tracer.
+ * The speed is a distance per second, the lifetime is what the way takes, so the sprite trail reaches the end point as it dies.
+ */
 register("move particles between 2 control points", (a) => {
-  const endCp = a.int("end control point"), min = a.num("minimum speed"), max = a.num("maximum speed"), spread = a.num("end spread"), startOffset = a.num("start offset");
+  const endCp = a.int("end control point"), min = a.num("minimum speed"), max = a.num("maximum speed"), spread = a.num("end spread"), startOffset = a.num("start offset"), endOffset = a.num("end offset");
   return fn(a, {
     initialize(c, first, n) {
       const end = c.cps[endCp].pos;
       for (let i = first; i < first + n; i++) {
-        const dx = end[0] - c.xyz[i * 3], dy = end[1] - c.xyz[i * 3 + 1], dz = end[2] - c.xyz[i * 3 + 2];
-        const target: Vec3 = [dx, dy, dz];
+        const target: Vec3 = [end[0] - c.xyz[i * 3], end[1] - c.xyz[i * 3 + 1], end[2] - c.xyz[i * 3 + 2]];
         if (spread > 0) { const r: Vec3 = [0, 0, 0]; c.randInUnitSphere(r); for (let k = 0; k < 3; k++) target[k] += r[k] * spread; }
-        const l = normalize(target);
-        void l;
-        const speed = c.rand(min, max);
+        const length = Math.hypot(target[0], target[1], target[2]);
+        if (length < 1e-6) { c.life[i] = 0; continue; }
+        const dir: Vec3 = [target[0] / length, target[1] / length, target[2] / length];
+        const speed = Math.max(1e-3, c.rand(min, max));
         for (let k = 0; k < 3; k++) {
-          c.xyz[i * 3 + k] += target[k] * startOffset; c.prev[i * 3 + k] = c.xyz[i * 3 + k] - target[k] * speed * c.dt;
+          c.xyz[i * 3 + k] += dir[k] * startOffset;
+          c.launch[i * 3 + k] = dir[k] * speed;
         }
+        c.life[i] = Math.max(0, (length - startOffset - endOffset) / speed);
       }
     },
   });

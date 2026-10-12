@@ -12,7 +12,7 @@ test("conditions are parsed strictly and say what they change", () => {
   assert.deepEqual(parseConditions({ uber: true, urine: "yes", nonsense: true }), { ...NO_CONDITIONS, uber: true });
   assert.equal(anyCondition(NO_CONDITIONS), false);
   assert.equal(anyCondition({ ...NO_CONDITIONS, crit: true }), true);
-  assert.equal(CONDITION_KEYS.length, 5);
+  assert.equal(CONDITION_KEYS.length, 6);
   assert.equal(materialEffects(NO_CONDITIONS, 0), undefined);
   assert.deepEqual(materialEffects({ ...NO_CONDITIONS, urine: true }, 0)!.yellow, [6, 9, 2]);
   assert.deepEqual(materialEffects({ ...NO_CONDITIONS, urine: true }, 1)!.yellow, [7, 5, 1]);
@@ -22,6 +22,7 @@ test("conditions are parsed strictly and say what they change", () => {
   const wet = { ...NO_CONDITIONS, urine: true, milk: true, burning: true };
   assert.deepEqual(conditionParticles(wet, 0).map((p) => p.system), ["peejar_drips", "peejar_drips_milk", "burningplayer_red"]);
   assert.deepEqual(conditionParticles({ ...NO_CONDITIONS, burning: true }, 1).map((p) => p.system), ["burningplayer_blue"]);
+  assert.deepEqual(conditionParticles({ ...NO_CONDITIONS, phase: true }, 0).map((p) => p.system), ["warp_version"]);
   assert.deepEqual(conditionParticles({ ...NO_CONDITIONS, uber: true }, 0), []);
   // a crit boost sparks around the weapon, not the body
   assert.deepEqual(conditionParticles({ ...NO_CONDITIONS, crit: true }, 1), [{ system: "critgun_weaponmodel_blu", weapon: true }]);

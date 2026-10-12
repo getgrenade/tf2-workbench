@@ -93,9 +93,9 @@ export const startNativeParticles = (cp: number[], generation: number, file: str
 export const stepNativeParticles = (handle: number, ticks: number, cp: number[], boxes: number[][] = [], action = 0, flame: number[] = [], colors: number[] = [], instances: number[][] = [], target: number[] = [], floor: number | null = null) =>
   invoke<ArrayBuffer>("native_particle_step", { handle, ticks, cp, boxes, action, flame, colors, instances, target, floor });
 export interface ProjectileProfile {
-  kind: "rocket" | "grenade" | "energy" | "syringe" | "sticky" | "cannon" | "arrow" | "jar" | "cleaver";
+  kind: "rocket" | "grenade" | "energy" | "syringe" | "sticky" | "cannon" | "arrow" | "jar" | "cleaver" | "plate";
   model: string; trail: string; speed: number; gravity: number; lifetime: number; spin: boolean; team: number;
-  impact?: string; impactAir?: string; damageRadius?:number; speedMax?: number; gravityMin?: number; armTime?: number; maxActive?: number; detonateMode?: number; spriteTrail?: string;
+  impact?: string; impactAir?: string; damageRadius?:number; speedMax?: number; gravityMin?: number; /** A factor on the model's size (the healing bolt is the syringe, three times as big). */ scale?: number; armTime?: number; maxActive?: number; detonateMode?: number; spriteTrail?: string;
 }
 export interface WeaponProfile {
   itemId: number; weaponClass: string; melee?:{range:number;hull:number;delay:number}|null; hitscan?:boolean;range?:number; clipSize: number; reserve: number; ammoPerShot: number; fireDelay: number;
@@ -109,6 +109,15 @@ export interface WeaponProfile {
   /** A weapon that is thrown once and comes back after `recharge` seconds (Jarate, Mad Milk, the cleaver); the projectile leaves `delay` seconds into the throw. */
   throwable?: {recharge:number;delay:number} | null;
   healing?: {system:string;range:number} | null;
+  /** The item's third-person activity replacements (`ACT_MP_ATTACK_STAND_MELEE_SECONDARY` -> `ACT_MP_ATTACK_STAND_ITEM1_SECONDARY`), upper case. */
+  animReplacement?: Record<string,string>;
+  /** The particle system of a hitscan weapon's tracer (`bullet_pistol_tracer01_red`), empty for none. */
+  tracer?: string;
+  /**
+   * A lunchbox: the Heavy's food (the primary fire is the eating taunt, the secondary throws it out as a health kit) or the Scout's drink (the taunt, then the buff).
+   * `recharge` seconds until it is back; the food that `stays` (a Sandvich at full health) is never used up.
+   */
+  consumable?: { kind: "food" | "drink"; type: number; recharge: number; heal?: number; firstBiteBuff?: string; buffSeconds: number; keepsMelee?: boolean; stays?: boolean; drinkAt?: number; buff?: string; splash?: string } | null;
   projectile?: ProjectileProfile | null;
   muzzle: string; brass: string; ejectTimes: number[]; continuous: boolean;
 }

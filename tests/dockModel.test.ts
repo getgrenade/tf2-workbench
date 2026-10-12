@@ -51,7 +51,7 @@ test("hidden panels come back where they were", () => {
   assert.equal(findPanel(hidden, "flex"), null);
   assert.deepEqual(hidden.hidden, ["flex"]);
   const back = showPanel(hidden, "flex", "right");
-  assert.deepEqual(shape(back), { left: "outliner | properties", right: "cosmetics | weapons", bottom: "anim+poses+flex" });
+  assert.deepEqual(shape(back), { left: "outliner | properties", right: "cosmetics | weapons", bottom: "anim+flex+poses" });
   assert.equal(back.docks.bottom.groups[0].active, "flex");
   // a panel of an emptied dock comes back as its group
   let l = hidePanel(base(), "anim");
@@ -99,4 +99,33 @@ test("a panel added after a layout was saved joins the group it shares in the de
   const parsed = parseLayout(JSON.parse(JSON.stringify(saved)), ["a", "b", "c"], defaults);
   assert.equal(parsed.docks.left.groups.map((g) => g.tabs.join("+")).join(" | "), "c | a+b");
   assert.equal(parsed.docks.left.groups[1].active, "a", "the active tab stays");
+});
+
+test("a hidden panel comes back to the place it had among the tabs of its group", () => {
+  const l = hidePanel(base(), "flex");
+  assert.deepEqual(shape(l), { left: "outliner | properties", right: "cosmetics | weapons", bottom: "anim+poses" });
+  assert.deepEqual(shape(showPanel(l, "flex", "right")), { left: "outliner | properties", right: "cosmetics | weapons", bottom: "anim+flex+poses" });
+  const first = hidePanel(base(), "anim");
+  assert.deepEqual(shape(showPanel(first, "anim", "right")).bottom, "anim+flex+poses");
+});
+
+test("a panel that was a group of its own comes back as a group at the same place with the same share", () => {
+  const start = base();
+  start.docks.left.groups[0].weight = 0.7;
+  start.docks.left.groups[1].weight = 1.3;
+  const hidden = hidePanel(start, "outliner");
+  assert.deepEqual(shape(hidden).left, "properties");
+  const back = showPanel(hidden, "outliner", "right");
+  assert.deepEqual(shape(back).left, "outliner | properties");
+  assert.equal(back.docks.left.groups[0].weight, 0.7);
+  const second = showPanel(hidePanel(base(), "weapons"), "weapons", "left");
+  assert.deepEqual(shape(second), { left: "outliner | properties", right: "cosmetics | weapons", bottom: "anim+flex+poses" });
+});
+
+test("where a panel was is kept across saving and loading, and used once", () => {
+  const hidden = hidePanel(base(), "flex");
+  const loaded = parseLayout(JSON.parse(JSON.stringify(hidden)), IDS, base());
+  assert.deepEqual(shape(showPanel(loaded, "flex", "right")).bottom, "anim+flex+poses");
+  const back = showPanel(hidden, "flex", "right");
+  assert.equal(back.spots?.flex, undefined);
 });

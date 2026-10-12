@@ -581,7 +581,8 @@ pub fn parse_with(text: &str, names: &HashMap<String, String>, workshop: &[(Stri
             let mut item = build_item(id, &resolved, names);
             item.prefabs = get_str(own, "prefab").map(|p| p.split_whitespace().map(str::to_ascii_lowercase).collect()).unwrap_or_default();
             let wearable = item.item_class.starts_with("tf_wearable") && !item.item_class.contains("_vm");
-            let cosmetic_slot = matches!(item.slot.as_str(), "head" | "misc");
+            // (the Demoman's shields are wearables of the secondary slot: they hang on the arm whatever is in the hand, so they are cosmetics)
+            let cosmetic_slot = matches!(item.slot.as_str(), "head" | "misc") || item.item_class == "tf_wearable_demoshield";
             if wearable && cosmetic_slot && (item.model.is_some() || !item.per_class.is_empty()) {
                 items.push(item);
             } else if is_held_weapon(&item) {

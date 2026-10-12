@@ -209,6 +209,8 @@ export class Collection {
   readonly emitters: Fn[]; readonly initializers: Fn[]; readonly operators: Fn[]; readonly forces: Fn[]; readonly constraints: Fn[];
   private readonly killList: number[] = [];
   private readonly accel: Float32Array;
+  /** The velocity an initializer gave a new particle that way (`move particles between 2 control points`): it becomes the distance to the previous position when the initializers are done. */
+  readonly launch: Float32Array;
   /** Operators that write to the particles' initial values after the fact (Remap with "output is scalar of initial random range") need them. */
 
   constructor(def: SystemDef, delay: number, seed: number, world: World, parent: Collection | null = null) {
@@ -228,6 +230,7 @@ export class Collection {
       this.all.push([array, LAYOUT[name]]);
     }
     this.accel = new Float32Array(this.capacity * 3);
+    this.launch = new Float32Array(this.capacity * 3);
     this.emitters = def.make("emitters"); this.initializers = def.make("initializers"); this.operators = def.make("operators");
     this.forces = def.make("forces"); this.constraints = def.make("constraints");
     for (const child of def.children) this.children.push(new Collection(child.def, child.delay, seed, world, this));
@@ -337,6 +340,7 @@ export class Collection {
       this.hitbox[i] = -1; this.hitRel[i * 3] = this.hitRel[i * 3 + 1] = this.hitRel[i * 3 + 2] = 0;
       this.alpha2[i] = 1;
       this.cpIndex[i] = 0;
+      this.launch[i * 3] = this.launch[i * 3 + 1] = this.launch[i * 3 + 2] = 0;
     }
     for (const [from, n, time] of born) for (let i = from; i < from + n; i++) this.creation[i] = time;
     const now = this.time;
@@ -346,7 +350,7 @@ export class Collection {
       fn.initialize(this, first, count);
     }
     for (let i = first; i < first + count; i++) {
-      for (let k = 0; k < 3; k++) this.prev[i * 3 + k] = this.xyz[i * 3 + k];
+      for (let k = 0; k < 3; k++) this.prev[i * 3 + k] = this.xyz[i * 3 + k] - this.launch[i * 3 + k] * this.dt;
       for (const name of INITIAL) { const size = LAYOUT[name]; for (let k = 0; k < size; k++) this.initial[name][i * size + k] = (this[name] as Float32Array)[i * size + k]; }
     }
   }

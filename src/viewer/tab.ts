@@ -1955,7 +1955,9 @@ export function createViewTab(els: Els) {
     viewer?.setActorGizmo(null);
     if (kind === "camera") {
       viewer?.hideLightMarker();
-      viewer?.cameras.edit(id, viewer.cameras.parts.rotate && !viewer.cameras.parts.move ? "rotate" : "translate", false);
+      // (editing a camera with its gizmo leaves the view: while the view is through a camera, picking one only selects it)
+      if (viewer?.cameras.active) viewer.cameras.stopEditing();
+      else viewer?.cameras.edit(id, viewer.cameras.parts.rotate && !viewer.cameras.parts.move ? "rotate" : "translate", false);
     } else {
       viewer?.cameras.stopEditing();
       viewer?.selectLight(id);
@@ -2632,6 +2634,7 @@ export function createViewTab(els: Els) {
 
   async function startPlay() {
     const v = viewer;
+    v?.setConditionsPaused(false);
     const e = selected;
     if (!v || !e || play?.active || !e.anim.info) return;
     v.cameras.stopEditing(); v.cameras.leave();
@@ -2704,6 +2707,14 @@ export function createViewTab(els: Els) {
       actor: e.actor,
       anim: e.anim,
       gameClass: cls,
+      team: () => e.team,
+      setHeldHidden: (hidden) => e.actor.setHeldHidden(hidden),
+      onMeal: (event, profile) => {
+        const c = profile.consumable;
+        if (event.type === "drink") { v.drinkSplash(e.actor); if (c?.buff) v.addTimedCondition(e.actor, c.buff as ConditionKey, c.buffSeconds); }
+        else if (event.type === "bite" && event.n === 1 && c?.firstBiteBuff) v.addTimedCondition(e.actor, c.firstBiteBuff as ConditionKey, c.buffSeconds);
+        else if (event.type === "drop") v.fireWeapon(e.actor, event.direction);
+      },
       surface: v.renderer.domElement,
       weaponSets: () => (e.held && e.held.slot !== "taunt" ? setsOf(weaponIdleSequences(e.held, cls)) : []),
       slots: () => available,
@@ -2751,7 +2762,7 @@ export function createViewTab(els: Els) {
     if (!p) return;
     play = null;
     playActor = null;
-    viewer?.setFacingMarker(null);viewer?.freezeHitReactions();
+    viewer?.setFacingMarker(null);viewer?.freezeHitReactions();viewer?.setConditionsPaused(true);
     const pose = e?.actor.snapshotPose() ?? null;
     if(e) viewer?.freezeWeaponEffects(e.actor);
     p.stop();

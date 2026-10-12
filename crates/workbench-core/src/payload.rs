@@ -350,6 +350,8 @@ struct SeqJson {
     fps: f32,
     looping: bool,
     hidden: bool,
+    /// The authored activity (`ACT_MP_THROW`), empty for a sequence that has none.
+    activity: String,
 }
 
 #[derive(Serialize)]
@@ -377,7 +379,7 @@ pub fn encode_anim_info(set: &source_formats::anim::AnimSet) -> Vec<u8> {
         sequences: set
             .sequences()
             .into_iter()
-            .map(|s| SeqJson { index: s.index, name: s.name, frames: s.frames, fps: s.fps, looping: s.looping, hidden: s.hidden })
+            .map(|s| { let activity = set.activity_name(s.index); SeqJson { index: s.index, name: s.name, frames: s.frames, fps: s.fps, looping: s.looping, hidden: s.hidden, activity } })
             .collect(),
         pose_params: set
             .pose_params

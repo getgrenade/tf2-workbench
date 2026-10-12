@@ -79,6 +79,14 @@ pub fn weapon_profile(vpk: &VpkSet, id: u32, class: &str, team: u32) -> Result<s
     else if weapon_class=="tf_weapon_particle_cannon" {if team==1 {"drg_cow_muzzleflash_normal_blue"} else {"drg_cow_muzzleflash_normal"}.to_owned()}
     else if weapon_class=="tf_weapon_raygun" {"drg_bison_muzzleflash".to_owned()}
     else {muzzle.to_owned()};
+    // The lunchboxes (CTFLunchBox): the kind of food or drink is the item's weapon mode attribute; what is thrown with the secondary fire depends on it.
+    let lunchbox=attribute("set_weapon_mode",0.) as i32;
+    let plate=match lunchbox {
+        1 => "models/workshop/weapons/c_models/c_chocolate/plate_chocolate.mdl", 2 => "models/workshop/weapons/c_models/c_buffalo_steak/plate_buffalo_steak.mdl",
+        3 => "models/items/plate_robo_sandwich.mdl", 4 => "models/items/plate_sandwich_xmas.mdl", 6 => "models/items/banana/plate_banana.mdl",
+        7 => "models/workshop/weapons/c_models/c_fishcake/plate_fishcake.mdl", _ => "models/items/plate.mdl",
+    };
+    let static_number=|name:&str,default:f64| kv::find(&item,"static_attrs").and_then(kv::Node::block).and_then(|b|kv::find(b,name)).and_then(kv::Node::as_str).and_then(|v|v.parse::<f64>().ok()).unwrap_or(default);
     let projectile = match weapon_class {
         "tf_weapon_rocketlauncher" | "tf_weapon_rocketlauncher_directhit" | "tf_weapon_rocketlauncher_airstrike" => Some(("rocket", if attribute("mini_rockets",0.)!=0. {"models/weapons/w_models/w_rocket_airstrike/w_rocket_airstrike.mdl"} else {"models/weapons/w_models/w_rocket.mdl"}, if attribute("mini_rockets",0.)!=0. {"rockettrail_airstrike"} else if attribute("no_self_blast_dmg",0.)!=0. {"rockettrail_RocketJumper"} else {"rockettrail"}, 1100.*attribute("mult_projectile_speed",1.), 0., 8., false)),
         "tf_weapon_grenadelauncher" => Some(("grenade", "models/weapons/w_models/w_grenade_grenadelauncher.mdl", if team==1 {"pipebombtrail_blue"} else {"pipebombtrail_red"}, 1200.*attribute("mult_projectile_speed",1.)*attribute("mult_projectile_range",1.), 800., 2., attribute("grenade_no_spin",0.)==0.)),
@@ -97,13 +105,18 @@ pub fn weapon_profile(vpk: &VpkSet, id: u32, class: &str, team: u32) -> Result<s
             };
             Some(("jar", model, if team==1 {"peejar_trail_blu"} else {"peejar_trail_red"}, 1000., 800., 2., true))
         },
+        // CTFLunchBox::SecondaryAttack: the food is thrown out as a health kit at 500 units a second, ten degrees up, and falls like a dropped item
+        "tf_weapon_lunchbox" => Some(("plate",plate,"",500.,800.,30.,false)),
         "tf_weapon_cleaver" => Some(("cleaver","models/workshop_partner/weapons/c_models/c_sd_cleaver/c_sd_cleaver.mdl",if team==1 {"peejar_trail_blu_glow"} else {"peejar_trail_red_glow"},3000.,800.,4.,true)),
+        // The healing bolt is an arrow (CTFProjectile_Arrow) with the syringe's model at three times the size and a team coloured trail (c_tf_projectile_arrow.cpp)
+        "tf_weapon_crossbow" => Some(("arrow",if id==1079 {"models/workshop/weapons/c_models/c_crusaders_crossbow/c_crusaders_crossbow_xmas_proj.mdl"} else {"models/weapons/w_models/w_syringe_proj.mdl"},if team==1 {"healshot_trail_blue"} else {"healshot_trail_red"},2400.,160.,10.,false)),
         "tf_weapon_compound_bow" => Some(("arrow",if id==1005 {"models/weapons/w_models/w_arrow_xmas.mdl"} else {"models/weapons/w_models/w_arrow.mdl"},"",1800.,400.,10.,false)),
         "tf_weapon_particle_cannon" => Some(("energy", "models/weapons/w_models/w_drg_ball.mdl", if team==1 {"drg_cow_rockettrail_normal_blue"} else {"drg_cow_rockettrail_normal"}, 1100., 0., 8., false)),
         "tf_weapon_raygun" => Some(("energy", "", "drg_bison_projectile", 1200., 0., 8., false)),
         "tf_weapon_syringegun_medic" => Some(("syringe", "models/weapons/w_models/w_syringe_proj.mdl", if team==1 {"nailtrails_medic_blue"} else {"nailtrails_medic_red"}, 1000., 240., 3., false)),
         _ => None,
     }.map(|(kind,model,trail,speed,gravity,lifetime,spin)| {
+        let bolt=weapon_class=="tf_weapon_crossbow";
         let custom_model=["attributes","static_attrs"].iter().find_map(|section|kv::find(&item,section).and_then(kv::Node::block).and_then(|b|b.iter().find_map(|n| {
             let def=attributes.iter().find(|a|a.key==n.key || a.block().is_some_and(|b|value(b,"name")==n.key));
             if !def.and_then(kv::Node::block).is_some_and(|b|value(b,"name")=="custom projectile model") {return None;}
@@ -113,7 +126,7 @@ pub fn weapon_profile(vpk: &VpkSet, id: u32, class: &str, team: u32) -> Result<s
             else if weapon_class=="tf_weapon_raygun" {"drg_pomson_impact".to_owned()} else if kind=="jar" {if weapon_class=="tf_weapon_jar_milk" {"peejar_impact_milk"} else {"peejar_impact"}.to_owned()}
             else if matches!(kind,"rocket"|"grenade"|"cannon"|"sticky") {value(&script,"ExplosionEffect")} else {String::new()};
         let impact_air=if weapon_class=="tf_weapon_particle_cannon" || kind=="jar" {impact.clone()} else if matches!(kind,"rocket"|"grenade"|"cannon"|"sticky") {value(&script,"ExplosionPlayerEffect")} else {String::new()};
-        serde_json::json!({"kind":kind,"model":custom_model.unwrap_or_else(||model.to_owned()),"trail":trail,"speed":speed,"gravity":gravity,"lifetime":lifetime,"spin":spin,"team":team,"impact":impact,"impactAir":impact_air,"speedMax":if kind=="sticky" {2400.} else if kind=="arrow" {2600.} else {speed},"gravityMin":if kind=="arrow" {80.} else {gravity},"damageRadius":if attribute("mult_dmg",1.)<=0. {0.} else {num("DamageRadius",146.)},"armTime":attribute("sticky_arm_time",0.8).max(0.),"maxActive":8.+attribute("add_max_pipebombs",0.),"detonateMode":attribute("set_detonate_mode",0.),"spriteTrail":if kind=="arrow" {if team==1 {"effects/arrowtrail_blu.vmt"} else {"effects/arrowtrail_red.vmt"}} else {""}})
+        serde_json::json!({"kind":kind,"model":custom_model.unwrap_or_else(||model.to_owned()),"trail":trail,"speed":speed,"gravity":gravity,"lifetime":lifetime,"spin":spin,"team":team,"impact":impact,"impactAir":impact_air,"speedMax":if kind=="sticky" {2400.} else if kind=="arrow" && !bolt {2600.} else {speed},"gravityMin":if kind=="arrow" && !bolt {80.} else {gravity},"scale":if bolt {3.} else {1.},"damageRadius":if attribute("mult_dmg",1.)<=0. {0.} else {num("DamageRadius",146.)},"armTime":attribute("sticky_arm_time",0.8).max(0.),"maxActive":8.+attribute("add_max_pipebombs",0.),"detonateMode":attribute("set_detonate_mode",0.),"spriteTrail":if kind=="arrow" && !bolt {if team==1 {"effects/arrowtrail_blu.vmt"} else {"effects/arrowtrail_red.vmt"}} else {""}})
     });
     let colors = if matches!(weapon_class,"tf_weapon_particle_cannon"|"tf_weapon_raygun") {
         if team==1 {vec![0.345,0.52,0.635,0.145,0.427,0.55]} else {vec![0.72,0.22,0.23,0.5,0.18,0.125]}
@@ -129,6 +142,33 @@ pub fn weapon_profile(vpk: &VpkSet, id: u32, class: &str, team: u32) -> Result<s
         "tf_weapon_cleaver" => Some(serde_json::json!({"recharge":5.1*attribute("effect_bar_recharge_rate",1.),"delay":0.1})),
         _ => None,
     };
+    // The item's `animation_replacement` also rewrites the player's own activities (the Buff Banner plays the bugle call, the Self-Aware Beauty Mark throws):
+    // the third-person ones (ACT_MP_*) go to the viewer, which matches them to the class model's sequences; the team's own entries win.
+    let mut anim_replacement=serde_json::Map::new();
+    for v in [visuals,team_visuals] {
+        if let Some(b)=kv::find(v,"animation_replacement").and_then(kv::Node::block) {
+            for n in b { if n.key.to_ascii_uppercase().starts_with("ACT_MP_") { if let Some(to)=n.as_str() { anim_replacement.insert(n.key.to_ascii_uppercase(),serde_json::Value::String(to.to_ascii_uppercase())); } } }
+        }
+    }
+    // The tracer of a hitscan weapon: the item's `tracer_effect` (or the weapon script's TracerEffect) with the team's colour (CTFWeaponBase::GetTracerType), and the rail
+    // that rifles with "sniper fires tracer" draw (MaybeDrawRailgunBeam; the Classic has its own).
+    let tracer_base=kv::find(team_visuals,"tracer_effect").or_else(|| kv::find(visuals,"tracer_effect")).and_then(kv::Node::as_str).map(str::to_owned).unwrap_or_else(|| value(&script,"TracerEffect"));
+    let side=if team==1 {"blue"} else {"red"};
+    let rail=attribute("sniper_fires_tracer",0.)!=0. || attribute("sniper_fires_tracer_hidden",0.)!=0. || attribute("sniper_fires_tracer_HIDDEN",0.)!=0.;
+    let tracer=if weapon_class=="tf_weapon_sniperrifle_classic" {"tfc_sniper_distortion_trail".to_owned()} else if rail {format!("dxhr_sniper_rail_{side}")}
+        else if !tracer_base.is_empty() {format!("{tracer_base}_{side}")} else {String::new()};
+    // Eating and drinking (CTFLunchBox::PrimaryAttack is a taunt): the Heavy's bites come every second from the first, healing 75 (25 for the bars), and the
+    // Scout's drink starts its effect 0.9 s in (tf_player.cpp, TAUNTATK_HEAVY_EAT / TAUNTATK_SCOUT_DRINK). The meters: Sandwiches 30 s, bars and the banana 10 s (item_meter_charge_rate);
+    // the drinks regain in TF_SANDWICH_REGENTIME (30 s). Bonk is the phase (Bonk effect), Crit-a-Cola the minicrit boost, both for the 8 s the drink's meter lasts.
+    let consumable = match weapon_class {
+        "tf_weapon_lunchbox" => Some(serde_json::json!({"kind":"food","type":lunchbox,"recharge":static_number("item_meter_charge_rate",30.),
+            "heal":(if matches!(lunchbox,1|7) {25.} else {75.})*attribute("lunchbox_healing_scale",1.),"firstBiteBuff":if lunchbox==2 {"crit"} else {""},"buffSeconds":16.,"keepsMelee":lunchbox==2,
+            "stays":matches!(lunchbox,0|3|4)})),
+        "tf_weapon_lunchbox_drink" => Some(serde_json::json!({"kind":"drink","type":lunchbox,"recharge":30.*attribute("effect_bar_recharge_rate",1.),"drinkAt":0.9,
+            "buff":if lunchbox==2 {"crit"} else {"phase"},"buffSeconds":8.,
+            "splash":kv::find(visuals,"custom_particlesystem").and_then(kv::Node::block).map(|b|value(b,"system")).filter(|v|!v.is_empty()).unwrap_or_else(||"energydrink_splash".to_owned())})),
+        _ => None,
+    };
     let healing=if weapon_class=="tf_weapon_medigun" {Some(serde_json::json!({"system":if team==1 {"medicgun_beam_blue"} else {"medicgun_beam_red"},"range":num("Range",450.)}))} else {None};
     let muzzle=if weapon_class=="tf_weapon_compound_bow" {""} else {fire_particle.as_str()};
     let clip = num("clip_size",-1.);
@@ -140,7 +180,7 @@ pub fn weapon_profile(vpk: &VpkSet, id: u32, class: &str, team: u32) -> Result<s
         "reloadTime":(if singly {duration("VM_RELOAD",num("TimeReload",0.5))} else {(duration("VM_RELOAD",num("TimeReload",0.5))-0.2).max(0.1)})*reload_scale,
         "reloadPlaybackRate":if reload_scale>0. {(1./reload_scale).clamp(-4.,12.)} else {1.},
         "flame":if flame {vec![attribute("flame_speed",0.),attribute("flame_lifetime",0.),attribute("flame_random_life_time_offset",0.),attribute("flame_drag",0.),attribute("flame_gravity",0.),attribute("flame_up_speed",0.),attribute("flame_spread_degree",0.),attribute("mult_flame_size",1.),attribute("mult_end_flame_size",1.),attribute("flame_ignore_player_velocity",0.)]} else {vec![]},
-        "reloadEnd":duration("RELOAD_FINISH",0.),"ammoEvent":ammo_event,"muzzle":muzzle,"projectile":projectile,"colors":colors,"charge":charge,"throwable":throwable,"healing":healing,
+        "reloadEnd":duration("RELOAD_FINISH",0.),"ammoEvent":ammo_event,"muzzle":muzzle,"projectile":projectile,"colors":colors,"charge":charge,"throwable":throwable,"animReplacement":anim_replacement,"tracer":tracer,"consumable":consumable,"healing":healing,
         "melee":if value(&item,"item_slot")=="melee" || role=="MELEE" {Some(serde_json::json!({"range":(if attribute("is_a_sword",0.)>0. {72.} else {48.})*attribute("melee_range_multiplier",1.),"hull":18.*attribute("melee_bounds_multiplier",1.),"delay":num("SmackDelay",0.2)}))} else {None},"hitscan":matches!(weapon_class,"tf_weapon_scattergun"|"tf_weapon_soda_popper"|"tf_weapon_pep_brawler_blaster"|"tf_weapon_minigun"|"tf_weapon_sniperrifle"|"tf_weapon_sniperrifle_decap"|"tf_weapon_sniperrifle_classic"|"tf_weapon_smg"|"tf_weapon_charged_smg"|"tf_weapon_revolver"|"tf_weapon_pistol"|"tf_weapon_pistol_scout"|"tf_weapon_handgun_scout_primary"|"tf_weapon_handgun_scout_secondary") || (weapon_class.contains("shotgun") && weapon_class!="tf_weapon_shotgun_building_rescue"),"range":num("Range",8192.),"brass":brass,"ejectTimes":eject,"continuous":weapon_class=="tf_weapon_minigun" || flame}))
 }
 
@@ -215,6 +255,19 @@ mod weapon_tests {
             assert!((p["throwable"]["recharge"].as_f64().unwrap()-recharge).abs()<0.01,"{id} {}",p["throwable"]);
         }
         assert!(shotgun["throwable"].is_null());
+        // lunchboxes: food is eaten (and thrown out), drinks are drunk; the meters and the buffs come from the schema
+        let sandvich=weapon_profile(&vpk,42,"heavy",0).unwrap();
+        assert_eq!(sandvich["consumable"]["kind"],"food");assert_eq!(sandvich["consumable"]["recharge"],30.);assert_eq!(sandvich["consumable"]["stays"],true);
+        assert_eq!(sandvich["projectile"]["kind"],"plate");assert_eq!(sandvich["projectile"]["model"],"models/items/plate.mdl");
+        let bar=weapon_profile(&vpk,159,"heavy",0).unwrap();
+        assert_eq!(bar["consumable"]["recharge"],10.);assert_eq!(bar["consumable"]["heal"],25.);assert_eq!(bar["consumable"]["stays"],false);
+        let steak=weapon_profile(&vpk,311,"heavy",0).unwrap();
+        assert_eq!(steak["consumable"]["firstBiteBuff"],"crit");assert_eq!(steak["consumable"]["keepsMelee"],true);
+        let bonk=weapon_profile(&vpk,46,"scout",0).unwrap();
+        assert_eq!(bonk["consumable"]["kind"],"drink");assert_eq!(bonk["consumable"]["buff"],"phase");assert_eq!(bonk["consumable"]["splash"],"energydrink_splash");
+        let cola=weapon_profile(&vpk,163,"scout",0).unwrap();
+        assert_eq!(cola["consumable"]["buff"],"crit");assert_eq!(cola["consumable"]["splash"],"energydrink_cola_splash");
+        assert!(shotgun["consumable"].is_null());
         let mini=weapon_profile(&vpk,202,"heavy",0).unwrap();
         assert_eq!(mini["clipSize"],-1);assert_eq!(mini["reserve"],200);assert_eq!(mini["muzzle"],"muzzle_minigun_constant");
         assert_eq!(mini["fireDelay"],0.1);assert_eq!(mini["continuous"],true);

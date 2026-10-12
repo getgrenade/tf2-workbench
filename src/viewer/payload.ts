@@ -211,6 +211,8 @@ export interface SequenceInfo {
   fps: number;
   looping: boolean;
   hidden: boolean;
+  /** The authored activity (`ACT_MP_THROW`); empty when the sequence has none. */
+  activity?: string;
 }
 
 export interface PoseParamInfo {

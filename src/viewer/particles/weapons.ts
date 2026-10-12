@@ -37,6 +37,10 @@ export class WeaponEffects {
   private shellModel = "";
   private healingTarget:THREE.Vector3|null=null;
   private healingSim:NativeSimulation|null=null;
+  /** The tracers of a hitscan weapon: a few systems taken in turn, each with the start and the end of the shot it draws (UTIL_ParticleTracer). */
+  private readonly tracers:{sim:NativeSimulation;start:THREE.Matrix4;end:THREE.Vector3|null}[]=[];
+  private tracerNext=0;
+  private splashSim:NativeSimulation|null=null;
   private readonly nodes: { file:string; node:NativeRenderNode }[] = [];
   get isFrozen() {return this.frozen;}
   private constructor(private actor: Actor, readonly profile: WeaponProfile | null, private modelPath: string,
@@ -72,6 +76,30 @@ export class WeaponEffects {
           if(!sim) throw new Error("Native helper is required for cannon charge effects");
           effect.sims.push(sim);effect.chargeSims.push(sim);sim.emission(2);
           for(const node of sim.walk()) {effect.nodes.push({file,node});await effect.addDraws(node);}
+        }
+      }
+      if(profile.consumable?.splash && effect.attachment("drink_spray")) {
+        const system=profile.consumable.splash,file=await particleSystemFile(system).catch(()=>null);
+        if(file) {
+          const sim=await NativeSimulation.create(await loadDefinitions(file),()=>effect.attachment("drink_spray") ?? new THREE.Matrix4(),console.error,file,system);
+          if(sim) {
+            effect.splashSim=sim;effect.sims.push(sim);sim.emission(2);
+            for(const node of sim.walk()) {effect.nodes.push({file,node});await effect.addDraws(node);}
+          }
+        }
+      }
+      if(profile.tracer && profile.hitscan && effect.attachment("muzzle")) {
+        // (a tracer that the game's files do not have is left out: not every weapon's name leads to a system)
+        const system=profile.tracer,file=await particleSystemFile(system).catch(()=>null);
+        if(file) {
+          const definitions=await loadDefinitions(file);
+          for(let i=0;i<4;i++) {
+            const tracer={sim:null as unknown as NativeSimulation,start:new THREE.Matrix4(),end:null as THREE.Vector3|null};
+            const sim=await NativeSimulation.create(definitions,()=>tracer.start,console.error,file,system,()=>[],0,[],[],1,()=>[],()=>tracer.end?.toArray() ?? []);
+            if(!sim) break;
+            tracer.sim=sim;effect.tracers.push(tracer);effect.sims.push(sim);sim.emission(2);
+            for(const node of sim.walk()) {effect.nodes.push({file,node});await effect.addDraws(node);}
+          }
         }
       }
       if(profile.healing) {
@@ -155,27 +183,51 @@ export class WeaponEffects {
     } catch(error) {effect.dispose();throw error;}
   }
 
+  /** Where each attachment was when the weapon was last in the hand: an effect that outlives it (a drink's splash, after the can has gone) stays there. */
+  private readonly lastFrames = new Map<string, THREE.Matrix4>();
   private attachment(name: string): THREE.Matrix4 | null {
     if(!this.profile) return null;
     const att = this.attachments.attachments.find(a=>a.name.toLowerCase()===name);
     const bone = att && this.actor.particleCosmeticBoneFrame(this.profile.itemId,this.modelPath,att.bone);
-    return bone && att ? TO_SOURCE.clone().multiply(this.actor.particleRootFrame()).multiply(bone).multiply(att.local) : null;
+    if(bone && att) {
+      const frame=TO_SOURCE.clone().multiply(this.actor.particleRootFrame()).multiply(bone).multiply(att.local);
+      this.lastFrames.set(name,frame);
+      return frame;
+    }
+    return this.lastFrames.get(name)?.clone() ?? null;
   }
   shot(direction?:THREE.Vector3,charge=0) {
     if (this.disposed || this.frozen || !this.profile) return;
     if (!this.profile.continuous) for (const sim of this.muzzleSims) sim.emission(1);
     const thrown=this.profile.throwable;
-    const origin=this.attachment("muzzle") ?? (thrown && direction ? this.throwOrigin(direction) : null);
+    // a weapon without a muzzle (the Crusader's Crossbow) fires from the eye: GetProjectileFireSetup( 23.5 forward, 8 right, 3 down )
+    const origin=this.attachment("muzzle") ?? (thrown && direction ? this.throwOrigin(direction) : this.profile.projectile?.kind==="arrow" && direction ? this.eyeOrigin(direction,23.5,8,-3) : this.profile.projectile?.kind==="plate" && direction ? this.eyeOrigin(direction,0,0,-8) : null);
     if(origin && this.projectiles) this.projectiles.shot(origin,direction ?? new THREE.Vector3().setFromMatrixColumn(origin,0),charge,this.profile.charge?.seconds,thrown?.delay ?? 0);
     if (this.template) for (const delay of this.profile.ejectTimes.length ? this.profile.ejectTimes : [0]) this.pendingShells.push(this.time+delay);
   }
   /** Where a thrown jar starts (CTFJar::TossJarThink): the eye, 16 units ahead, 8 to the right and 6 below. */
   private throwOrigin(direction:THREE.Vector3) {
+    return this.eyeOrigin(direction,16,8,-6);
+  }
+  private eyeOrigin(direction:THREE.Vector3,ahead:number,rightOffset:number,upOffset:number) {
     const root=TO_SOURCE.clone().multiply(this.actor.particleRootFrame()),eye=this.actor.eyeFrame() ?? new THREE.Matrix4().makeTranslation(0,0,68);
     const forward=direction.clone().normalize(),right=new THREE.Vector3(forward.y,-forward.x,0).normalize(),up=right.clone().cross(forward).normalize();
-    const position=new THREE.Vector3().setFromMatrixPosition(root.multiply(eye)).addScaledVector(forward,16).addScaledVector(right,8).addScaledVector(up,-6);
+    const position=new THREE.Vector3().setFromMatrixPosition(root.multiply(eye)).addScaledVector(forward,ahead).addScaledVector(right,rightOffset).addScaledVector(up,upOffset);
     return new THREE.Matrix4().makeTranslation(position.x,position.y,position.z);
   }
+  /** Draws a tracer from the muzzle to where the shot ended (the next of the tracer systems restarts for it). */
+  tracer(direction:THREE.Vector3,hit:THREE.Vector3|null,range:number) {
+    if(this.disposed || this.frozen || !this.tracers.length) return;
+    const start=this.attachment("muzzle"); if(!start) return;
+    const from=new THREE.Vector3().setFromMatrixPosition(start),way=direction.clone().normalize();
+    // it ends where the shot did: on what it hit, else on the floor, else far away
+    let end=hit ?? from.clone().addScaledVector(way,range);
+    if(!hit && way.z<0 && from.z>this.floor) {const t=(from.z-this.floor)/-way.z; if(t<range) end=from.clone().addScaledVector(way,t);}
+    const slot=this.tracers[this.tracerNext++ % this.tracers.length];
+    slot.start.copy(start);slot.end=end;slot.sim.emission(1);
+  }
+  /** The splash of a drink: the system starts again at the can. */
+  splash() { if(!this.disposed && !this.frozen) this.splashSim?.emission(1); }
   get muzzlePosition(){const matrix=this.attachment("muzzle");return matrix ? new THREE.Vector3().setFromMatrixPosition(matrix) : null;}
   setHealingTarget(target:THREE.Vector3|null) {
     const changed=!!target!==!!this.healingTarget;this.healingTarget=target;

@@ -91,18 +91,7 @@ export function createDocks(o: DockOptions) {
     tab.setAttribute("aria-selected", String(active));
     const label = document.createElement("span");
     label.textContent = byId.get(id)?.title ?? id;
-    const close = document.createElement("button");
-    close.type = "button";
-    close.className = "dockTabX";
-    close.title = "Hide this panel (it comes back from the Layout menu)";
-    close.setAttribute("aria-label", `Hide ${byId.get(id)?.title ?? id}`);
-    close.textContent = "×";
-    close.onpointerdown = (e) => e.stopPropagation();
-    close.onclick = (e) => {
-      e.stopPropagation();
-      hide(id);
-    };
-    tab.append(label, close);
+    tab.append(label);
     tab.onpointerdown = (e) => beginTabDrag(e, id);
     tab.onclick = () => activate(id);
     return tab;

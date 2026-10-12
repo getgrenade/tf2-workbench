@@ -1,7 +1,7 @@
 // The rules of play mode (steering a character like in the game) without any rendering or IPC, so they can be tested on their own.
 
 /** The kinds of movement animation a player entity picks between (the sequence names are `<kind>_<weapon set>`). */
-export type Locomotion = "stand" | "crouch" | "run" | "crouch_walk" | "jump_start" | "jump_float" | "jumpland" | "airwalk";
+export type Locomotion = "stand" | "crouch" | "run" | "crouch_walk" | "jump_start" | "jump_float" | "jumpland" | "airwalk" | "taunt";
 
 /** Running speed per class in Source units per second (tf_shareddefs: the classes' max speeds). */
 export const CLASS_SPEED: Record<string, number> = {
@@ -97,6 +97,7 @@ const FALLBACKS: Record<Locomotion, Locomotion[]> = {
   jump_float: ["jump_float", "airwalk", "jump_start", "stand"],
   airwalk: ["airwalk", "jump_float", "jump_start", "stand"],
   jumpland: ["jumpland", "stand"],
+  taunt: ["stand"],
 };
 const GENERIC_SETS = ["primary", "secondary", "melee", "melee_allclass", "secondary2", "loser"];
 
@@ -361,3 +362,29 @@ export function findAction(names: ReadonlyMap<string, number>, action: PlayActio
   const s = first((set) => [`gesture_${set}_${action}`]);
   return s === null ? [] : [s];
 }
+
+/**
+ * The attack the game plays for a weapon whose item rewrites the player's activities (`animation_replacement`): the activity the weapon's
+ * set would give (`ACT_MP_ATTACK_STAND_MELEE_SECONDARY` for a Buff Banner) is replaced by the item's (`ACT_MP_ATTACK_STAND_ITEM1_SECONDARY`, the
+ * bugle call) and the class model's sequence with that activity plays. Null when the item rewrites no attack of its sets (the usual case).
+ * `team` picks the sequence of the team when the model has one for each (`item1_buglecall_red` / `_blue`).
+ */
+export function findReplacedAttack(activities: ReadonlyMap<string, number[]>, names: ReadonlyMap<string, number>, replacement: Readonly<Record<string, string>> | undefined,
+  sets: readonly string[], crouching: boolean, airborne: boolean, team: number): number | null {
+  if (!replacement) return null;
+  const stances = airborne ? ["AIRWALK", "STAND"] : crouching ? ["CROUCH", "STAND"] : ["STAND"];
+  for (const stance of stances) {
+    for (const set of sets) {
+      const prefix = `ACT_MP_ATTACK_${stance}_${set.toUpperCase()}`;
+      // the key is the set's attack activity, or one of its variants (`_SECONDARY` for the secondary fire)
+      const key = Object.keys(replacement).find((k) => k === prefix || k.startsWith(`${prefix}_`));
+      if (!key) continue;
+      const found = activities.get(replacement[key]);
+      if (!found?.length) continue;
+      const pick = found.length > 1 ? found.find((i) => nameOf(names, i).endsWith(team === 1 ? "_blue" : "_red")) ?? found[0] : found[0];
+      return pick;
+    }
+  }
+  return null;
+}
+const nameOf = (names: ReadonlyMap<string, number>, index: number): string => { for (const [n, i] of names) if (i === index) return n; return ""; };

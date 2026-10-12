@@ -70,3 +70,20 @@ tf_weapon_jar, tf_weapon_jar_milk and tf_weapon_cleaver (tf_weapon_jar.cpp) had 
 - **Burst.** A jar bursts on the first surface or character it touches (or after its 2 s fuse) with `peejar_impact` / `peejar_impact_milk`, radius 200; `ProjectileInteractions.splash` is called there. A cleaver that hits a character removes itself and, in damage mode, ragdolls the victim; one that lands in the world stays 4 s.
 
 Not done: making enemies wet. In the game a burst drenches every living enemy within 200 units that no wall hides (TF_COND_URINE / TF_COND_MAD_MILK for 10 s): their skin turns yellow (the `YellowLevel` proxy returns (6,9,2) red and (7,5,1) blue; the app's proxy returns 1 and its shader has no `$yellow`), `peejar_drips` / `peejar_drips_milk` run on them, and the thrower's jar is not drawn in the hand while it recharges. Also the cleaver's bleed (5 s) and its cooldown refund, and the Mad Milk heal, are missing.
+
+## Thrown items, lunchboxes, tracers, animation replacements
+
+- **Activity replacement.** An item's `animation_replacement` also rewrites the player's own activities (`ACT_MP_*`). `get_weapon_profile` passes them as `animReplacement`,
+  the class model's sequences carry their authored `activity`, and `findReplacedAttack` (playLogic.ts) plays the sequence of the replaced attack: the Buff Banner family's
+  bugle call (`item1_buglecall_red` / `_blue`), the Self-Aware Beauty Mark's `ACT_MP_THROW`.
+- **Thrown items leave the hand.** Jars, Mad Milk and the cleaver are out of the hand from the moment the projectile leaves until the effect bar is full again.
+- **Healing bolt.** The Crusader's Crossbow shoots an arrow-type projectile: the syringe model at 3x, 2400 units/s, gravity 160, trail `healshot_trail_red/blue`. The model has no
+  muzzle, so the bolt starts at the eye (23.5 forward, 8 right, 3 down).
+- **Tracers.** A hitscan weapon's tracer is `<TracerEffect or the item's tracer_effect>_red|blue`; rifles with "sniper fires tracer" draw `dxhr_sniper_rail_*` and the Classic
+  `tfc_sniper_distortion_trail`. The system runs from the muzzle to where the shot ended (control point 1).
+- **Lunchboxes** (CTFLunchBox, tf_player.cpp taunt attacks). The primary fire is the class's `taunt04` (the player stands still). A Scout's drink starts its effect 0.9 s in
+  (Bonk: phase, `warp_version`; Crit-a-Cola: the minicrit glow; 8 s), a Heavy bites every second from the first (the first shows the bitten model, the Steak's first bite starts its
+  16 s minicrits). When it is over the item is used up and its meter runs (Sandvich and drinks 30 s, bars and the banana 10 s) while the player goes back to another weapon; a
+  Sandvich at full health (always, here) is not used up. The secondary fire throws the food out (500 units/s, ten degrees up) as its plate model.
+- **Huntsman.** The bow hangs on a bone of the right hand and the animations carry it into the left; the root and limbs are kept at the offset from the left hand that they have
+  once the idle has settled, so the blend between two animations cannot slide the bow off the hand.

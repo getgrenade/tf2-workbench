@@ -165,3 +165,19 @@ test("the Huntsman's attack gesture is its ITEM2 fire sequence, and it has no re
   assert.deepEqual(findAction(names, "attack", ["ITEM2"], true, false), [3]);
   assert.deepEqual(findAction(names, "attack", ["primary"], false, false), [1]);
 });
+
+test("an item that rewrites the attack activity plays the sequence of the new one, the team's own when the model has one for each", async () => {
+  const { findReplacedAttack } = await import("../src/viewer/playLogic.ts");
+  const names = new Map([["item1_buglecall_red", 1], ["item1_buglecall_blue", 2], ["throw_fire", 3]]);
+  const acts = new Map([["ACT_MP_ATTACK_STAND_ITEM1_SECONDARY", [1, 2]], ["ACT_MP_THROW", [3]]]);
+  // a Buff Banner: the melee set's secondary-fire attack becomes the bugle call; a crouching one falls back to the standing entry
+  const banner = { ACT_MP_ATTACK_STAND_MELEE_SECONDARY: "ACT_MP_ATTACK_STAND_ITEM1_SECONDARY", ACT_MP_ATTACK_CROUCH_MELEE_SECONDARY: "ACT_MP_ATTACK_STAND_ITEM1_SECONDARY" };
+  assert.equal(findReplacedAttack(acts, names, banner, ["melee", "secondary"], false, false, 0), 1);
+  assert.equal(findReplacedAttack(acts, names, banner, ["melee", "secondary"], false, false, 1), 2);
+  assert.equal(findReplacedAttack(acts, names, banner, ["melee", "secondary"], true, false, 0), 1);
+  // a jar with the melee_allclass animation set throws
+  assert.equal(findReplacedAttack(acts, names, { ACT_MP_ATTACK_STAND_MELEE_ALLCLASS: "ACT_MP_THROW" }, ["melee_allclass", "secondary"], false, false, 0), 3);
+  // nothing rewritten, or another set: the usual sequence is looked up by name
+  assert.equal(findReplacedAttack(acts, names, undefined, ["melee"], false, false, 0), null);
+  assert.equal(findReplacedAttack(acts, names, banner, ["primary"], false, false, 0), null);
+});

@@ -11,6 +11,7 @@ import {
   cycleRate,
   encodeParam,
   findAction,
+  findReplacedAttack,
   findSequence,
   secondaryMode,
   findDeployedSequence,
@@ -34,11 +35,16 @@ import {
   type RawPose,
 } from "./playLogic";
 
+/** What happens while a lunchbox is used: the Scout's drink starts its effect, a Heavy takes a bite (the first is the bitten one), the food is thrown out. */
+export type MealEvent = { type: "drink" } | { type: "bite"; n: number } | { type: "end" } | { type: "drop"; direction: THREE.Vector3 };
+
 export interface PlayHost {
   actor: Actor;
   anim: AnimState;
   /** Game class name ("soldier", "demoman"): decides the running speed. */
   gameClass: string;
+  /** The team of the character (0 red, 1 blue). */
+  team?: () => number;
   /** The element the mouse aims on (the 3D view). */
   surface: HTMLElement;
   /** The weapon sets ("primary", "melee" ...) the held weapon idles with, best first. */
@@ -57,6 +63,10 @@ export interface PlayHost {
   onInputError?: (message: string) => void;
   captureMouse?: CaptureMouse;
   weaponProfile?: () => WeaponProfile | null;
+  /** Takes the held weapon out of the hand (a thrown jar) or puts it back. */
+  setHeldHidden?: (hidden: boolean) => void;
+  /** Eating and drinking (a lunchbox is a taunt): the moments the app has to show something for. */
+  onMeal?: (event: MealEvent, profile: WeaponProfile) => void;
   weaponReady?: () => boolean;
   isDamaged?:()=>boolean;
   onDamage?:(action:PlayDamageAction,direction:THREE.Vector3)=>void;
@@ -71,7 +81,7 @@ export interface PlayHost {
 const FADE_TIME = 0.15;
 const MOUSE_DEGREES_PER_PIXEL = 0.25;
 const GROUND_KINDS: ReadonlySet<Locomotion> = new Set(["stand", "crouch", "run", "crouch_walk"]);
-const ONE_SHOT: ReadonlySet<Locomotion> = new Set(["jump_start", "jumpland"]);
+const ONE_SHOT: ReadonlySet<Locomotion> = new Set(["jump_start", "jumpland", "taunt"]);
 
 /** A gesture layer playing over the movement: the sequences it goes through (a reload has a start, a loop and an end) and where it is. */
 interface Gesture {
@@ -102,6 +112,8 @@ export class PlayController {
   private readonly keys = new Set<string>();
   private readonly seqInfo = new Map<number, { frames: number; fps: number; name: string }>();
   private readonly seqNames = new Map<string, number>();
+  /** The sequences by their authored activity (upper case, `ACT_MP_THROW`). */
+  private readonly seqActs = new Map<string, number[]>();
   private readonly startPose: { x: number; y: number; z: number; yaw: number };
   /** How the character was tipped before play: it plays upright, and is tipped again when play ends. */
   private readonly startTilt: { pitch: number; roll: number };
@@ -145,6 +157,7 @@ export class PlayController {
     for (const s of host.anim.info?.sequences ?? []) {
       this.seqInfo.set(s.index, { frames: s.frames, fps: s.fps, name: s.name.toLowerCase() });
       this.seqNames.set(s.name.toLowerCase(), s.index);
+      if (s.activity) { const act = s.activity.toUpperCase(); this.seqActs.set(act, [...(this.seqActs.get(act) ?? []), s.index]); }
     }
     const pitch = host.anim.info?.poseParams.find((p) => p.name.toLowerCase() === "body_pitch");
     if (pitch) this.pitchRange = { start: pitch.start, end: pitch.end };
@@ -233,6 +246,10 @@ export class PlayController {
     this.resetWeaponInput();
     if(!this.host.isDamaged?.())this.host.actor.endLive();
     this.host.actor.setTilt(this.startTilt.pitch, this.startTilt.roll);
+    this.host.setHeldHidden?.(false);
+    this.host.actor.setHandLock(null);
+    this.meal = null;
+    this.host.actor.setHeldBodyState(0);
   }
 
   /** The place the character stood at when play started. */
@@ -301,7 +318,7 @@ export class PlayController {
     if (flags & 2) { this.primaryDown = false; this.host.onFiring?.(false); }
     if (flags & 4) {
       if (!this.secondaryDown && this.weaponMode() === "scope") { this.scoped = !this.scoped; this.fight = null; }
-      if(!this.secondaryDown) {if(this.weapon?.profile.weaponClass==="tf_weapon_compound_bow") this.weapon.cancelCharge();this.host.onSecondary?.(this.aimDirection());}
+      if(!this.secondaryDown) {if(this.weapon?.profile.weaponClass==="tf_weapon_compound_bow") this.weapon.cancelCharge();this.host.onSecondary?.(this.aimDirection());this.dropMeal();}
       this.secondaryDown = true;
     }
     if (flags & 8) this.secondaryDown = false;
@@ -348,6 +365,7 @@ export class PlayController {
       this.weapon = this.ammo.get(profile.itemId) ?? new WeaponCycle(profile, true); // reloads keep their rules, the reserve never ends
       this.ammo.set(profile.itemId,this.weapon);
     }
+    if (profile.consumable) { this.updateMeal(profile, dt); return; }
     const attack = this.primaryDown && (this.weaponMode() !== "minigun" || this.spin === "ready");
     if(profile.healing) {
       const healing=this.host.onHealing?.(this.aimDirection(),attack) ?? false;
@@ -367,6 +385,7 @@ export class PlayController {
 
   private weaponEvent(event: WeaponEvent) {
     if (event.type === "shot") {
+      if (this.weapon?.profile.throwable) this.thrownAt = performance.now();
       if (!this.weapon?.profile.continuous || !this.fight?.looping) {
         this.animate("attack");
         if (this.weapon?.profile.continuous && this.fight) this.fight.looping=true;
@@ -383,6 +402,90 @@ export class PlayController {
     this.fight = seqs.length ? {seqs:[seqs[index]],at:0,cycle:0,rate:this.weapon?.profile.reloadPlaybackRate ?? 1} : null;
   }
 
+  // --- lunchboxes ------------------------------------------------------------------------------------------------------------------
+  /** The eating or drinking taunt that is playing, with the seconds it has run. */
+  private meal: { t: number; length: number; seq: number; drank: boolean; bites: number } | null = null;
+  /** Seconds until a lunchbox is back (by item): the Heavy's item meter and the Scout's effect bar. */
+  private readonly mealMeter = new Map<number, number>();
+  /** The food that was bitten and stays in the hand (a Sandvich at full health is never used up). */
+  private bittenItem: number | null = null;
+
+  /**
+   * CTFLunchBox::PrimaryAttack is a taunt (the class's taunt04): the player stands still while it plays. A Scout's drink starts its effect 0.9 s in, a Heavy
+   * takes a bite every second from the first; when it is over the item is used up and its meter runs (a Sandvich at full health, which is what a character
+   * here always is, can be eaten again at once). The status line shows what is happening or the seconds left.
+   */
+  private updateMeal(profile: WeaponProfile, dt: number) {
+    const c = profile.consumable!;
+    const left = this.mealMeter.get(profile.itemId) ?? 0;
+    if (!this.meal && left <= 0 && this.primaryDown) this.startMeal();
+    const meal = this.meal;
+    if (meal) {
+      meal.t += dt;
+      if (c.kind === "drink" && !meal.drank && meal.t >= (c.drinkAt ?? 0.9)) { meal.drank = true; this.host.onMeal?.({ type: "drink" }, profile); }
+      if (c.kind === "food") while (meal.t >= meal.bites + 1) { meal.bites++; this.bittenItem = profile.itemId; this.host.onMeal?.({ type: "bite", n: meal.bites }, profile); }
+      if (meal.t >= meal.length) this.finishMeal(profile);
+    }
+    this.host.onFiring?.(false);
+    this.host.onAmmo?.(this.meal ? (c.kind === "drink" ? "Drinking" : "Eating") : left > 0 ? `${Math.ceil(left)}s` : "");
+  }
+
+  private startMeal() {
+    const seq = this.seqNames.get("taunt04");
+    const info = seq === undefined ? null : this.seqInfo.get(seq);
+    if (seq === undefined || !info || info.fps <= 0) return;
+    this.fight = this.signal = null;
+    this.meal = { t: 0, length: Math.max(0.2, (info.frames - 1) / info.fps), seq, drank: false, bites: 0 };
+  }
+
+  private finishMeal(profile: WeaponProfile) {
+    const c = profile.consumable!;
+    this.meal = null;
+    this.host.onMeal?.({ type: "end" }, profile);
+    this.useUp(profile, !!c.stays && c.kind === "food");
+  }
+
+  /** The item is spent: its meter starts and the player goes back to another weapon (the Heavy to his melee after a steak, which keeps him there). */
+  private useUp(profile: WeaponProfile, keeps: boolean) {
+    const c = profile.consumable!;
+    if (keeps) return;
+    this.mealMeter.set(profile.itemId, c.recharge);
+    this.bittenItem = null;
+    const slots = this.host.slots();
+    const next: PlaySlot | undefined = c.keepsMelee && slots.includes("melee") ? "melee" : slots.includes("primary") ? "primary" : slots.find((x) => x !== this.host.heldSlot());
+    if (next) this.host.switchSlot(next);
+  }
+
+  /** The secondary fire of food throws it out as a health kit (CTFLunchBox::SecondaryAttack), which uses it up. */
+  private dropMeal() {
+    const profile = this.host.weaponProfile?.();
+    const c = profile?.consumable;
+    if (!profile || !c || c.kind !== "food" || this.meal || (this.mealMeter.get(profile.itemId) ?? 0) > 0) return;
+    this.host.onMeal?.({ type: "drop", direction: this.aimDirection() }, profile);
+    this.useUp(profile, false);
+  }
+
+  /** The Huntsman's bow is carried in the left hand by a bone of the right: it is kept in the hand through every blend of animations. */
+  private updateHandLock() {
+    const bow = this.weapon?.profile.weaponClass === "tf_weapon_compound_bow";
+    this.host.actor.setHandLock(bow ? { hand: "bip_hand_L", root: "weapon_bone", follow: ["weapon_bone", "weapon_bone_1", "weapon_bone_2"] } : null);
+  }
+
+  /** A thrown weapon (jar, cleaver) is out of the hand from the moment it leaves until it is back (the effect bar is full again). */
+  private thrownAt = -1;
+  private updateHeldVisibility() {
+    const throwable = this.weapon?.profile.throwable;
+    let out = !!throwable && this.weapon!.rechargeLeft > 0 && this.thrownAt >= 0 && performance.now() - this.thrownAt >= throwable.delay * 1000;
+    if (!throwable || this.weapon!.rechargeLeft <= 0) this.thrownAt = -1;
+    // a lunchbox that was used is not in the hand until its meter is full again
+    const used = this.host.weaponProfile?.();
+    if (used?.consumable && !this.meal && (this.mealMeter.get(used.itemId) ?? 0) > 0) out = true;
+    // food that was bitten shows the bitten model (CTFLunchBox::SwitchBodyGroups)
+    if (this.bittenItem !== null && used?.itemId !== this.bittenItem) this.bittenItem = null;
+    this.host.actor.setHeldBodyState(used?.consumable && this.bittenItem === used.itemId ? 1 : 0);
+    this.host.setHeldHidden?.(out);
+  }
+
   /** Plays an attack, reload or gesture over the movement (a new one replaces the one playing in its slot, like the game's gesture slots). */
   trigger(action: PlayAction) {
     if (!this.running || this.host.isDamaged?.()) return;
@@ -397,7 +500,9 @@ export class PlayController {
 
   private animate(action: PlayAction) {
     const m = this.motion;
-    const seqs = action === "attack" && this.scoped ? findScopedAttack(this.seqNames, m.crouching)
+    // an item that rewrites the player's attack activity (a banner's bugle call, a jar's throw) plays the sequence that stands for the new one
+    const replaced = action === "attack" && !this.scoped ? findReplacedAttack(this.seqActs, this.seqNames, this.host.weaponProfile?.()?.animReplacement, this.host.weaponSets(), m.crouching, !grounded(m), this.host.team?.() ?? 0) : null;
+    const seqs = replaced !== null ? [replaced] : action === "attack" && this.scoped ? findScopedAttack(this.seqNames, m.crouching)
       : findAction(this.seqNames, action, this.host.weaponSets(), m.crouching, !grounded(m));
     if (seqs.length === 0) return;
     const gesture: Gesture = { seqs, at: 0, cycle: 0 };
@@ -418,16 +523,20 @@ export class PlayController {
     const key = (...codes: string[]) => codes.some((c) => k.has(c));
     const m = this.motion;
     this.updateWeaponInput(dt);
+    for (const [item, left] of this.mealMeter) this.mealMeter.set(item, Math.max(0, left - dt));
     this.updateFiring(dt);
+    this.updateHeldVisibility();
+    this.updateHandLock();
     const aiming = this.scoped || this.spin !== "idle" || this.weapon?.chargeTime!==null && this.weapon?.chargeTime!==undefined;
     const run = aiming ? (this.weaponMode() === "minigun" ? 110 : 80) : CLASS_SPEED[this.host.gameClass] ?? 300;
     stepMotion(
       m,
       {
-        forward: (key("KeyW", "ArrowUp") ? 1 : 0) - (key("KeyS", "ArrowDown") ? 1 : 0),
-        right: (key("KeyD", "ArrowRight") ? 1 : 0) - (key("KeyA", "ArrowLeft") ? 1 : 0),
-        crouch: key("ControlLeft", "ControlRight", "KeyC"),
-        jump: this.jumpQueued || key("Space"),
+        // (a taunt holds the player where he stands)
+        forward: this.meal ? 0 : (key("KeyW", "ArrowUp") ? 1 : 0) - (key("KeyS", "ArrowDown") ? 1 : 0),
+        right: this.meal ? 0 : (key("KeyD", "ArrowRight") ? 1 : 0) - (key("KeyA", "ArrowLeft") ? 1 : 0),
+        crouch: !this.meal && key("ControlLeft", "ControlRight", "KeyC"),
+        jump: !this.meal && (this.jumpQueued || key("Space")),
       },
       dt,
       run,
@@ -447,6 +556,11 @@ export class PlayController {
 
   /** Picks the movement animation for the state of the motion (the game's jump / land / crouch / run activities). */
   private chooseAnimation(run: number) {
+    if (this.meal) {
+      if (this.cur?.loco !== "taunt") { this.prev = this.cur; this.fade = FADE_TIME; }
+      this.cur = { seq: this.meal.seq, cycle: Math.min(1, this.meal.t / this.meal.length), loco: "taunt" };
+      return;
+    }
     const m = this.motion;
     const ground = grounded(m);
     const moving = isMoving(m, run);
@@ -502,6 +616,7 @@ export class PlayController {
         if (g.at >= g.seqs.length) this[slot] = null;
       }
     }
+    if (this.meal && this.cur?.loco === "taunt") this.cur.cycle = Math.min(1, this.meal.t / this.meal.length);
     if (this.fade > 0) {
       this.fade -= dt;
       if (this.fade <= 0) this.prev = null;
@@ -535,6 +650,12 @@ export class PlayController {
     const layers: [number, number, number][] = [];
     let seq = p.seq;
     let cycle = p.cycle;
+    // A taunt is authored to lie over the player's stand pose (its first and last frames hold nothing: alone they lay the body flat in the bind pose), and the game
+    // plays it as a layer over the weapon's stand animation: so the stand pose is the base and the taunt the layer, which blends in and out by itself.
+    if (p.loco === "taunt") {
+      const stand = findSequence(this.seqNames, "stand", this.host.weaponSets());
+      if (stand !== null) return [stand, 0, [[p.seq, p.cycle, 1]], 0, -1];
+    }
     if (p.loco === "jumpland" && this.seqInfo.get(p.seq)?.name.startsWith("jumpland")) {
       const base = findSequence(this.seqNames, "stand", this.host.weaponSets());
       if (base !== null) {
