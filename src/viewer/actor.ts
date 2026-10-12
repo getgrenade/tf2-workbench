@@ -244,6 +244,19 @@ export class Actor {
    */
   sourceBind = false;
 
+  /** The path of the model that was last shown (what a prop's collision is looked up by). */
+  modelPath = "";
+
+  /** The bounds of the shown model in its own frame, scaled: the box a prop's physics body has. */
+  get modelBox(): THREE.Box3 {
+    const box = this.bindBounds.clone();
+    if (box.isEmpty()) return box;
+    box.min.multiply(this.scale);
+    box.max.multiply(this.scale);
+    // a negative scale swaps the corners
+    return new THREE.Box3(box.min.clone().min(box.max), box.min.clone().max(box.max));
+  }
+
   /** Lowest point of the bind pose, in viewer space (the floor for the ground shadow). A prop does not set the floor: it stands on it. */
   get floorY(): number {
     if (this.sourceBind) return Infinity;
@@ -290,6 +303,7 @@ export class Actor {
   setModel(data: ModelData, materials: Map<string, MaterialData | null>) {
     const allShown = !this.partsHidden;
     const previousClass = this.maskClass;
+    this.modelPath = data.path;
     this.clear();
     // Skeleton: bone matrices are written every frame from the rig (Source space); the inverse bind
     // matrices are the MDL poseToBone matrices, so skinning is exactly boneToWorld * poseToBone.

@@ -2759,6 +2759,10 @@ export function createViewTab(els: Els) {
       anim: e.anim,
       gameClass: cls,
       team: () => e.team,
+      collide: __WEB__ ? undefined : (x, y, z, vx, vz) => {
+        const at = v.collidePlayer(new THREE.Vector3(x, y, z), new THREE.Vector3(vx, 0, vz));
+        return at ? { x: at.x, z: at.z } : null;
+      },
       setHeldHidden: (hidden) => e.actor.setHeldHidden(hidden),
       onMeal: (event, profile) => {
         const c = profile.consumable;
@@ -2803,6 +2807,7 @@ export function createViewTab(els: Els) {
     if (!held && available.length > 0) takeWeapon(available[0]);
     else if (e.held) takeWeapon(held!);
     play.start();
+    void v.startProps(); // the props with collision fall, are shoved and push back until play mode ends
     syncHud();
   }
 
@@ -2813,6 +2818,7 @@ export function createViewTab(els: Els) {
     if (!p) return;
     play = null;
     playActor = null;
+    viewer?.stopProps();
     viewer?.setFacingMarker(null);viewer?.freezeHitReactions();viewer?.setConditionsPaused(true);
     const pose = e?.actor.snapshotPose() ?? null;
     if(e) viewer?.freezeWeaponEffects(e.actor);

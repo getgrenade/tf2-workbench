@@ -1,5 +1,7 @@
 import {HitReactions} from "./hitReactions";
 import { SOURCE_TO_VIEWER } from "./animator";
+
+const VIEWER_TO_SOURCE = SOURCE_TO_VIEWER.clone().invert();
 import * as THREE from "three";
 import { rectsOverlap, type BoxHits, type BoxRect } from "./boxSelect";
 import { keyboardScaleFactor } from "./scaleGizmo";
@@ -153,7 +155,9 @@ export class Viewer {
   reactionSceneState(actor:Actor){return this.reactions?.original(actor);}
   resetHitReactions(){this.reactions?.reset();}
   freezeHitReactions(){this.reactions?.freeze();}
-  private reactionSystem(){if(!this.reactions){this.reactions=new HitReactions(this.scene,()=>this.actorList,this.mats);this.reactions.setEnabled(this.hitReactionsEnabled);}return this.reactions;}
+  /** What bullets, blasts and flames treat as a character: not the props (they have a physics of their own). */
+  private characters(){return this.actorList.filter(a=>!a.sourceBind);}
+  private reactionSystem(){if(!this.reactions){this.reactions=new HitReactions(this.scene,()=>this.characters(),this.mats);this.reactions.setEnabled(this.hitReactionsEnabled);}return this.reactions;}
   private weaponEffectList(){return [...this.weaponEffects.values()].flatMap(e=>e.effect?[e.effect]:[]).concat([...this.storedWeaponEffects.values()].flat());}
   private readonly weaponEffects = new Map<Actor, { effect: WeaponEffects | null }>();
   readonly renderer: THREE.WebGLRenderer;
@@ -574,6 +578,7 @@ void main() {
       this.updateBoneHelper();
       this.cameraOverlay.update();
       let moved = false;
+      if (!__WEB__) this.propSim?.step(dt);
       for (const a of this.actorList) {
         const stepped = a.step(dt);
         if (stepped && a === this.selectedActor) this.reportFrame();
@@ -839,7 +844,7 @@ void main() {
   /** A jar burst (JarExplode): every living character within the radius is drenched for 10 s, unless it is invulnerable. */
   private soak(owner: Actor, position: THREE.Vector3, radius: number, key: ConditionKey) {
     const reactions = this.reactionSystem();
-    for (const target of this.actorList) {
+    for (const target of this.characters()) {
       if (target === owner || reactions.has(target) || target.conditions.uber) continue;
       if (reactions.blastHull(target).distanceToPoint(position) <= radius) this.addTimedCondition(target, key);
     }
@@ -1017,12 +1022,15 @@ void main() {
     const effect = await WeaponEffects.create(actor,profile,loadShell,this.mats,floor,this.projectileBounds(floor),{
       hit:(start,end)=>{
         const hit=this.reactionSystem().trace(actor,start,end);
+        // a prop in the way stops it first when it is nearer than what it hits
+        const prop=this.propHit(start,end);
+        if(prop && (!hit || prop.distance<start.distanceTo(hit.point))){this.propShove(prop,end.clone().sub(start).normalize(),400);return prop.source;}
         // the cleaver hurts what it hits (jars do no damage, only wet)
         if(hit && profile.projectile?.kind==="cleaver" && this.hitReactionsEnabled)this.reactionSystem().ragdoll(hit.actor,end.clone().sub(start).normalize(),floor,hit.point);
         return hit?.point ?? null;
       },
       arrow:(start,end,direction,model)=>this.reactionSystem().arrowStrike(actor,start,end,direction,model,floor,()=>this.projectileBounds(floor)),
-      explosion:(position,radius)=>this.reactionSystem().explosion(actor,position,radius,floor,loadShell),
+      explosion:(position,radius)=>{if(!__WEB__)this.propSim?.world.blast(position.clone().applyMatrix4(SOURCE_TO_VIEWER),radius);this.reactionSystem().explosion(actor,position,radius,floor,loadShell);},
       splash:(position,radius)=>this.soak(actor,position,radius,profile.weaponClass==="tf_weapon_jar_milk" ? "milk" : "urine"),
     });
     if (this.weaponEffects.get(actor)!==entry) effect.dispose(); else entry.effect=effect;
@@ -1032,6 +1040,45 @@ void main() {
     if(profile.projectile?.kind==="jar") this.conditionParticles.warm(profile.weaponClass==="tf_weapon_jar_milk" ? "peejar_drips_milk" : "peejar_drips",2);
     else if(profile.weaponClass==="tf_weapon_flamethrower") for(const system of ["burningplayer_red","burningplayer_blue"]) this.conditionParticles.warm(system,1);
   }
+  // --- the physics of the props in play mode (desktop only: the web version has no props) ---
+  private propSim: import("../props/propSim").PropSim | null = null;
+  private propSimToken = 0;
+  /** Starts the physics of the props (those with collision); they are put back by `stopProps`. */
+  async startProps() {
+    if (__WEB__) return;
+    this.stopProps();
+    const token = ++this.propSimToken;
+    const { PropSim } = await import("../props/propSim");
+    const floor = this.actorList.reduce((y, a) => Math.min(y, a.floorY), Infinity);
+    const sim = await PropSim.start(this.actorList, Number.isFinite(floor) ? floor : 0);
+    if (token !== this.propSimToken) return;
+    this.propSim = sim.size ? sim : null;
+  }
+  /** Ends it: every prop goes back where it was. */
+  stopProps() {
+    this.propSimToken++;
+    this.propSim?.restore();
+    this.propSim = null;
+  }
+  /** What the props make of a segment in Source space: the nearest prop it goes through (the point in Source space), or null. */
+  private propHit(start: THREE.Vector3, end: THREE.Vector3) {
+    const sim = __WEB__ ? null : this.propSim;
+    if (!sim) return null;
+    const hit = sim.world.raycast(start.clone().applyMatrix4(SOURCE_TO_VIEWER), end.clone().applyMatrix4(SOURCE_TO_VIEWER));
+    return hit ? { ...hit, source: hit.point.clone().applyMatrix4(VIEWER_TO_SOURCE) } : null;
+  }
+  /** A shove of `strength` (kg * units/s) at a prop where a segment hit it. */
+  private propShove(hit: NonNullable<ReturnType<Viewer["propHit"]>>, direction: THREE.Vector3, strength: number) {
+    if (!__WEB__) this.propSim?.world.impulse(hit.body, hit.point, direction.clone().transformDirection(SOURCE_TO_VIEWER).multiplyScalar(strength));
+  }
+  /**
+   * Where the player (feet at `position`, in viewer space) ends up for the props in the way: pushed out of them, and they are pushed. Null
+   * when there is nothing to push against.
+   */
+  collidePlayer(position: THREE.Vector3, velocity: THREE.Vector3): THREE.Vector3 | null {
+    return !__WEB__ && this.propSim ? this.propSim.world.pushOut(position, 22, 82, velocity) : null;
+  }
+
   /** The splash of a drink at the can (the lunchbox's `drink_spray` attachment). */
   drinkSplash(actor: Actor) { this.weaponEffects.get(actor)?.effect?.splash(); }
   fireWeapon(actor: Actor,direction?:THREE.Vector3,charge=0) {
@@ -1041,6 +1088,9 @@ void main() {
       const start=effect.muzzlePosition;if(!start)return;
       const range=effect.profile.range ?? 8192,far=start.clone().addScaledVector(direction,range);
       const hit=this.hitReactionsEnabled ? this.reactionSystem().trace(actor,start,far) : null;
+      // a prop in the way takes the bullet when it is nearer than a character
+      const prop=this.propHit(start,far);
+      if(prop && (!hit || prop.distance<start.distanceTo(hit.point))){this.propShove(prop,direction,700);effect.tracer(direction,prop.source,range);return;}
       if(hit && this.hitReactionsEnabled)this.reactionSystem().ragdoll(hit.actor,direction,0,hit.point);
       effect.tracer(direction,hit?.point ?? null,range);
     }
@@ -1061,13 +1111,15 @@ void main() {
     }
   }
   meleeWeapon(actor:Actor,direction:THREE.Vector3,profile:WeaponProfile){
-    if(!profile.melee || !this.hitReactionsEnabled)return;
+    if(!profile.melee || (!this.hitReactionsEnabled && !this.propSim))return;
     const root=SOURCE_TO_VIEWER.clone().invert().multiply(actor.particleRootFrame());
     const eye=actor.eyeFrame() ?? new THREE.Matrix4().makeTranslation(0,0,68);
     const start=new THREE.Vector3().setFromMatrixPosition(root.clone().multiply(eye));
     const scale=Math.max(1,new THREE.Vector3().setFromMatrixScale(root).length()/Math.sqrt(3));
     const end=start.clone().addScaledVector(direction,profile.melee.range*scale),reactions=this.reactionSystem();
-    const hit=reactions.trace(actor,start,end) ?? reactions.trace(actor,start,end,profile.melee.hull*scale);
+    const hit=this.hitReactionsEnabled ? reactions.trace(actor,start,end) ?? reactions.trace(actor,start,end,profile.melee.hull*scale) : null;
+    const prop=this.propHit(start,end);
+    if(prop && (!hit || prop.distance<start.distanceTo(hit.point))){this.propShove(prop,direction,1600);return;}
     if(hit)reactions.ragdoll(hit.actor,direction,0,hit.point);
   }
   private readonly healingTargets=new Map<Actor,Actor>();
@@ -1091,7 +1143,7 @@ void main() {
     if(target && (!this.actorList.includes(target) || target.particleTeam!==actor.particleTeam || box(target).distanceToPoint(origin)>profile.range*1.2 || !visible(target))) target=undefined;
     if(!target) {
       const ray=new THREE.Ray(origin,aim);let nearest=profile.range;
-      for(const other of this.actorList) {
+      for(const other of this.characters()) {
         if(other===actor || this.reactions?.has(other)) continue;
         const point=ray.intersectBox(box(other),new THREE.Vector3());
         if(point && point.distanceTo(origin)<nearest) {target=other.particleTeam===actor.particleTeam ? other : undefined;nearest=point.distanceTo(origin);}

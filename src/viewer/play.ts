@@ -54,6 +54,8 @@ export interface PlayHost {
   heldSlot: () => PlaySlot | null;
   /** Takes the weapon of a slot into the hands. */
   switchSlot: (slot: PlaySlot) => void;
+  /** Where the character ends up when it walks into something solid: given where it is (feet, viewer space) and how fast it goes, the corrected place on the floor, or null when nothing is in the way. */
+  collide?: (x: number, y: number, z: number, vx: number, vz: number) => { x: number; z: number } | null;
   /** Called every frame with where the character is on the floor (viewer units) and the way it faces. */
   onFrame?: (x: number, z: number, yaw: number) => void;
   /** Play mode ended by the player (Escape). */
@@ -546,6 +548,8 @@ export class PlayController {
     if (this.scoped && !grounded(m)) this.scoped = false;
     stepFeet(m, isMoving(m, run), dt);
     const o = this.startPose;
+    const blocked = this.host.collide?.(o.x + m.x, o.y + m.h, o.z + m.z, m.vx, m.vz);
+    if (blocked) { m.x = blocked.x - o.x; m.z = blocked.z - o.z; }
     this.host.actor.setPlacement(o.x + m.x, o.y + m.h, o.z + m.z, m.feetYaw);
     this.host.onFrame?.(o.x + m.x, o.z + m.z, m.yaw);
 
