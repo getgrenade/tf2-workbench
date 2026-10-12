@@ -10,32 +10,59 @@ import { resetEngine, startEngine, stepEngine, stopEngine } from "../viewer/part
 type Pending = { resolve: (v: { kind: "json" | "bytes"; data: unknown }) => void; reject: (e: Error) => void };
 
 const BASE = new URL(import.meta.env.BASE_URL, window.location.href).href;
-let worker: Worker | null = null;
+/** The backend runs in several workers: each fetches one file at a time (a synchronous request), so a page that asks for many files at once
+ *  would otherwise wait for them one after the other. */
+const POOL = Math.max(2, Math.min(6, (navigator.hardwareConcurrency || 4) - 1));
+const workers: Worker[] = [];
+const busy: number[] = [];
 let ready: Promise<unknown> | null = null;
 let nextId = 1;
-const pending = new Map<number, Pending>();
+const pending = new Map<number, Pending & { worker: number }>();
+
+function spawn(index: number): Worker {
+  const worker = new Worker(new URL("./backend.worker.ts", import.meta.url), { type: "module" });
+  worker.onmessage = (e: MessageEvent<{ id: number; kind?: "json" | "bytes"; data?: unknown; error?: string; missing?: string }>) => {
+    if (e.data.missing) { ((window as unknown as { __missingGameFiles?: Set<string> }).__missingGameFiles ??= new Set()).add(e.data.missing); return; }
+    const p = pending.get(e.data.id);
+    if (!p) return;
+    pending.delete(e.data.id);
+    busy[p.worker]--;
+    if (e.data.error !== undefined) p.reject(new Error(e.data.error)); else p.resolve({ kind: e.data.kind!, data: e.data.data });
+  };
+  worker.onerror = (e) => console.error("backend worker", index, e.message);
+  return worker;
+}
 
 function backend(): Promise<unknown> {
-  if (!worker) {
-    worker = new Worker(new URL("./backend.worker.ts", import.meta.url), { type: "module" });
-    worker.onmessage = (e: MessageEvent<{ id: number; kind?: "json" | "bytes"; data?: unknown; error?: string; missing?: string }>) => {
-      if (e.data.missing) { ((window as unknown as { __missingGameFiles?: Set<string> }).__missingGameFiles ??= new Set()).add(e.data.missing); return; }
-      const p = pending.get(e.data.id);
-      if (!p) return;
-      pending.delete(e.data.id);
-      if (e.data.error !== undefined) p.reject(new Error(e.data.error)); else p.resolve({ kind: e.data.kind!, data: e.data.data });
-    };
-    worker.onerror = (e) => console.error("backend worker", e.message);
-    ready = send({ init: BASE });
+  if (!workers.length) {
+    for (let i = 0; i < POOL; i++) { workers.push(spawn(i)); busy.push(0); }
+    ready = Promise.all(workers.map((_, i) => send(i, { init: BASE })));
   }
   return ready!;
 }
 
-function send(message: { command?: string; args?: unknown; init?: string }): Promise<{ kind: "json" | "bytes"; data: unknown }> {
+/** Commands whose answer builds on what the same worker already holds for a model (its parsed files): they stay with one worker per model. */
+const BY_MODEL = new Set(["eval_poses", "bake_sequence", "list_sequences", "model_physics"]);
+
+/** The worker for a command: the model's own one for the commands above, otherwise the one with the fewest requests waiting. */
+function pick(command: string | undefined, args: unknown): number {
+  if (command && BY_MODEL.has(command)) {
+    const path = String((args as { path?: unknown } | null)?.path ?? "");
+    let h = 0;
+    for (let i = 0; i < path.length; i++) h = (h * 31 + path.charCodeAt(i)) >>> 0;
+    return h % workers.length;
+  }
+  let best = 0;
+  for (let i = 1; i < workers.length; i++) if (busy[i] < busy[best]) best = i;
+  return best;
+}
+
+function send(worker: number, message: { command?: string; args?: unknown; init?: string }): Promise<{ kind: "json" | "bytes"; data: unknown }> {
   return new Promise((resolve, reject) => {
     const id = nextId++;
-    pending.set(id, { resolve, reject });
-    worker!.postMessage({ id, ...message });
+    pending.set(id, { resolve, reject, worker });
+    busy[worker]++;
+    workers[worker].postMessage({ id, ...message });
   });
 }
 
@@ -84,7 +111,7 @@ export async function invoke<T>(command: string, args?: unknown, options?: { hea
   const a = (args ?? {}) as Args;
   if (FROM_GAME.has(command)) {
     await backend();
-    const reply = await send({ command, args: a });
+    const reply = await send(pick(command, a), { command, args: a });
     return reply.data as T;
   }
   switch (command) {

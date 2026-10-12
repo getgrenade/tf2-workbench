@@ -41,10 +41,10 @@ function withoutAssets(publicDir: string, outDir: string): Plugin {
   };
 }
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ mode, command }) => {
   const web = mode === "web";
   const publicDir = web ? (process.env.WEB_ASSETS ?? "web-assets") : undefined;
-  const external = web && !!process.env.VITE_ASSETS_URL;
+  const external = web && command === "build" && !!process.env.VITE_ASSETS_URL;
   return {
     clearScreen: false,
     base: web ? "./" : undefined,

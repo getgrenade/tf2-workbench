@@ -28,7 +28,7 @@ let stash: Uint8Array | null = null;
 /** Files read recently, so that a model's second look at its textures costs no copy. */
 const recent = new Map<string, Uint8Array | null>();
 let recentBytes = 0;
-const RECENT_LIMIT = 96 * 1024 * 1024;
+const RECENT_LIMIT = 40 * 1024 * 1024;
 const missing = new Set<string>();
 
 function fetchSync(path: string): Uint8Array | null {
