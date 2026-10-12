@@ -1,18 +1,15 @@
 # TF2 Workbench
 
-A viewer and scene composer for Team Fortress 2 models, cosmetics and weapons. It reads the models, materials and animations straight from
-your own TF2 install, so what you see is what the game draws.
+A viewer and scene composer for Team Fortress 2 models. Reads everything from game files in real time. 
 
-- **Characters, cosmetics, weapons, taunts and buildings**, with paints, styles, team colours, bodygroups and LODs. Every cosmetic and
-  weapon of the game (and Workshop zips you add) can be tried on any class that can wear it.
-- **Animation and posing**: sequences, taunts with their props, a pose editor with hand poses, flexes and jiggle bones, ragdolls.
-- **Unusual effects and weapon effects**: the game's own particle systems, simulated and drawn in the viewer, on cosmetics, weapons,
-  projectiles and conditions.
-- **Play mode**: steer a character with WASD, fire weapons, throw projectiles, hit and gib other characters.
-- **Scenes**: several characters, lights (directional, point, spot), shadows, fog, ambient occlusion, rim light, skyboxes, cameras with
-  overlays; saved as scene files.
-- **Capture**: PNG and layered PSD screenshots, MP4 / WebM / optimized GIF video and a turntable.
-- **Item compiler**: turns your own model and textures into a Workshop-ready cosmetic (needs the Source SDK tools that ship with TF2).
+- **Player models, cosmetics, weapons, taunts**: Use unlimited amount of player models in a single scene. Instantly equip & switch between cosmetics, taunts and weapons with browser system.
+- **Lighting, Cameras & Overlays**: Single directional light emulating hlmv.exe by default. Add any amount of custom lights, real time shadows, post processing layers. Camera system with preset resolutions and overlays to add custom images, text and borders.
+- **Animation and posing**: sequences, taunts, pose editor with rig controls and pose library.
+- **Unusual effects**: emulation of game's particle systems. can preview any in game effect or import your own.
+- **Play mode**: control player models with in game controls, shoot, gesture & killbind if you want.
+- **Scenes & Save**: Supports multiple scenes in a single session with save/load support.
+- **Capture**: PNG and layered PSD screenshots, MP4 / WebM / optimized* GIF video and a turntable.
+- **Item compiler**: real time preview for your workshop cosmetics with an option to compile it into /import_source/ folder same as in-game importer would. Real time jiggle bone editor. Custom proxies support.
 - **A web version** without the compiler that runs in a browser (see [docs/web-build.md](docs/web-build.md)).
 
 TF2 Workbench is a fan project. It is not affiliated with or endorsed by Valve. **No game files are included in this repository**:
