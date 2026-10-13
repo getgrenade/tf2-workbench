@@ -63,6 +63,10 @@ uniform sampler2D tDetail;      // $detail, blend mode 6: the fire layer of a bu
 uniform bool uHasDetail;
 uniform float uDetailScale;
 uniform float uDetailBlend;
+uniform sampler2D tDetailMat;    // $detail of blend mode 0 / 1 / 8, mixed into the base colour
+uniform int uDetailMode;         // -1: none
+uniform mat3 uDetailXf;          // $detailtexturetransform after proxies
+uniform float uDetailAmount;     // $detailblendfactor
 uniform sampler2D tWarp;
 uniform sampler2D tPhongWarp;   // $phongwarptexture: a ramp of (specular, fresnel) that tints and shapes the highlight
 uniform bool uHasPhongWarp;
@@ -72,6 +76,7 @@ uniform samplerCube tWorldCube;        // the cubemap the world setting picked .
 uniform float uWorldCube;               // ... when one is (its brightness; 0: none)
 uniform bool uEnvWorld;                 // this material reflects "the cubemap of the level" ($envmap env_cubemap)
 uniform bool uHasBump;
+uniform bool uDecalModulate;                // DecalModulate: the picture fades to mid grey (which the blend leaves alone) where it is transparent; the blend runs on linear light here, so the picture goes in as the gamma value it was drawn with
 uniform bool uUnlit;                    // UnlitGeneric / UnlitTwoTexture: the picture of the texture, no lighting
 uniform sampler2D tTex2;                // UnlitTwoTexture's $texture2 ...
 uniform bool uHasTex2;
@@ -211,6 +216,13 @@ ${bodyMaskDiscard}
     diffuseLighting += color * diffuseTerm(N, direction);
   }
 
+  // $detail layers that change the base colour (TextureCombine in common_ps_fxc.h): 0 base * detail * 2, 1 base + detail, 8 base * detail
+  if (uDetailMode >= 0) {
+    vec3 detailRgb = texture2D(tDetailMat, (uDetailXf * vec3(vUv * uDetailScale, 1.0)).xy).rgb;
+    vec3 combined = uDetailMode == 1 ? baseTex.rgb + detailRgb : baseTex.rgb * detailRgb * (uDetailMode == 0 ? 2.0 : 1.0);
+    baseTex.rgb = mix(baseTex.rgb, combined, uDetailAmount);
+  }
+
   // Albedo with $color/$color2 modulation (g_DiffuseModulation)
   vec3 albedo = baseTex.rgb;
   if (uBlendTint) {
@@ -340,6 +352,7 @@ ${bodyMaskDiscard}
   if (uViewMode > 0.5 && uViewMode < 1.5) result = albedo;
   else if (uViewMode > 1.5) result = vec3(dot(result, vec3(0.2126, 0.7152, 0.0722)));
   if (!uUnlit) result += studioRimLight(Nv, vWorldPos);
+  if (uDecalModulate) { result = mix(vec3(0.5), pow(albedo, vec3(1.0 / 2.2)), baseTex.a); alpha = 1.0; }
 
   gl_FragColor = vec4(result, alpha);
   #include <colorspace_fragment>

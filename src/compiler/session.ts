@@ -78,12 +78,14 @@ export interface CompilerData {
   /** Picking a model or texture fills the rest from the names of the files beside it (see the interface for the rules). */
   smartFill: boolean;
   icon: string;
+  /** How the textures are stored: DXT as the importer makes them, or exact pixels (to see whether the game takes them). */
+  compression: "dxt" | "none";
 }
 
 export const blankMaterial = (): CompilerMaterial => ({ color: "", blueColor: "", blueTint: null, normal: "", phongexponent: "", illum: "", settings: { ...DEFAULT_MATERIAL, customProxies: [] } });
 
 export const blankData = (): CompilerData => ({
-  name: "", displayName: "", prefab: "hat", region: "hat", bodygroups: ["hat"], classes: {}, materials: {}, teamColors: false, smartFill: true, jiggles: {}, turns: {}, icon: "",
+  name: "", displayName: "", prefab: "hat", region: "hat", bodygroups: ["hat"], classes: {}, materials: {}, teamColors: false, smartFill: true, jiggles: {}, turns: {}, icon: "", compression: "dxt",
 });
 
 export interface Issue { key: string; level: "error" | "warning"; text: string }
@@ -549,7 +551,7 @@ export class CompilerSession {
       prefab: PREFABS.includes(s.prefab as Prefab) ? (s.prefab as Prefab) : blank.prefab,
       region: str(s.region, blank.region),
       bodygroups: Array.isArray(s.bodygroups) ? s.bodygroups.filter((b): b is string => BODYGROUPS.includes(b as string)) : blank.bodygroups,
-      classes, materials: {}, teamColors: s.teamColors === true, smartFill: s.smartFill !== false, icon: str(s.icon, ""),
+      classes, materials: {}, teamColors: s.teamColors === true, smartFill: s.smartFill !== false, icon: str(s.icon, ""), compression: s.compression === "none" ? "none" : "dxt",
       jiggles: Object.fromEntries(Object.entries(s.jiggles && typeof s.jiggles === "object" ? s.jiggles : {}).map(([bone, setup]) => [bone, readJiggle(setup)])),
       turns: Object.fromEntries(Object.entries(s.turns && typeof s.turns === "object" ? s.turns : {}).flatMap(([bone, turn]): [string, BoneTurn][] => (Array.isArray(turn) && turn.length === 3 && turn.every((v) => typeof v === "number" && Number.isFinite(v)) ? [[bone, [turn[0], turn[1], turn[2]]]] : []))),
     };

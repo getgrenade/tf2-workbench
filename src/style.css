@@ -1114,3 +1114,13 @@ div.setRow:hover { background: none; }
 .propTile.noThumb .propThumb { visibility: hidden; }
 .propTile span { font-size: var(--ui-fs-micro); color: var(--dim); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .propTile.on span { color: var(--fg); }
+
+/* files dragged from the file explorer, and things dragged inside the page (see dnd.ts) */
+.fileDropOver { outline: 2px dashed var(--accent); outline-offset: 2px; border-radius: var(--ui-radius); background: var(--ui-accent-soft); }
+body.dndActive { user-select: none; cursor: grabbing; }
+body.dndActive * { cursor: grabbing !important; }
+body.dndActive.dndRefused * { cursor: no-drop !important; }
+.dndGhost { box-shadow: 0 6px 18px var(--ui-shade-1); }
+.propBar select.propGame { max-width: 150px; margin: 0; }
+.entTeam.skin { background: color-mix(in srgb, var(--fg) 14%, transparent); color: var(--dim); }
+.propSkins { flex-wrap: wrap; }

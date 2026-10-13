@@ -56,6 +56,8 @@ pub struct ItemBuildRequest {
     classes: Vec<ClassRequest>,
     materials: Vec<MaterialRequest>,
     icon: String,
+    /** "none": exact textures; anything else: DXT, as the importer makes them. */
+    #[serde(default)] compression: String,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -74,6 +76,57 @@ pub struct MaterialRequest { blue: Option<BlueRequest>, source_name: String, vmt
 #[serde(rename_all = "camelCase")]
 pub struct ItemBuildResult { zip: String, session: String, log: Vec<String>, millis: u64 }
 
+/// What the compiler tab sends to build a prop (see `source_formats::propcompile`).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PropBuildRequest {
+    name: String,
+    folder: String,
+    surfaceprop: String,
+    mass: f32,
+    static_prop: bool,
+    #[serde(default)] collision: Option<String>,
+    #[serde(default)] concave: bool,
+    lods: Vec<LodRequest>,
+    materials: Vec<PropMaterialRequest>,
+    max_texture: u32,
+    #[serde(default)] qc_extra: String,
+    /** The text of the file that opens the prop again in the compiler. */
+    #[serde(default)] session: String,
+    /** The folder the files go to (the game's custom folder, or beside a map). */
+    out_dir: String,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PropMaterialRequest { name: String, vmt: String, color: Option<String>, normal: Option<String>, phongexponent: Option<String>, illum: Option<String>, #[serde(default)] compression: String }
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PropBuildResult { folder: String, files: Vec<String>, log: Vec<String>, millis: u64 }
+
+/// Builds a prop into the folder the artist chose: the compiled model, the materials and the sources.
+#[tauri::command]
+pub async fn build_prop(app: tauri::AppHandle, state: State<'_, AppState>, request: PropBuildRequest) -> Result<PropBuildResult, String> {
+    use source_formats::{itemcompile::LodSpec, propcompile::{build, PropMaterialSpec, PropSpec}};
+    let vpk = state.vpk()?;
+    let path = |p: Option<String>| p.filter(|p| !p.trim().is_empty()).map(PathBuf::from);
+    if request.out_dir.trim().is_empty() { return Err("Choose the folder the prop is written to".into()); }
+    let out = PathBuf::from(&request.out_dir);
+    let spec = PropSpec {
+        name: request.name, folder: request.folder, surfaceprop: request.surfaceprop, mass: request.mass, static_prop: request.static_prop,
+        collision: request.collision.filter(|c| !c.trim().is_empty()), concave: request.concave,
+        lods: request.lods.into_iter().map(|l| LodSpec { source_path: l.source_path, smd: l.smd, dmx: l.dmx, triangles: l.triangles, vertices: l.vertices }).collect(),
+        materials: request.materials.into_iter().map(|m| PropMaterialSpec { name: m.name, vmt: m.vmt, color: path(m.color), normal: path(m.normal), phongexponent: path(m.phongexponent), illum: path(m.illum), compression: if m.compression == "none" { source_formats::vtf_write::Compression::None } else { source_formats::vtf_write::Compression::Dxt } }).collect(),
+        max_texture: request.max_texture, qc_extra: request.qc_extra, session: request.session,
+    };
+    let work = std::env::temp_dir().join("tf2-workbench-prop-build");
+    let mounted = out.clone();
+    let built = tauri::async_runtime::spawn_blocking({ let vpk = vpk.clone(); move || build(&vpk, &spec, &out, &work) }).await.map_err(|e| e.to_string())??;
+    // the folder it went to is mounted (or read again), so that the prop shows in the prop browser and in the scene
+    if let Ok(added) = vpk.mount_custom(&mounted, false) { let _ = keep_custom_content(&app, &state, &added); }
+    Ok(PropBuildResult { folder: built.folder.to_string_lossy().into_owned(), files: built.files, log: built.log, millis: built.millis as u64 })
+}
+
 /// Builds an item into the zip the game's importer would write, in the importer's own folder (tf/workshop/import_source), and mounts it.
 #[tauri::command]
 pub async fn build_item(state: State<'_, AppState>, request: ItemBuildRequest) -> Result<ItemBuildResult, String> {
@@ -84,6 +137,7 @@ pub async fn build_item(state: State<'_, AppState>, request: ItemBuildRequest) -
     let spec = ItemSpec {
         name: request.name, display_name: request.display_name, prefab: request.prefab, equip_region: request.equip_region,
         bodygroups: request.bodygroups, paintable: request.paintable, icon: PathBuf::from(request.icon),
+        compression: if request.compression == "none" { source_formats::vtf_write::Compression::None } else { source_formats::vtf_write::Compression::Dxt },
         classes: request.classes.into_iter().map(|c| ClassSpec { folder: c.folder, qc_extra: c.qc_extra, lods: c.lods.into_iter().map(|l| LodSpec { source_path: l.source_path, smd: l.smd, dmx: l.dmx, triangles: l.triangles, vertices: l.vertices }).collect() }).collect(),
         materials: request.materials.into_iter().map(|m| MaterialSpec { source_name: m.source_name, vmt: m.vmt, color: path(m.color), normal: path(m.normal), phongexponent: path(m.phongexponent), illum: path(m.illum), blue: m.blue.map(|b| BlueSpec { vmt: b.vmt, color: path(b.color) }) }).collect(),
     };
@@ -94,16 +148,32 @@ pub async fn build_item(state: State<'_, AppState>, request: ItemBuildRequest) -
     Ok(ItemBuildResult { zip: built.zip.to_string_lossy().into_owned(), session: built.session.to_string_lossy().into_owned(), log: built.log, millis: built.millis as u64 })
 }
 
-/// Shows a file in the file explorer.
+/// Shows a file in the file explorer (an item's archive), or opens a folder (where a prop was built).
 #[tauri::command]
 pub fn reveal_file(path: String) -> Result<(), String> {
     let p = PathBuf::from(&path);
+    if p.is_dir() {
+        use std::os::windows::process::CommandExt;
+        let plain = p.canonicalize().unwrap_or(p).to_string_lossy().replace(r"\?\", "").replace('/', "\\");
+        std::process::Command::new("explorer").raw_arg(format!("\"{plain}\"")).spawn().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
     if !p.exists() || p.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() != Some("zip") { return Err("Not an item archive".into()); }
     // explorer wants one backslashed path, quoted, with no \\? prefix; anything else and it opens Documents instead
     use std::os::windows::process::CommandExt;
     let plain = p.canonicalize().unwrap_or(p).to_string_lossy().replace(r"\\?\", "").replace('/', "\\");
     std::process::Command::new("explorer").raw_arg(format!("/select,\"{plain}\"")).spawn().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// The text of a prop's session file (the `.prop.txt` the prop compiler writes beside the models folder).
+#[tauri::command]
+pub fn read_prop_session(path: String) -> Result<String, String> {
+    let p = PathBuf::from(&path);
+    if !p.to_string_lossy().to_ascii_lowercase().ends_with(".txt") { return Err("not a prop session file (.txt)".into()); }
+    let len = std::fs::metadata(&p).map_err(|e| format!("{path}: {e}"))?.len();
+    if len > 4 << 20 { return Err(format!("{path} is larger than 4 MB")); }
+    std::fs::read_to_string(&p).map_err(|e| format!("{path}: {e}"))
 }
 
 /// Rescans the workshop importer's zips (new, rebuilt or removed ones) without reindexing the game.
@@ -138,6 +208,9 @@ pub async fn index_tf2(app: tauri::AppHandle, state: State<'_, AppState>, tf_dir
     let s = vpk.stats();
     // the custom effects the user imported are mounted over the game's files, like the workshop's zips
     if let Ok(dir) = effects_dir(&app) { vpk.set_effects_dir(dir); }
+    // the addons of the game's own custom folder, and the folders the user mounted earlier
+    let _ = vpk.mount_custom(&PathBuf::from(&tf_dir).join("custom"), true);
+    for saved in saved_custom_content(&app) { let _ = vpk.mount_custom(&saved, false); }
     state.set_vpk(vpk);
     Ok(IndexDto {
         tf_dir,
@@ -164,6 +237,135 @@ pub fn list_dir(state: State<'_, AppState>, dir: String) -> Result<DirDto, Strin
 #[tauri::command]
 pub fn search_paths(state: State<'_, AppState>, query: String, limit: usize) -> Result<Vec<String>, String> {
     Ok(state.vpk()?.search(&query, limit).into_iter().map(String::from).collect())
+}
+
+/// The folder the pictures kept on disk are in: `cache` beside the program (it goes where the program goes, and goes with it), or, when that
+/// folder cannot be written to (the program is in Program Files), the cache folder of the user's profile. The test profile has its own.
+fn thumb_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    use tauri::Manager;
+    if let Some(dir) = std::env::var_os("TF2_WORKBENCH_CONFIG_DIR") { return Ok(PathBuf::from(dir).join("cache")); }
+    static BESIDE: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    let beside = BESIDE.get_or_init(|| {
+        let dir = std::env::current_exe().ok()?.parent()?.join("cache");
+        std::fs::create_dir_all(&dir).ok()?;
+        let probe = dir.join(".write-test");
+        std::fs::write(&probe, b"x").ok()?;
+        let _ = std::fs::remove_file(&probe);
+        Some(dir)
+    });
+    match beside {
+        Some(dir) => Ok(dir.clone()),
+        None => app.path().app_cache_dir().map_err(|e| e.to_string()),
+    }
+}
+
+/// The state of the game's archives, worked out once for each game folder.
+fn archive_stamp(vpk: &VpkSet) -> u64 {
+    static STAMPS: std::sync::Mutex<Vec<(PathBuf, u64)>> = std::sync::Mutex::new(Vec::new());
+    let root = vpk.game_root().map(PathBuf::from).unwrap_or_default();
+    let mut stamps = STAMPS.lock().unwrap();
+    if let Some((_, s)) = stamps.iter().find(|(r, _)| *r == root) { return *s; }
+    let s = vpk.archive_stamp();
+    stamps.push((root, s));
+    s
+}
+
+/// A picture kept on disk (an item's icon, a prop's thumbnail), or nothing (an empty body) when there is none.
+#[tauri::command]
+pub fn thumb_cache_get(app: tauri::AppHandle, state: State<'_, AppState>, kind: String, key: String) -> Result<tauri::ipc::Response, String> {
+    let vpk = state.vpk()?;
+    let bytes = crate::thumbcache::get(&thumb_root(&app)?, archive_stamp(&vpk), &kind, &key).unwrap_or_default();
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// Keeps a picture (the raw body) of a file of the game's archives: `kind` and `key` are in the headers (percent-encoded). A file that is not in
+/// the archives (a workshop item) is not kept: it can change under the same name.
+#[tauri::command]
+pub fn thumb_cache_put(app: tauri::AppHandle, state: State<'_, AppState>, request: tauri::ipc::Request<'_>) -> Result<(), String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else { return Err("expected a raw body".into()) };
+    let header = |name: &str| request.headers().get(name).and_then(|v| v.to_str().ok()).map(percent_decode).ok_or_else(|| format!("missing {name} header"));
+    let (kind, key) = (header("kind")?, header("key")?);
+    let vpk = state.vpk()?;
+    if vpk.source_game(&key).is_empty() { return Ok(()); }
+    crate::thumbcache::put(&thumb_root(&app)?, archive_stamp(&vpk), &kind, &key, bytes)
+}
+
+/// The folders of loose files (addons, the output of the prop compiler) the user mounted: kept between launches.
+fn custom_content_file(app: &tauri::AppHandle) -> Option<PathBuf> {
+    config_dir(app).ok().map(|d| d.join("custom_content.json"))
+}
+
+/// A path without the `\?` prefix canonicalizing puts on Windows (what is shown and kept).
+fn plain_path(p: &std::path::Path) -> PathBuf {
+    let text = p.to_string_lossy();
+    PathBuf::from(text.strip_prefix(r"\\?\").unwrap_or(&text).to_string())
+}
+
+fn saved_custom_content(app: &tauri::AppHandle) -> Vec<PathBuf> {
+    custom_content_file(app).and_then(|p| std::fs::read(p).ok()).and_then(|b| serde_json::from_slice::<Vec<String>>(&b).ok()).unwrap_or_default().into_iter().map(PathBuf::from).collect()
+}
+
+fn save_custom_content(app: &tauri::AppHandle, roots: &[PathBuf]) -> Result<(), String> {
+    let file = custom_content_file(app).ok_or("no config folder")?;
+    if let Some(dir) = file.parent() { std::fs::create_dir_all(dir).map_err(|e| e.to_string())?; }
+    let text: Vec<String> = roots.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+    std::fs::write(file, serde_json::to_vec_pretty(&text).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+}
+
+#[derive(Serialize)]
+pub struct CustomDto { name: String, root: String, auto: bool, files: usize, models: usize }
+
+fn custom_dto(i: source_formats::vpk::CustomInfo) -> CustomDto {
+    CustomDto { name: i.name, root: plain_path(&i.root).to_string_lossy().into_owned(), auto: i.auto, files: i.files, models: i.models }
+}
+
+/// Remembers the folders that were mounted for the next launch, and forgets what was read from files that may have changed under them.
+fn keep_custom_content(app: &tauri::AppHandle, state: &State<'_, AppState>, added: &[source_formats::vpk::CustomInfo]) -> Result<(), String> {
+    let mut saved = saved_custom_content(app);
+    for a in added { let root = plain_path(&a.root); if !a.auto && !saved.contains(&root) { saved.push(root); } }
+    save_custom_content(app, &saved)?;
+    state.forget_read_files();
+    Ok(())
+}
+
+/// The mounted folders of loose files.
+#[tauri::command]
+pub fn list_custom_content(state: State<'_, AppState>) -> Result<Vec<CustomDto>, String> {
+    Ok(state.vpk()?.custom_mounts().into_iter().map(custom_dto).collect())
+}
+
+/// Mounts a folder of loose files (an addon, or a folder of them) and keeps it for the next launch; returns what was mounted.
+#[tauri::command]
+pub async fn add_custom_content(app: tauri::AppHandle, state: State<'_, AppState>, path: String) -> Result<Vec<CustomDto>, String> {
+    let vpk = state.vpk()?;
+    let target = PathBuf::from(&path);
+    let added = tauri::async_runtime::spawn_blocking({ let vpk = vpk.clone(); move || vpk.mount_custom(&target, false) }).await.map_err(|e| e.to_string())??;
+    keep_custom_content(&app, &state, &added)?;
+    Ok(added.into_iter().map(custom_dto).collect())
+}
+
+/// Takes a mounted folder away (and from the next launch).
+#[tauri::command]
+pub fn remove_custom_content(app: tauri::AppHandle, state: State<'_, AppState>, root: String) -> Result<(), String> {
+    let root = PathBuf::from(root);
+    state.vpk()?.unmount_custom(&root);
+    let mut saved = saved_custom_content(&app);
+    let canonical = std::fs::canonicalize(&root).map(|c| plain_path(&c)).unwrap_or_else(|_| root.clone());
+    saved.retain(|p| *p != root && *p != canonical);
+    save_custom_content(&app, &saved)
+}
+
+/// The models of the archives with the game each comes from (`tf2`, `hl2`...): what the prop browser lists.
+#[derive(Serialize)]
+pub struct ModelEntry { path: String, game: String }
+
+#[tauri::command]
+pub fn list_models(state: State<'_, AppState>) -> Result<Vec<ModelEntry>, String> {
+    let vpk = state.vpk()?;
+    let mut out: Vec<ModelEntry> = vpk.search(".mdl", 400_000).into_iter().filter(|p| p.ends_with(".mdl")).map(|p| ModelEntry { path: p.to_string(), game: vpk.source_game(p).to_string() }).collect();
+    // and the models of the folders the user mounted, each under the name of its folder
+    out.extend(vpk.custom_models().into_iter().map(|(path, folder)| ModelEntry { path, game: format!("custom:{folder}") }));
+    Ok(out)
 }
 
 /// Parses (or fetches from cache) a model and returns it in the binary payload format.

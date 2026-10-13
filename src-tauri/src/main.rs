@@ -3,6 +3,7 @@
 mod commands;
 mod payload;
 mod settings;
+mod thumbcache;
 mod state;
 mod native_particles;
 mod play_mouse;
@@ -51,6 +52,14 @@ fn main() {
             commands::read_text_file,
             commands::read_source_file,
             commands::build_item,
+            commands::build_prop,
+            commands::read_prop_session,
+            commands::thumb_cache_get,
+            commands::thumb_cache_put,
+            commands::list_models,
+            commands::list_custom_content,
+            commands::add_custom_content,
+            commands::remove_custom_content,
             commands::reveal_file,
             commands::source_stamp,
             commands::source_siblings,
@@ -90,8 +99,6 @@ fn main() {
                 .min_inner_size(800.0, 500.0)
                 .maximized(true)
                 .additional_browser_args(&settings.browser_args())
-                // Tauri own handler for files dropped on the window swallows the drag and drop inside the page on Windows (the outliner)
-                .disable_drag_drop_handler()
                 .build()?;
             Ok(())
         })

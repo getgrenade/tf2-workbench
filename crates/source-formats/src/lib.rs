@@ -3,6 +3,7 @@
 pub mod anim;
 pub mod binary;
 pub mod itemcompile;
+pub mod propcompile;
 pub mod items;
 pub mod kv;
 pub mod material;

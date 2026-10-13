@@ -12,6 +12,8 @@ import { createPoseHud } from "./viewer/poseHud";
 import { openOverlaySettings } from "./viewer/overlaySettings";
 import { loadSettings, onSettingsChange } from "./settingsStore";
 import { startUiScale } from "./uiScale";
+import { installPointerDnd } from "./dnd";
+import { installFileDrop } from "./fileDrop";
 import { codeName, binding, hotkeyMatches } from "./hotkeys";
 import { applyTheme } from "./theme";
 import { installSliderWheel } from "./sliderWheel";
@@ -19,6 +21,11 @@ import { installNoNativeMenu } from "./noNativeMenu";
 
 // the web build (see vite.config.ts) is the same app without what needs the desktop: the style sheet hides those controls under this class
 if (__WEB__) document.documentElement.classList.add("web");
+else {
+  // files dropped from the file explorer go to the rows that take them; the page's own drags are made with the pointer (see dnd.ts)
+  installPointerDnd();
+  void installFileDrop().catch((error) => console.error("File drop is not available", error));
+}
 const app = document.getElementById("app")!;
 app.innerHTML = `
   <header>
@@ -51,6 +58,7 @@ app.innerHTML = `
       <div id="classBlock"><label>Class</label>
       <div id="cls" class="classes"></div></div>
       <div class="teams"><button id="teamRed" class="team red">RED</button><button id="teamBlu" class="team blu">BLU</button></div>
+      <div class="teams propSkins" id="propSkins" hidden></div>
       <label hidden><input type="checkbox" id="wire" /> Wireframe</label>
       <div id="bodyBlock">
       <h3 class="bgHead">Bodygroups <button id="bodyReset" title="Back to what the cosmetics set (or the default)">Reset</button></h3>

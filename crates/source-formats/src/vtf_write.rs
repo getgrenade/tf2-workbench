@@ -23,8 +23,20 @@ const FLAG_NORMAL: u32 = 0x80;
 const FLAG_NOMIP: u32 = 0x100;
 const FLAG_NOLOD: u32 = 0x200;
 const FLAG_EIGHT_BIT_ALPHA: u32 = 0x2000;
+const FORMAT_BGR888: i32 = 3;
+const FORMAT_BGRA8888: i32 = 12;
 const FORMAT_DXT1: i32 = 13;
 const FORMAT_DXT5: i32 = 15;
+
+/// How the pixels of the image are stored. The item importer always compresses (a cosmetic's textures are DXT); a prop may keep them exact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Compression {
+    /// DXT1, or DXT5 for what has alpha: a quarter or an eighth of the size, with the blockiness of DXT on gradients and fine detail.
+    #[default]
+    Dxt,
+    /// BGRA8888 (BGR888 when the image has no alpha): every pixel exact, four (three) bytes each.
+    None,
+}
 
 pub struct Source<'a> {
     pub width: usize,
@@ -289,10 +301,25 @@ fn reflectivity(rgba: &[u8]) -> [f32; 3] {
 
 /// A VTF file for the image: DXT with every mip map, as the importer's vtex makes it for this kind of texture.
 pub fn encode(src: &Source, kind: Kind, uses_alpha: bool) -> Vec<u8> {
+    encode_with(src, kind, uses_alpha, Compression::Dxt)
+}
+
+/// The pixels of a mip level as BGRA8888, or as BGR888 without the alpha.
+fn uncompressed(rgba: &[u8], alpha: bool) -> Vec<u8> {
+    let mut out = Vec::with_capacity(rgba.len() / 4 * if alpha { 4 } else { 3 });
+    for p in rgba.chunks_exact(4) { out.extend_from_slice(&[p[2], p[1], p[0]]); if alpha { out.push(p[3]); } }
+    out
+}
+
+/// A VTF file for the image, stored as `compression` says (the mip maps, the flags and the header are the importer's either way).
+pub fn encode_with(src: &Source, kind: Kind, uses_alpha: bool, compression: Compression) -> Vec<u8> {
     let (w, h) = (src.width, src.height);
+    let exact = compression == Compression::None;
     let dxt5 = match kind { Kind::Normal | Kind::PhongExponent | Kind::Icon => true, Kind::Color | Kind::Illum => uses_alpha };
+    // an exact texture keeps its alpha when the image has any
+    let has_alpha = if exact { uses_alpha } else { dxt5 };
     let mut flags = 0u32;
-    if dxt5 { flags |= FLAG_EIGHT_BIT_ALPHA; }
+    if has_alpha { flags |= FLAG_EIGHT_BIT_ALPHA; }
     if kind == Kind::Normal { flags |= FLAG_NORMAL; }
     if kind == Kind::Icon { flags |= FLAG_NOMIP | FLAG_NOLOD; }
     let mips = mip_count(w, h);
@@ -304,7 +331,7 @@ pub fn encode(src: &Source, kind: Kind, uses_alpha: bool) -> Vec<u8> {
     }
     // compress every level on its own thread: the big ones take most of the time
     let compressed: Vec<Vec<u8>> = std::thread::scope(|scope| {
-        let handles: Vec<_> = levels.iter().map(|(data, lw, lh)| scope.spawn(move || compress(data, *lw, *lh, dxt5))).collect();
+        let handles: Vec<_> = levels.iter().map(|(data, lw, lh)| scope.spawn(move || if exact { uncompressed(data, has_alpha) } else { compress(data, *lw, *lh, dxt5) })).collect();
         handles.into_iter().map(|t| t.join().expect("compression thread")).collect()
     });
     let (lw, lh) = (w.min(16), h.min(16));
@@ -330,7 +357,8 @@ pub fn encode(src: &Source, kind: Kind, uses_alpha: bool) -> Vec<u8> {
     for c in refl { out.extend_from_slice(&c.to_le_bytes()); }
     out.extend_from_slice(&[0; 4]);
     out.extend_from_slice(&1.0f32.to_le_bytes()); // bump scale
-    out.extend_from_slice(&(if dxt5 { FORMAT_DXT5 } else { FORMAT_DXT1 }).to_le_bytes());
+    let format = match (exact, has_alpha) { (true, true) => FORMAT_BGRA8888, (true, false) => FORMAT_BGR888, (false, true) => FORMAT_DXT5, (false, false) => FORMAT_DXT1 };
+    out.extend_from_slice(&format.to_le_bytes());
     out.push(mips as u8);
     out.extend_from_slice(&FORMAT_DXT1.to_le_bytes()); // thumbnail format
     out.push(lw as u8);
@@ -402,6 +430,26 @@ mod tests {
             // the smallest mip is one pixel
             let last = vtf::decode(&bytes, 6).unwrap();
             assert_eq!((last.width, last.height), (1, 1));
+        }
+    }
+
+    #[test]
+    fn an_uncompressed_texture_comes_back_exactly_at_every_mip_it_has() {
+        let rgba = gradient(64, 32);
+        for (kind, alpha) in [(Kind::Color, false), (Kind::Color, true), (Kind::Normal, true)] {
+            let bytes = encode_with(&Source { width: 64, height: 32, rgba: &rgba }, kind, alpha, Compression::None);
+            let image = vtf::decode(&bytes, 0).unwrap();
+            assert_eq!((image.width, image.height), (64, 32));
+            for (a, b) in rgba.chunks_exact(4).zip(image.rgba.chunks_exact(4)) {
+                assert_eq!(&a[..3], &b[..3], "{kind:?} {alpha}");
+                if alpha { assert_eq!(a[3], b[3]); }
+            }
+            let info = vtf::info(&bytes).unwrap();
+            assert_eq!(info.flags & 0x2000 != 0, alpha, "the alpha flag");
+            assert_eq!(info.mip_count, 7);
+            // a texture with no alpha is smaller than one with, and both are bigger than the compressed one
+            let dxt = encode(&Source { width: 64, height: 32, rgba: &rgba }, kind, alpha);
+            assert!(bytes.len() > dxt.len());
         }
     }
 

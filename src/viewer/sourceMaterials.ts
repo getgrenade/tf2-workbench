@@ -182,9 +182,14 @@ export class SourceMaterials {
     const phongWarp = m ? this.texture(m, "phongwarp") : null;
     const exp = m ? this.texture(m, "exponent") : null;
     const tex2 = m ? this.texture(m, "tex2") : null;
-    const unlit = m?.shader === "unlitgeneric" || m?.shader === "unlittwotexture";
+    // DecalModulate (a bullet hole modelled as a quad): the picture multiplies what is behind it (2 * src * dst), so mid grey leaves it unchanged
+    const decalModulate = m?.shader === "decalmodulate";
+    const unlit = m?.shader === "unlitgeneric" || m?.shader === "unlittwotexture" || decalModulate;
     const envMask = m ? this.texture(m, "envmask") : null;
     const illumMask = m ? this.texture(m, "illum") : null;
+    // a detail layer that colours the base (the burn's mode 6 is a layer of its own)
+    const detailMode = num("$detailblendmode", 0);
+    const detailMat = m && [0, 1, 8].includes(detailMode) && p["$detail"] ? this.texture(m, "detail") : null;
     const [fMin, fMid, fMax] = parseVec(p["$phongfresnelranges"], [0, 0.5, 1]);
     const eyes = m?.shader === "eyerefract"; // eyerefract without eyeball data falls back to this shader
     // Refract bends what is behind it; there is no picture of that to bend here, so it is drawn as the clear, tinted glass it stands for
@@ -203,6 +208,7 @@ export class SourceMaterials {
       for (let i = 0; i < 3; i++) modulation[i] *= Math.pow(Math.min(Math.max(t[i] ?? t[0], 0), 1), 2.2);
     }
     const xf = textureTransform(vars);
+    const detailXf = textureTransform(vars, "$detailtexturetransform");
     const selfIllum = flag("$selfillum");
     // The shaders do not have a combination of $blendtintbybasealpha with $selfillum (both read the base alpha): the glowing layer of an item
     // that has both (the ghost trail of the Haunted Henchman) is tinted as a whole, the way HLMV draws it, not by its alpha.
@@ -222,7 +228,7 @@ export class SourceMaterials {
 
     const material = new THREE.ShaderMaterial({
       // translucent and additive layers (glass, glows) do not cast a ground shadow
-      userData: { noShadow: translucent || additive },
+      userData: { noShadow: translucent || additive || decalModulate },
       vertexShader,
       fragmentShader,
       wireframe: this.wireframe,
@@ -232,6 +238,7 @@ export class SourceMaterials {
       // texture has alpha (BT_BLENDADD: the Jarate liquid is added at ~40%), and the shader multiplies the output alpha by the
       // base alpha (except with self-illum / blend-tint). Textures without alpha have alpha 1, which makes that a plain add.
       ...(additive ? { ...particleBlending(true), depthWrite: false } : {}),
+      ...(decalModulate ? { transparent: true, blending: THREE.CustomBlending, blendEquation: THREE.AddEquation, blendSrc: THREE.DstColorFactor, blendDst: THREE.SrcColorFactor, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 } : {}),
       uniforms: {
         ...this.shared,
         tBase: { value: base ?? this.white },
@@ -244,6 +251,7 @@ export class SourceMaterials {
         tExp: { value: exp ?? this.white },
         uHasBump: { value: !!bump },
         uUnlit: { value: unlit },
+        uDecalModulate: { value: decalModulate },
         tTex2: { value: tex2 ?? this.white },
         uHasTex2: { value: !!tex2 && m?.shader === "unlittwotexture" },
         uMod2x: { value: flag("$mod2x") ? 1 : 0 },
@@ -251,6 +259,10 @@ export class SourceMaterials {
         uHasDetail: { value: false },
         uDetailScale: { value: num("$detailscale", 1) },
         uDetailBlend: { value: 0 },
+        tDetailMat: { value: detailMat ?? this.white },
+        uDetailMode: { value: detailMat ? detailMode : -1 },
+        uDetailXf: { value: new THREE.Matrix3().set(detailXf?.[0] ?? 1, detailXf?.[1] ?? 0, detailXf?.[2] ?? 0, detailXf?.[3] ?? 0, detailXf?.[4] ?? 1, detailXf?.[5] ?? 0, 0, 0, 1) },
+        uDetailAmount: { value: vars["$detailblendfactor"]?.[0] ?? 1 },
         uHasWarp: { value: !!warp },
         uHasExp: { value: !!exp },
         tEnvMask: { value: envMask ?? this.white },
@@ -342,6 +354,8 @@ export class SourceMaterials {
       u.uModulation.value.set(mod[0], mod[1], mod[2]);
       const xf = textureTransform(vars);
       u.uUvXf.value.set(xf?.[0] ?? 1, xf?.[1] ?? 0, xf?.[2] ?? 0, xf?.[3] ?? 0, xf?.[4] ?? 1, xf?.[5] ?? 0, 0, 0, 1);
+      const dxf = textureTransform(vars, "$detailtexturetransform");
+      u.uDetailXf.value.set(dxf?.[0] ?? 1, dxf?.[1] ?? 0, dxf?.[2] ?? 0, dxf?.[3] ?? 0, dxf?.[4] ?? 1, dxf?.[5] ?? 0, 0, 0, 1);
       const alpha = vars["$alpha"]?.[0];
       if (alpha !== undefined) u.uOpacity.value = alpha;
       const tint = vars["$selfillumtint"];

@@ -13,7 +13,7 @@ use std::{
 use crate::{
     tga,
     vpk::VpkSet,
-    vtf_write::{self, Kind, Source},
+    vtf_write::{self, Compression, Kind, Source},
     zipw::ZipBuilder,
 };
 
@@ -31,12 +31,12 @@ pub struct LodSpec {
 
 impl LodSpec {
     /// The name of the file of the LOD in the item's content folder.
-    fn file(&self, model: &str, lod: usize) -> String {
+    pub(crate) fn file(&self, model: &str, lod: usize) -> String {
         let ext = if self.dmx.is_some() { "dmx" } else { "smd" };
         if lod == 0 { format!("{model}.{ext}") } else { format!("{model}_lod{lod}.{ext}") }
     }
     /// What is written to that file (the text of an .smd gets the line ends of Windows).
-    fn bytes(&self) -> Vec<u8> { match &self.dmx { Some(d) => d.clone(), None => crlf(&self.smd) } }
+    pub(crate) fn bytes(&self) -> Vec<u8> { match &self.dmx { Some(d) => d.clone(), None => crlf(&self.smd) } }
 }
 
 /// The models of one class: `scout`, `sniper`, `soldier`, `demo`, `medic`, `heavy`, `pyro`, `spy` or `engineer`, and its LODs.
@@ -86,6 +86,8 @@ pub struct ItemSpec {
     pub classes: Vec<ClassSpec>,
     pub materials: Vec<MaterialSpec>,
     pub icon: PathBuf,
+    /// How the model textures are stored (the importer always makes them DXT; the icon is DXT5 either way).
+    pub compression: Compression,
 }
 
 #[derive(Debug)]
@@ -150,7 +152,7 @@ pub fn validate(spec: &ItemSpec) -> Result<(), String> {
     Ok(())
 }
 
-fn crlf(text: &str) -> Vec<u8> { text.replace("\r\n", "\n").replace('\n', "\r\n").into_bytes() }
+pub(crate) fn crlf(text: &str) -> Vec<u8> { text.replace("\r\n", "\n").replace('\n', "\r\n").into_bytes() }
 
 /// Fills the game's QC template for the item the way the importer does (see itemtest_qc_template_*.txt).
 fn fill_qc(template: &str, spec: &ItemSpec, class: &ClassSpec) -> String {
@@ -330,7 +332,7 @@ fn session_text(spec: &ItemSpec, textures: &[Vec<Texture>], icon_content: &str, 
 }
 
 /// Runs the game's studiomdl on a QC, with its output going into a private game folder instead of the install.
-fn run_studiomdl(exe: &Path, game: &Path, qc: &Path, log: &mut Vec<String>) -> Result<(), String> {
+pub(crate) fn run_studiomdl(exe: &Path, game: &Path, qc: &Path, log: &mut Vec<String>) -> Result<(), String> {
     let log_path = qc.with_extension("log");
     let file = fs::File::create(&log_path).map_err(|e| e.to_string())?;
     let mut cmd = Command::new(exe);
@@ -364,13 +366,13 @@ fn run_studiomdl(exe: &Path, game: &Path, qc: &Path, log: &mut Vec<String>) -> R
 }
 
 /// The absolute form of a path that exists, without the verbatim prefix Windows adds (Source's tools do not understand it).
-fn plain_absolute(p: &Path) -> Result<PathBuf, String> {
+pub(crate) fn plain_absolute(p: &Path) -> Result<PathBuf, String> {
     let full = fs::canonicalize(p).map_err(|e| format!("{}: {e}", p.display()))?;
     let text = full.to_string_lossy();
     Ok(PathBuf::from(text.strip_prefix(r"\\?\").unwrap_or(&text).to_string()))
 }
 
-fn quoted_path(p: &Path) -> Result<String, String> {
+pub(crate) fn quoted_path(p: &Path) -> Result<String, String> {
     let s = p.to_string_lossy().replace('\\', "/");
     if s.contains(['"', '\n', '\r']) { return Err("A folder name has a character the compiler cannot take".into()); }
     Ok(format!("\"{s}\""))
@@ -412,6 +414,7 @@ pub fn build(vpk: &VpkSet, spec: &ItemSpec, out_dir: &Path, work_root: &Path) ->
         }
     }
     struct Done { index: usize, texture: Texture, vtf: Vec<u8>, source_bytes: Vec<u8> }
+    let compression = spec.compression;
     let results: Vec<Result<Done, String>> = std::thread::scope(|scope| {
         let handles: Vec<_> = jobs.iter().map(|job| scope.spawn(move || -> Result<Done, String> {
             let bytes = fs::read(&job.source).map_err(|e| format!("{}: {e}", job.source.display()))?;
@@ -419,7 +422,7 @@ pub fn build(vpk: &VpkSet, spec: &ItemSpec, out_dir: &Path, work_root: &Path) ->
             let limit = match job.file_kind { Kind::Color | Kind::Normal => 512, _ => 256 };
             if image.width > limit || image.height > limit { return Err(format!("{} is {}x{}; the limit is {limit}x{limit}", job.source.display(), image.width, image.height)); }
             if !image.width.is_power_of_two() || !image.height.is_power_of_two() { return Err(format!("{} is {}x{}; both sides must be a power of two", job.source.display(), image.width, image.height)); }
-            let vtf = vtf_write::encode(&Source { width: image.width as usize, height: image.height as usize, rgba: &image.rgba }, job.file_kind, image.uses_alpha);
+            let vtf = vtf_write::encode_with(&Source { width: image.width as usize, height: image.height as usize, rgba: &image.rgba }, job.file_kind, image.uses_alpha, compression);
             Ok(Done { index: job.index, vtf, source_bytes: bytes,
                 texture: Texture { kind: job.kind, team: job.team, vtf_path: job.vtf_path.clone(), content_path: job.content_path.clone(), width: image.width, height: image.height, depth: image.depth, source: job.source.clone() } })
         })).collect();
@@ -539,7 +542,7 @@ mod tests {
             bodygroups: vec!["hat".into()], paintable: false,
             classes: vec![ClassSpec { folder: "sniper".into(), qc_extra: String::new(), lods: vec![LodSpec { source_path: "C:\\hat.fbx".into(), smd: "version 1\n".into(), dmx: None, triangles: 100, vertices: 80 }, LodSpec { source_path: "C:\\hat_lod.fbx".into(), smd: "version 1\n".into(), dmx: None, triangles: 50, vertices: 40 }] }],
             materials: vec![MaterialSpec { source_name: "ND_ID_MAT_TEAL".into(), vmt: "\"VertexLitGeneric\"\n{\n}\n".into(), color: Some("c.tga".into()), normal: None, phongexponent: None, illum: None, blue: None }],
-            icon: "icon.tga".into(),
+            icon: "icon.tga".into(), compression: Compression::Dxt,
         }
     }
 

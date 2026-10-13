@@ -17,24 +17,34 @@ export interface PropEntry {
   folder: string;
   /** Lowercase `folder/name`, for searching. */
   key: string;
+  /** The game whose archives hold it (`tf2`, `hl2`); empty when that is not known. */
+  game: string;
 }
 
+/** A file the catalogue is made of: its path, and the game it comes from when that is known. */
+export type PropFile = string | { path: string; game?: string };
+
 /** The catalogue of a file list: the `.mdl` files of the prop folders, by folder and then name. */
-export function parsePropPaths(paths: readonly string[]): PropEntry[] {
+export function parsePropPaths(files: readonly PropFile[]): PropEntry[] {
   const out: PropEntry[] = [];
   const seen = new Set<string>();
-  for (const raw of paths) {
+  for (const file of files) {
+    const raw = typeof file === "string" ? file : file.path;
+    const game = typeof file === "string" ? "" : file.game ?? "";
     const path = raw.replace(/\\/g, "/");
     if (!/^models\/.+\.mdl$/i.test(path)) continue;
     const below = path.slice("models/".length, -".mdl".length);
     const lower = below.toLowerCase();
-    if (!PROP_ROOTS.some((r) => lower.startsWith(r))) continue;
+    // the game's props are those of its prop folders; whatever is in a folder the user mounted is a prop, if it is in a folder of its own
+    // (a model straight in models/ would be taken for a class)
+    const custom = game.startsWith("custom:");
+    if (custom ? !below.includes("/") : !PROP_ROOTS.some((r) => lower.startsWith(r))) continue;
     if (seen.has(lower)) continue;
     seen.add(lower);
     const at = below.lastIndexOf("/");
     const folder = at < 0 ? "" : below.slice(0, at);
     const name = below.slice(at + 1);
-    out.push({ path, cls: below, name, folder, key: lower });
+    out.push({ path, cls: below, name, folder, key: lower, game });
   }
   return out.sort((a, b) => (a.folder === b.folder ? a.name.localeCompare(b.name) : a.folder.localeCompare(b.folder)));
 }
@@ -69,13 +79,31 @@ export function propFolders(entries: readonly PropEntry[]): PropFolder[] {
  * The props of a folder (and its subfolders) whose name or folder holds every word of the search, in the catalogue's order. An empty
  * folder is every folder; words match anywhere in `folder/name`.
  */
-export function filterProps(entries: readonly PropEntry[], query: string, folder = ""): PropEntry[] {
+export function filterProps(entries: readonly PropEntry[], query: string, folder = "", game = ""): PropEntry[] {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   const prefix = folder.toLowerCase();
   return entries.filter((e) => {
+    if (game && e.game !== game) return false;
     if (prefix && e.folder.toLowerCase() !== prefix && !e.folder.toLowerCase().startsWith(`${prefix}/`)) return false;
     return words.every((w) => e.key.includes(w));
   });
+}
+
+/** What the games of the archives are called. */
+const GAME_NAMES: Record<string, string> = { tf2: "Team Fortress 2", hl2: "Half-Life 2", hl1: "Half-Life", ep1: "Half-Life 2: Episode 1", ep2: "Half-Life 2: Episode 2", portal: "Portal" };
+export const gameLabel = (game: string) => (game.startsWith("custom:") ? `Custom: ${game.slice(7)}` : GAME_NAMES[game] ?? (game ? game.toUpperCase() : "Other"));
+
+/** Whether props are of a folder the user mounted (not of a game). */
+export const isCustomGame = (game: string) => game.startsWith("custom:");
+
+/** The games the props come from, the game folder's own first, each with how many of them there are. */
+export function propGames(entries: readonly PropEntry[]): { id: string; label: string; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const e of entries) counts.set(e.game, (counts.get(e.game) ?? 0) + 1);
+  return [...counts]
+    // the game folder's own first, the games, then the folders the user mounted
+    .sort((a, b) => (a[0] === "tf2" ? -1 : b[0] === "tf2" ? 1 : Number(isCustomGame(a[0])) - Number(isCustomGame(b[0])) || a[0].localeCompare(b[0])))
+    .map(([id, count]) => ({ id, label: gameLabel(id), count }));
 }
 
 /** What an entity of a prop is called in the lists: the model's own name, as the game spells it. */

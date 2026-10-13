@@ -56,5 +56,6 @@ export function makeBuildRequest(session: CompilerSession, current: string): Ite
     classes,
     materials,
     icon: d.icon,
+    compression: d.compression,
   };
 }

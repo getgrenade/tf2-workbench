@@ -1,7 +1,7 @@
 import type { MaterialData, ModelData } from "../viewer/payload";
 import { BODYGROUPS, EQUIP_REGIONS, PREFABS, TRIANGLE_BUDGET, CompilerSession, blankMaterial, type CompilerMaterial, type SessionIo } from "./session";
 import { ENVMAPS, LIGHTWARPS, type MaterialSettings } from "./vmt";
-import type { ItemBuildRequest } from "../api";
+import type { ItemBuildRequest, PropBuildRequest } from "../api";
 import { makeBuildRequest } from "./request";
 import { accordify } from "../accordion";
 import { showContextMenu } from "../viewer/contextMenu";
@@ -10,6 +10,10 @@ import { defaultJiggle, type JiggleSetup } from "./jiggleBones";
 import { aimTurn, turnMatrix, type BoneTurn } from "./boneAxes";
 import type { PreviewBone } from "./preview";
 import { createProxyEditor } from "./proxyUi";
+import { createPropCompilerUi } from "./propCompilerUi";
+import { endAligned } from "../pathInput";
+import { FILE_DROP_EVENT, type FileDropDetail } from "../fileDrop";
+import { acceptedPath } from "../filePaths";
 import * as THREE from "three";
 
 /** What the viewer is asked to show of the item: a cosmetic for the selected character and the materials it refers to. */
@@ -52,7 +56,15 @@ export interface CompilerHost {
   openIconStudio(): void;
   setPreview(preview: PreviewApplication | null): void;
   /** The open dialog for a source file; the chosen path, or null. */
-  pick(kind: "fbx" | "tga", current: string): Promise<string | null>;
+  pick(kind: "fbx" | "tga" | "smd", current: string): Promise<string | null>;
+  /** The open dialog for a folder (where a prop is written to). Props are of the desktop program only. */
+  pickFolder?(current: string): Promise<string | null>;
+  /** Shows the prop being compiled in the scene (null takes it away). */
+  setPropPreview?(preview: { data: ModelData; materials: Map<string, MaterialData> } | null): void;
+  /** Builds the prop into its folder. */
+  buildProp?(request: PropBuildRequest): Promise<{ ok: boolean; message: string; path?: string }>;
+  /** The text of a prop session file: the one at the path, or one chosen in the open dialog (null when none is). */
+  openPropSession?(path?: string): Promise<string | null>;
   /** Builds the item on the native side and returns what to tell the artist (and the archive's path, to show it). */
   build(request: ItemBuildRequest): Promise<{ ok: boolean; message: string; path?: string }>;
   reveal?(path: string): void;
@@ -105,6 +117,46 @@ export function createCompilerUi(host: CompilerHost) {
   const root = host.root;
   const flyout = host.flyout;
 
+  // the compiler builds cosmetics, and (in the desktop program) props: one switch at the top says which
+  type Mode = "cosmetic" | "prop";
+  let mode: Mode = "cosmetic";
+  const propsAvailable = !__WEB__ && !!host.pickFolder && !!host.setPropPreview && !!host.buildProp && !!host.openPropSession;
+  try { if (propsAvailable && localStorage.getItem("tf2workbench.compilerMode") === "prop") mode = "prop"; } catch { /* the cosmetic side */ }
+  const propUi = propsAvailable
+    ? createPropCompilerUi({ io: host.io, pick: (kind, current) => host.pick(kind, current), pickFolder: (current) => host.pickFolder!(current), setPreview: (p) => host.setPropPreview!(p), build: (request) => host.buildProp!(request), openSession: (path) => host.openPropSession!(path), reveal: host.reveal ? (path) => host.reveal!(path) : undefined })
+    : null;
+  /** The switch between the two sides, as the first thing of the panel. */
+  function modeSwitch(): HTMLElement | null {
+    if (!propsAvailable) return null;
+    const make = (value: Mode, text: string, title: string) => h("button", { textContent: text, title, className: mode === value ? "on" : "", onclick: () => setMode(value) });
+    return h("div", { className: "cmpTabs cmpMode", role: "tablist" }, make("cosmetic", "Cosmetic", "An item for a character: hats, glasses, shirts"), make("prop", "Prop", "A model for a map: a crate, a barrel, a lamp"));
+  }
+  function setMode(next: Mode) {
+    if (next === mode) return;
+    mode = next;
+    try { localStorage.setItem("tf2workbench.compilerMode", mode); } catch { /* not remembered */ }
+    window.clearTimeout(timer);
+    if (mode === "prop") {
+      // the item comes off the character, and the prop into the scene
+      host.setPreview(null);
+      host.setBoneHelper(null);
+      host.setBoneGizmo(null);
+      render();
+      void propUi?.show();
+    } else {
+      propUi?.hide();
+      render();
+      schedule();
+    }
+  }
+  /** The prop side: its own panel, and its materials in the panel over the view, as the cosmetic side has them. */
+  function renderProp() {
+    flyout.style.display = "";
+    root.replaceChildren(...[modeSwitch(), propUi!.element].filter((c): c is HTMLElement => !!c));
+    flyout.replaceChildren(propUi!.flyout);
+    propUi!.render();
+  }
+
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) session.restore(JSON.parse(saved), host.selection()?.cls);
@@ -118,13 +170,18 @@ export function createCompilerUi(host: CompilerHost) {
   function fileRow(label: string, path: string, kind: "fbx" | "tga", set: (path: string) => void, note = "", problem = "", compact = false) {
     const input = h("input", { className: "text", type: "text", value: path, placeholder: kind === "fbx" ? "model (.fbx, .smd, .dmx)" : "texture (.tga)", spellcheck: false });
     input.onchange = () => set(input.value.trim());
+    endAligned(input);
     const browse = h("button", { textContent: "…", title: `Choose a .${kind} file` });
     browse.onclick = async () => { const chosen = await host.pick(kind, path); if (chosen) set(chosen); };
     const clear = h("button", { textContent: "×", title: "Remove", disabled: !path });
     clear.onclick = () => set("");
-    return h("div", { className: "cmpRow" },
+    const row = h("div", { className: "cmpRow" },
       h("label", { textContent: label }), h("div", { className: "row2" }, input, browse, compact ? null : clear),
       note ? h("div", { className: "dim hint" + (problem ? " err" : ""), textContent: note }) : null);
+    // a file dragged from the file explorer onto the row
+    row.dataset.fileDrop = kind;
+    row.addEventListener(FILE_DROP_EVENT, (e) => { const dropped = acceptedPath(kind, (e as CustomEvent<FileDropDetail>).detail.paths); if (dropped) set(dropped); });
+    return row;
   }
 
   function checkbox(label: string, checked: boolean, change: (on: boolean) => void, title = "") {
@@ -402,6 +459,8 @@ export function createCompilerUi(host: CompilerHost) {
 
   /** Rebuilds the pane. `restructure` is false for changes (a number typed) that must not move the field the artist is in. */
   function render() {
+    if (mode === "prop" && propUi) { renderProp(); return; }
+    flyout.style.display = "";
     const d = session.data;
     const sel = host.selection();
     const issues = session.issues(customBones);
@@ -523,6 +582,7 @@ Choose another .tga` : "Choose the backpack icon (.tga)" });
     openSession.onclick = () => void openFromFile();
 
     root.replaceChildren(
+      ...(propsAvailable ? [modeSwitch()!] : []),
       h("h3", { className: "first" }, "Item ", openSession, reset),
       name,
       h("div", { className: "cmpTop" },
@@ -531,6 +591,7 @@ Choose another .tga` : "Choose the backpack icon (.tga)" });
           h("label", { className: "cmpNum" }, h("span", { textContent: "Region" }), region),
           teamSwitch,
           smartFill,
+          select("Compression", d.compression, [{ value: "none", label: "None" }, { value: "dxt", label: "DXT" }], (v) => { d.compression = v; changed(false); }),
           h("label", { textContent: "Hides" }), bodygroups),
         h("div", { className: "cmpIcon" },
           h("label", { textContent: "Icon" }), thumb,
@@ -601,13 +662,13 @@ Choose another .tga` : "Choose the backpack icon (.tga)" });
 
   /** Rebuilds the preview shortly after the last change (typing a number should not rebuild the mesh on each key). */
   function schedule() {
-    if (!active) return;
+    if (!active || mode === "prop") return;
     window.clearTimeout(timer);
     timer = window.setTimeout(() => void updatePreview(), 120);
   }
 
   async function updatePreview() {
-    if (!active) return;
+    if (!active || mode === "prop") return;
     const sel = host.selection();
     if (!sel?.model) { host.setPreview(null); return; }
     try {
@@ -649,7 +710,7 @@ Choose another .tga` : "Choose the backpack icon (.tga)" });
   }
 
   async function checkFiles() {
-    if (!active) return;
+    if (!active || mode === "prop") return;
     try { if (await session.refresh()) { changed(false); } } catch (error) { console.error(error); }
   }
 
@@ -659,6 +720,7 @@ Choose another .tga` : "Choose the backpack icon (.tga)" });
     async show() {
       active = true;
       render();
+      if (mode === "prop") { void propUi?.show(); return; }
       if (!loaded) { loaded = true; await session.loadAll(); render(); }
       await updatePreview();
       window.clearInterval(poll);
@@ -667,12 +729,13 @@ Choose another .tga` : "Choose the backpack icon (.tga)" });
     /** The tab was left: the item comes off the character. */
     hide() {
       active = false;
+      propUi?.hide();
       window.clearTimeout(timer);
       window.clearInterval(poll);
       // the item stays on the character: the viewer lists it as a temporary item
     },
     /** The selected character (or its class, or its team) changed. */
-    selectionChanged() { if (active) { render(); schedule(); } },
+    selectionChanged() { if (!active) return; if (mode === "prop") propUi?.refresh(); else { render(); schedule(); } },
     /** Brings the preview up to date now (the item is on the selected character when this returns). */
     async updatePreviewNow() { window.clearTimeout(timer); await updatePreview(); },
     render,

@@ -1,6 +1,6 @@
 //! Builds a small cosmetic end to end with TF2's own studiomdl. Skipped when TF2 or its tools are not installed.
 
-use source_formats::{itemcompile::*, mdl, model, steam, vtf, vtx, vvd, zipfs::ZipFile, VpkSet};
+use source_formats::{itemcompile::*, mdl, model, steam, vtf, vtf_write::Compression, vtx, vvd, zipfs::ZipFile, VpkSet};
 use std::{fs, path::PathBuf};
 
 fn tga(size: u16, alpha: bool, f: impl Fn(usize, usize) -> [u8; 4]) -> Vec<u8> {
@@ -34,7 +34,7 @@ fn builds_a_cosmetic_the_importers_way() {
         classes: vec![ClassSpec { folder: "sniper".into(), qc_extra: String::new(), lods: vec![LodSpec { source_path: "tile.fbx".into(), smd: SMD.replace("tile", "workbench_test_tile"), dmx: None, triangles: 2, vertices: 4 }] }],
         materials: vec![MaterialSpec { source_name: "tile".into(), vmt: "\"VertexLitGeneric\"\n{\n\t\"$basetexture\"\t\t\"models/workshop/player/items/sniper/workbench_test_tile/workbench_test_tile_color\"\n}\n".into(),
             color: Some(color), normal: None, phongexponent: Some(exponent), illum: None, blue: None }],
-        icon,
+        icon, compression: Compression::Dxt,
     };
     let built = build(&vpk, &spec, &dir.join("out"), &dir.join("work")).unwrap_or_else(|e| panic!("build failed: {e}"));
     assert!(built.zip.is_file() && built.session.is_file());
@@ -176,6 +176,18 @@ fn builds_a_cosmetic_the_importers_way() {
     assert!(controllers.contains(&"AU_1") && controllers.contains(&"WQ"), "controllers: {controllers:?}");
     assert!(compiled.flex_desc_count >= 2 && !compiled.flex_rules.is_empty(), "{} descriptors, {} rules", compiled.flex_desc_count, compiled.flex_rules.len());
     assert!(compiled.textures.iter().any(|t| t == "workbench_test_tile"), "the material of the model is the item's: {:?}", compiled.textures);
+    // the same tile with exact textures: the colour texture comes back pixel for pixel
+    let mut exact = spec.clone();
+    exact.name = "workbench_test_exact".into();
+    exact.compression = Compression::None;
+    exact.classes[0].lods[0].smd = exact.classes[0].lods[0].smd.replace("workbench_test_tile", "workbench_test_exact");
+    let built_exact = build(&vpk, &exact, &dir.join("out"), &dir.join("work")).unwrap_or_else(|e| panic!("exact build failed: {e}"));
+    let zip = ZipFile::open(&built_exact.zip).unwrap();
+    let image = vtf::decode(&zip.read("materials/models/workshop/player/items/sniper/workbench_test_exact/workbench_test_exact_color.vtf").unwrap(), 0).unwrap();
+    for (x, y) in [(0usize, 0usize), (10, 7), (63, 63)] {
+        let at = (y * 64 + x) * 4;
+        assert_eq!(&image.rgba[at..at + 4], &[(x * 4) as u8, (y * 4) as u8, 128, 255], "pixel {x},{y}");
+    }
     // building again replaces the archive
     build(&vpk, &spec, &dir.join("out"), &dir.join("work")).unwrap();
     assert!(!built.zip.with_extension("zip.bak").exists());

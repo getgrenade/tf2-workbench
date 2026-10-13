@@ -44,3 +44,31 @@ test("a prop is labelled by its model's name", () => {
   assert.equal(propLabel("props_c17/furniture/chair01"), "chair01");
   assert.equal(propLabel("crate"), "crate");
 });
+
+test("props are listed by the game whose archives hold them", async () => {
+  const { propGames, gameLabel } = await import("../src/props/propList.ts");
+  const entries = parsePropPaths([
+    { path: "models/props_c17/barrel001.mdl", game: "hl2" }, { path: "models/props_2fort/sign.mdl", game: "tf2" },
+    { path: "models/props_junk/crate.mdl", game: "tf2" }, { path: "models/props_lab/desk.mdl", game: "hl2" }, "models/props/plain.mdl",
+  ]);
+  assert.deepEqual(new Set(filterProps(entries, "", "", "tf2").map((e) => e.name)), new Set(["sign", "crate"]));
+  assert.deepEqual(new Set(filterProps(entries, "", "", "hl2").map((e) => e.name)), new Set(["barrel001", "desk"]));
+  assert.equal(filterProps(entries, "").length, 5);
+  const games = propGames(entries);
+  assert.equal(games[0].id, "tf2");
+  assert.deepEqual(games.map((g) => [g.id, g.count]), [["tf2", 2], ["", 1], ["hl2", 2]]);
+  assert.equal(gameLabel("hl2"), "Half-Life 2");
+});
+
+test("the models of a mounted folder are props whatever their folder, listed under the folder's name, after the games", async () => {
+  const { propGames, gameLabel, isCustomGame } = await import("../src/props/propList.ts");
+  const entries = parsePropPaths([
+    { path: "models/zmb/perk_machine/accurate.mdl", game: "custom:perk_machines" }, { path: "models/zmb/perk_machine/cobalt_cola.mdl", game: "custom:perk_machines" },
+    { path: "models/loose.mdl", game: "custom:perk_machines" }, { path: "models/props_2fort/sign.mdl", game: "tf2" }, { path: "models/player/soldier.mdl", game: "tf2" },
+    { path: "models/props_c17/barrel001.mdl", game: "hl2" },
+  ]);
+  assert.deepEqual(filterProps(entries, "", "", "custom:perk_machines").map((e) => e.cls), ["zmb/perk_machine/accurate", "zmb/perk_machine/cobalt_cola"]);
+  assert.deepEqual(propGames(entries).map((g) => g.id), ["tf2", "hl2", "custom:perk_machines"]);
+  assert.equal(gameLabel("custom:perk_machines"), "Custom: perk_machines");
+  assert.ok(isCustomGame("custom:x") && !isCustomGame("tf2"));
+});

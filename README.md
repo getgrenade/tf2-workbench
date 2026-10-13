@@ -12,8 +12,9 @@ A viewer and scene composer for Team Fortress 2 models. Reads everything from ga
 - **Play mode**: control player models with in game controls, shoot, gesture & killbind if you want.
 - **Scenes & Save**: Supports multiple scenes in a single session with save/load support.
 - **Capture**: PNG and layered PSD screenshots, MP4 / WebM / optimized* GIF video and a turntable.
-- **Item compiler**: real time preview for your workshop cosmetics with an option to compile it into /import_source/ folder same as in-game importer would. Real time jiggle bone editor. Custom proxies support.
-- **A web version** without the compiler that runs in a browser (see [docs/web-build.md](docs/web-build.md)).
+- **Item compiler**: real time preview for your workshop cosmetics with an option to compile it into /import_source/ folder same as in-game importer would. Real time jiggle bone editor. Custom proxies support. Reads .fbx, .smd and .dmx models, shape keys (face flexes) included.
+- **Props**: browse the game's prop models (and any folder of loose models and materials you add: an addon, `tf/custom`, what you compiled), drag them into the scene, and shoot, push and blow them about in play mode. The compiler's Prop side builds a model for a map (collision, materials, LODs) into a folder of your choice. Desktop only.
+- **A web version** without the compiler and the props that runs in a browser (see [docs/web-build.md](docs/web-build.md)).
 
 TF2 Workbench is a fan project. It is not affiliated with or endorsed by Valve. **No game files are included in this repository**:
 the app reads them from your TF2 installation, and the web version's data is extracted from it by you with `build-webapp.bat`.

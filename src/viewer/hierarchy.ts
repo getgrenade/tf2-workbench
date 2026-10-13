@@ -24,6 +24,8 @@ export interface OutlinerNode extends Pick {
   removable: boolean;
   /** Characters: team (0 RED, 1 BLU), class picture, whether the fog covers it, whether it has particles to reset. */
   team?: number;
+  /** A prop with more than one skin: the one it wears (no RED / BLU: props are not on a team). */
+  skin?: number;
   icon?: string;
   fogged?: boolean;
   canClearParticles?: boolean;
@@ -383,7 +385,8 @@ export function createHierarchy(host: HTMLElement, hooks: HierarchyHooks) {
     label.title = n.keywords && n.kind === "character" ? `${n.label}\n${n.keywords}` : n.label;
     row.append(glyph, label);
     if (n.kind === "character") {
-      row.append(span("entTeam " + (n.team === 1 ? "blu" : "red"), n.team === 1 ? "BLU" : "RED"));
+      if (n.team !== undefined) row.append(span("entTeam " + (n.team === 1 ? "blu" : "red"), n.team === 1 ? "BLU" : "RED"));
+      else if (n.skin !== undefined) row.append(span("entTeam skin", `Skin ${n.skin + 1}`));
       row.append(button("hierTool hierFog" + (n.fogged ? " on" : ""), n.fogged ? "Affected by the fog (click to keep this character clear of it)" : "Not affected by the fog (click to put the fog over it)", icon("fog"), () => hooks.toggleFog(Number(n.id))));
       const particles = button("hierTool hierParticles", "Reset this character's frozen weapon particles", icon("reset"), () => hooks.clearParticles(Number(n.id)));
       particles.disabled = !n.canClearParticles;

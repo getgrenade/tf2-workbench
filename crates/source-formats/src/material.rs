@@ -11,7 +11,7 @@ use crate::{
 };
 
 /// Texture slots a material can fill. Each is `(slot name, VMT parameters that may name it)`.
-const SLOTS: [(&str, &[&str]); 10] = [
+const SLOTS: [(&str, &[&str]); 11] = [
     ("base", &["$basetexture", "$iris", "$diffuse", "$texture1"]),
     ("bump", &["$bumpmap", "$normalmap"]),
     ("warp", &["$lightwarptexture"]),
@@ -21,6 +21,8 @@ const SLOTS: [(&str, &[&str]); 10] = [
     ("ao", &["$ambientocclTexture"]),
     ("envmask", &["$envmapmask"]),
     ("illum", &["$selfillummask"]),
+    // the detail layer of a material (a screen's noise: blend modes 0, 1 and 8 are drawn)
+    ("detail", &["$detail"]),
     // UnlitTwoTexture multiplies its second texture into the first
     ("tex2", &["$texture2"]),
 ];
@@ -129,6 +131,8 @@ pub fn load(vpk: &VpkSet, vmt_path: &str) -> Result<Material> {
     let mut errors = Vec::new();
     for (slot, keys) in SLOTS {
         let Some(name) = keys.iter().find_map(|k| vmt.get(k)) else { continue };
+        // only the detail layers that change the base colour are read (the burn's fire layer has its own frames)
+        if slot == "detail" && !matches!(vmt.get("$detailblendmode").and_then(|v| v.trim().parse::<i32>().ok()).unwrap_or(0), 0 | 1 | 8) { continue; }
         match load_texture(vpk, name) {
             Ok(img) => textures.push((slot.to_string(), img)),
             Err(e) => errors.push(format!("{slot}: {e}")),

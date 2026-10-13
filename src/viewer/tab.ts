@@ -3,9 +3,10 @@ import { createCompilerUi, type PreviewApplication } from "../compiler/compilerU
 import { MODEL_EXTENSIONS } from "../compiler/importModel";
 import { createPropPanel, PROP_DRAG_TYPE } from "../props/propPanel";
 import { propLabel } from "../props/propList";
+import { forgetThumbnail } from "../props/propThumbs";
 import { decodeTga, encodeTga, iconProblem, ICON_SAFE_ROWS } from "../compiler/tga";
 import { fadeAmount, maskIcon, type IconFade } from "../compiler/iconMask";
-import { importSourceDir, readItemSession, saveItemIcon, buildItem, loadTextureFrames, readSourceFile, revealFile, sourceSiblings, sourceStamp } from "../api";
+import { importSourceDir, readItemSession, readPropSession, saveItemIcon, buildItem, buildProp, loadTextureFrames, readSourceFile, revealFile, sourceSiblings, sourceStamp } from "../api";
 import { parseTextureFrames } from "./sourceMaterials";
 import { getWeaponProfile, importEffectZip, removeCustomEffect, type WeaponProfile, type UnusualEffectInfo } from "../api";
 import { listSequences, loadMaterial, loadModel, loadSession, prepareWorkshopTaunt, readTextFile, saveSession, writeBinaryFile, writeTextFile, type WorkshopTaunt } from "../api";
@@ -346,6 +347,40 @@ export function createViewTab(els: Els) {
   let iconSaved = { grid: false, indicators: true };
   /** The vertical field of view icons are taken with (degrees). */
   const ICON_FOV = 22;
+  /** The prop being compiled, shown in the scene (the compiler's Prop side). */
+  let propPreview: Entity | null = null;
+  const PROP_PREVIEW_CLS = "__workbench__/prop_preview";
+  /** Shows the prop of the compiler in the scene as a prop of its own, or takes it away. It is a prop of the game in every way but where its model comes from. */
+  async function showCompilerProp(preview: { data: ModelData; materials: Map<string, MaterialData> } | null) {
+    if (__WEB__) return;
+    if (propPreview && !entities.includes(propPreview)) propPreview = null;
+    if (!preview) {
+      if (propPreview) { const gone = propPreview; propPreview = null; removeEntity(gone); }
+      return;
+    }
+    const v = ensureViewer();
+    const path = classPath(PROP_PREVIEW_CLS);
+    // the model and materials are put where the viewer looks for what it loaded from the game
+    models.set(path, preview.data);
+    viewer?.mats.purge((p) => p.includes("__workbench__/prop_preview"));
+    for (const [p, m] of preview.materials) materials.set(p, m);
+    let first = false;
+    if (!propPreview) {
+      first = true;
+      const e = newEntity(v.addActor(), PROP_PREVIEW_CLS, 0);
+      e.name = "Prop (compiler)";
+      const at = v.floorInFront();
+      v.placeActorAt(e.actor, at.x, 0, at.z);
+      entities.push(e);
+      propPreview = e;
+      renderEntities();
+    }
+    const e = propPreview;
+    await show(e, e.cls);
+    // it stands on the floor, whatever the origin of the model
+    if (first && entities.includes(e)) v.placeActorAt(e.actor, e.actor.offset.x, -e.actor.bindMinY, e.actor.offset.z);
+  }
+
   /** Puts the item (or nothing) on the selected character and takes it off the one that wore it. */
   function showCompilerItem(preview: PreviewApplication | null) {
     // the materials of the item keep their paths while their textures change: the shared material and texture caches go by path
@@ -393,8 +428,27 @@ export function createViewTab(els: Els) {
     },
     setPreview: showCompilerItem,
     pick: async (kind, current) => {
-      const picked = await open({ multiple: false, directory: false, defaultPath: current || undefined, filters: [{ name: kind === "fbx" ? "Model" : "Texture", extensions: kind === "fbx" ? [...MODEL_EXTENSIONS] : [kind] }] });
+      const picked = await open({ multiple: false, directory: false, defaultPath: current || undefined, filters: [{ name: kind === "fbx" ? "Model" : kind === "smd" ? "Collision model" : "Texture", extensions: kind === "fbx" ? [...MODEL_EXTENSIONS] : [kind] }] });
       return typeof picked === "string" ? picked : null;
+    },
+    pickFolder: __WEB__ ? undefined : async (current) => {
+      const picked = await open({ multiple: false, directory: true, defaultPath: current || undefined });
+      return typeof picked === "string" ? picked : null;
+    },
+    setPropPreview: __WEB__ ? undefined : (preview) => void showCompilerProp(preview),
+    openPropSession: __WEB__ ? undefined : async (path) => {
+      const file = path ?? (await open({ multiple: false, directory: false, filters: [{ name: "Prop session", extensions: ["txt"] }] }));
+      return typeof file === "string" ? readPropSession(file) : null;
+    },
+    buildProp: __WEB__ ? undefined : async (request) => {
+      const built = await buildProp(request);
+      // the folder it went to is mounted: the prop is in the browser (and the one of the same name that was loaded is read again)
+      const model = `models/${request.folder}/${request.name}.mdl`;
+      models.delete(model);
+      forgetThumbnail(model);
+      document.dispatchEvent(new CustomEvent("workbench:custom-content-changed", { detail: { name: built.folder.replace(/[\/]+$/, "").split(/[\/]/).pop() } }));
+      const warnings = built.log.filter((l) => /warning/i.test(l));
+      return { ok: true, path: built.folder, message: `Built ${request.name}: ${built.files.length} files in ${built.millis} ms${warnings.length ? ` (${warnings.length} warning${warnings.length === 1 ? "" : "s"})` : ""}.` };
     },
     build: async (request) => {
       const built = await buildItem(request);
@@ -1440,8 +1494,11 @@ export function createViewTab(els: Els) {
       els.anim.frameLabel.textContent = `render error: ${err instanceof Error ? err.stack ?? err.message : String(err)}`;
       return;
     }
+    // a prop that has several skins says which it wears in the outliner (known now that the model is)
+    if (skinsOf(e) > 1) renderEntities();
     if (e === selected) {
       els.info.textContent = "";
+      syncSkins();
       renderBodygroups();
       bodyPicker?.sync();
       refreshTextures();
@@ -2387,7 +2444,8 @@ export function createViewTab(els: Els) {
         selected: multi.has(e.id),
         off: e.hidden,
         removable: entities.length > 1,
-        team: e.team,
+        // a prop is on no team: it wears a skin, and says so only when it has more than one
+        ...(skinsOf(e) === 0 ? { team: e.team } : skinsOf(e) > 1 ? { skin: e.team } : {}),
         icon: buttons.get(e.cls)?.querySelector("img")?.src ?? "",
         fogged: e.actor.fogged,
         canClearParticles: !!viewer?.hasFrozenWeaponEffects(e.actor),
@@ -3415,6 +3473,8 @@ export function createViewTab(els: Els) {
     const v = viewer;
     if (!v || !selected || entities.length === 0) return null;
     saveUi(selected);
+    // the prop being compiled is shown in the scene but is not part of it
+    const savable = entities.filter((e) => e !== propPreview);
     return {
       app: "tf2-workbench",
       version: 1,
@@ -3432,9 +3492,9 @@ export function createViewTab(els: Els) {
       background: bgInput.value,
       wireframe: els.wire.checked,
       jiggle: els.jiggle.checked,
-      selected: entities.indexOf(selected),
+      selected: Math.max(0, savable.indexOf(selected)),
       ...(groups.length ? { groups: groups.map((g) => ({ ...g })) } : {}),
-      entities: entities.map((e): SceneEntity => {
+      entities: savable.map((e): SceneEntity => {
         const pb = e.actor.playback;
         const reaction=v.reactionSceneState(e.actor);
         const pose = reaction ? reaction.pose : e.actor.snapshotCustomPose();
@@ -4794,8 +4854,33 @@ export function createViewTab(els: Els) {
     if (out) out.textContent = `${els.fov.value}°`;
   }
   syncFov();
+  /** How many skins a prop has (the skin families of its model); 0 for what is not a prop (a character or a building: they have a team). */
+  function skinsOf(e: Entity): number {
+    if (!e.actor.sourceBind) return 0;
+    return models.get(classPath(e.cls))?.skinCount ?? 1;
+  }
+  /** The team buttons of a character, or the skin buttons of a prop that has several skins (a prop with one has neither). */
+  function syncSkins() {
+    const skins = selected ? skinsOf(selected) : 0;
+    const teamBox = els.teams[0].parentElement!;
+    const skinBox = document.getElementById("propSkins")!;
+    teamBox.hidden = skins > 0;
+    skinBox.hidden = skins < 2;
+    if (skins < 2) { skinBox.replaceChildren(); return; }
+    if (skinBox.children.length !== skins) {
+      skinBox.replaceChildren(...Array.from({ length: skins }, (_, i) => {
+        const b = document.createElement("button");
+        b.className = "team skin";
+        b.textContent = `Skin ${i + 1}`;
+        b.onclick = () => { if (selected) void setTeam(selected, i); };
+        return b;
+      }));
+    }
+    [...skinBox.children].forEach((b, i) => b.classList.toggle("on", i === (selected?.team ?? 0)));
+  }
   function markTeams() {
     els.teams.forEach((b, i) => b.classList.toggle("on", i === (selected?.team ?? 0)));
+    syncSkins();
   }
   /** Puts a character on a team (0 RED, 1 BLU). */
   async function setTeam(e: Entity, team: number) {

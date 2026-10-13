@@ -154,8 +154,41 @@ export interface ItemBuildRequest {
   classes: { folder: string; /** QC commands added to the class's QC (the `$jigglebone` blocks). */ qcExtra: string; lods: { sourcePath: string; smd: string; /** The model as a binary .dmx (bytes) when it has flexes: the smd is empty then. */ dmx?: number[]; triangles: number; vertices: number }[] }[];
   materials: { sourceName: string; vmt: string; color: string | null; normal: string | null; phongexponent: string | null; illum: string | null; blue: { vmt: string; color: string | null } | null }[];
   icon: string;
+  /** How the model textures are stored: DXT (the importer's), or exact pixels. */
+  compression?: "dxt" | "none";
 }
 export const buildItem = (request: ItemBuildRequest) => invoke<{ zip: string; session: string; log: string[]; millis: number }>("build_item", { request });
+/** What the compiler sends to build a prop; see src-tauri commands.rs PropBuildRequest. */
+export interface PropBuildRequest {
+  name: string; folder: string; surfaceprop: string; mass: number; staticProp: boolean; collision: string | null; concave: boolean;
+  lods: { sourcePath: string; smd: string; dmx?: number[]; triangles: number; vertices: number }[];
+  materials: { name: string; vmt: string; color: string | null; normal: string | null; phongexponent: string | null; illum: string | null; /** How its textures are stored: DXT (small) or exact pixels. */ compression?: "dxt" | "none" }[];
+  maxTexture: number; qcExtra: string;
+  /** How every material's textures are stored. */
+  compression?: "dxt" | "none";
+  /** The text of the file that opens the prop again in the compiler (written beside the models folder). */
+  session?: string;
+  /** The folder the files are written to. */
+  outDir: string;
+}
+export const buildProp = (request: PropBuildRequest) => invoke<{ folder: string; files: string[]; log: string[]; millis: number }>("build_prop", { request });
+/** The models of the game's archives, each with the game it comes from (`tf2`, `hl2`...): the prop browser's list. */
+export const listModels = () => invoke<{ path: string; game: string }[]>("list_models");
+/** A picture the program kept on disk of a file of the game (`icon`: an item's inventory icon by its .vmt path; `prop`: a prop's thumbnail by its model path), or null. */
+export const thumbCacheGet = async (kind: "icon" | "prop", key: string): Promise<ArrayBuffer | null> => {
+  const bytes = await invoke<ArrayBuffer>("thumb_cache_get", { kind, key });
+  return bytes && bytes.byteLength ? bytes : null;
+};
+export const thumbCachePut = (kind: "icon" | "prop", key: string, bytes: Uint8Array) =>
+  invoke<void>("thumb_cache_put", bytes, { headers: { kind: encodeURIComponent(kind), key: encodeURIComponent(key) } });
+/** The text of a prop session file (`<name>.prop.txt`). */
+export const readPropSession = (path: string) => invoke<string>("read_prop_session", { path });
+/** The folders of loose files that are mounted (the game's `tf/custom` addons, and the ones the user added). */
+export interface CustomContent { name: string; root: string; auto: boolean; files: number; models: number }
+export const listCustomContent = () => invoke<CustomContent[]>("list_custom_content");
+/** Mounts a folder of loose files (or a folder of such folders); the mounts it made. */
+export const addCustomContent = (path: string) => invoke<CustomContent[]>("add_custom_content", { path });
+export const removeCustomContent = (root: string) => invoke<void>("remove_custom_content", { root });
 export const revealFile = (path: string) => invoke<void>("reveal_file", { path });
 /** When a source file last changed (ms since the epoch), or null while it is missing. */
 export const sourceStamp = (path: string) => invoke<number | null>("source_stamp", { path });

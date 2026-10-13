@@ -107,7 +107,50 @@ pub struct VpkSet {
     workshop_dir: Option<PathBuf>,
     /// The folder of the custom effect zips (imported by the user), mounted after the importer's zips by the same rescan.
     effects_dir: RwLock<Option<PathBuf>>,
+    /// Folders of loose files the user mounted (an addon, a map's content, the output of the prop compiler): what the game's archives do not
+    /// have is read from them. The game's own files win over them, so an addon cannot change the game's props.
+    custom: RwLock<Vec<CustomMount>>,
 }
+
+/// A folder of loose files with a `models/` and a `materials/` folder in it, indexed by the paths the game would ask for.
+struct CustomMount {
+    name: String,
+    root: PathBuf,
+    /// Found by itself (a folder of `tf/custom`) rather than chosen: it cannot be taken away.
+    auto: bool,
+    /// Lowercase path below the root (with /) to the file.
+    files: HashMap<String, PathBuf>,
+}
+
+/// What is known of a mounted folder.
+#[derive(Debug, Clone)]
+pub struct CustomInfo {
+    pub name: String,
+    pub root: PathBuf,
+    pub auto: bool,
+    pub files: usize,
+    pub models: usize,
+}
+
+/// The most files one folder may bring (a folder of a whole game is not an addon).
+const CUSTOM_FILE_LIMIT: usize = 300_000;
+
+fn walk_custom(dir: &Path, base: &Path, depth: u32, out: &mut HashMap<String, PathBuf>) {
+    if depth > 16 || out.len() >= CUSTOM_FILE_LIMIT { return; }
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(kind) = entry.file_type() else { continue };
+        if kind.is_dir() { walk_custom(&path, base, depth + 1, out); }
+        else if kind.is_file() {
+            if let Ok(rel) = path.strip_prefix(base) {
+                out.insert(rel.to_string_lossy().replace('\\', "/").to_ascii_lowercase(), path);
+            }
+        }
+    }
+}
+
+fn has_content(dir: &Path) -> bool { ["models", "materials"].iter().any(|d| dir.join(d).is_dir()) }
 
 /// The mounted workshop zips and the game-relative paths they serve.
 #[derive(Default)]
@@ -310,7 +353,7 @@ impl VpkSet {
 
     /// A set of files that are fetched on demand (the web build): `index` lists every path there is, `read` returns a file's bytes.
     pub fn remote(index: Vec<String>, read: RemoteRead) -> Self {
-        let mut set = VpkSet { loose_root: None, dirs: Vec::new(), files: HashMap::new(), sorted: Vec::new(), workshop: RwLock::new(Mount::default()), workshop_dir: None, effects_dir: RwLock::new(None), remote: Some(read), recorded: Mutex::new(None) };
+        let mut set = VpkSet { loose_root: None, dirs: Vec::new(), files: HashMap::new(), sorted: Vec::new(), workshop: RwLock::new(Mount::default()), workshop_dir: None, effects_dir: RwLock::new(None), custom: RwLock::new(Vec::new()), remote: Some(read), recorded: Mutex::new(None) };
         set.sorted = index.into_iter().map(|p| Self::norm(&p)).collect();
         set.sorted.sort_unstable();
         set.sorted.dedup();
@@ -338,7 +381,7 @@ impl VpkSet {
     }
 
     pub fn open_dirs(paths: &[PathBuf]) -> Result<Self, VpkError> {
-        let mut set = VpkSet { loose_root: None, dirs: Vec::new(), files: HashMap::new(), sorted: Vec::new(), workshop: RwLock::new(Mount::default()), workshop_dir: None, effects_dir: RwLock::new(None), remote: None, recorded: Mutex::new(None) };
+        let mut set = VpkSet { loose_root: None, dirs: Vec::new(), files: HashMap::new(), sorted: Vec::new(), workshop: RwLock::new(Mount::default()), workshop_dir: None, effects_dir: RwLock::new(None), custom: RwLock::new(Vec::new()), remote: None, recorded: Mutex::new(None) };
         for p in paths {
             set.add_dir(p, false)?;
         }
@@ -462,8 +505,93 @@ impl VpkSet {
         path.replace('\\', "/").trim_matches('/').to_ascii_lowercase()
     }
 
+    /// A number that changes when the game's archives do (their paths, sizes and dates): what a picture kept on disk is valid for.
+    /// Mounts a folder of loose files (or, when it has none of its own, each folder in it that has: `tf/custom`). A folder that is the `models` or
+    /// `materials` folder of an addon mounts the addon. Returns what was mounted; a folder that is mounted already is read again (it has new files).
+    pub fn mount_custom(&self, root: &Path, auto: bool) -> Result<Vec<CustomInfo>, String> {
+        let mut root = root.to_path_buf();
+        if !root.is_dir() { return Err(format!("{} is not a folder", root.display())); }
+        if !has_content(&root) {
+            let name = root.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+            if matches!(name.as_str(), "models" | "materials") { if let Some(parent) = root.parent().filter(|p| has_content(p)) { root = parent.to_path_buf(); } }
+        }
+        let roots: Vec<PathBuf> = if has_content(&root) {
+            vec![root.clone()]
+        } else {
+            let mut found: Vec<PathBuf> = std::fs::read_dir(&root).map_err(|e| format!("{}: {e}", root.display()))?.flatten().map(|e| e.path()).filter(|p| p.is_dir() && has_content(p)).collect();
+            found.sort();
+            found
+        };
+        if roots.is_empty() { return Err(format!("{} has no models or materials folder (an addon folder has them)", root.display())); }
+        let mut added = Vec::new();
+        for dir in roots {
+            let canonical = std::fs::canonicalize(&dir).unwrap_or(dir.clone());
+            let mut files = HashMap::new();
+            walk_custom(&dir, &dir, 0, &mut files);
+            {
+                let mut mounts = self.custom.write().unwrap();
+                if let Some(m) = mounts.iter_mut().find(|m| m.root == canonical) {
+                    m.files = files;
+                    added.push(CustomInfo { name: m.name.clone(), root: m.root.clone(), auto: m.auto, files: m.files.len(), models: m.files.keys().filter(|k| k.starts_with("models/") && k.ends_with(".mdl")).count() });
+                    continue;
+                }
+            }
+            let base = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "custom".into());
+            let mut mounts = self.custom.write().unwrap();
+            let mut name = base.clone();
+            let mut n = 2;
+            while mounts.iter().any(|m| m.name == name) { name = format!("{base} {n}"); n += 1; }
+            let info = CustomInfo { name: name.clone(), root: canonical.clone(), auto, files: files.len(), models: files.keys().filter(|k| k.starts_with("models/") && k.ends_with(".mdl")).count() };
+            mounts.push(CustomMount { name, root: canonical, auto, files });
+            added.push(info);
+        }
+        Ok(added)
+    }
+
+    /// Takes a mounted folder away (one that was found by itself stays).
+    pub fn unmount_custom(&self, root: &Path) {
+        let canonical = std::fs::canonicalize(root).unwrap_or(root.to_path_buf());
+        self.custom.write().unwrap().retain(|m| m.auto || (m.root != canonical && m.root != root));
+    }
+
+    pub fn custom_mounts(&self) -> Vec<CustomInfo> {
+        self.custom.read().unwrap().iter().map(|m| CustomInfo { name: m.name.clone(), root: m.root.clone(), auto: m.auto, files: m.files.len(), models: m.files.keys().filter(|k| k.starts_with("models/") && k.ends_with(".mdl")).count() }).collect()
+    }
+
+    /// The models of the mounted folders (the path, and the name of the folder), by path; one the game has itself is not listed again.
+    pub fn custom_models(&self) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = self.custom.read().unwrap().iter()
+            .flat_map(|m| m.files.keys().filter(|k| k.starts_with("models/") && k.ends_with(".mdl") && !self.files.contains_key(*k)).map(|k| (k.clone(), m.name.clone())).collect::<Vec<_>>())
+            .collect();
+        out.sort();
+        out
+    }
+
+    fn custom_path(&self, key: &str) -> Option<PathBuf> {
+        self.custom.read().unwrap().iter().find_map(|m| m.files.get(key).cloned())
+    }
+
+    pub fn archive_stamp(&self) -> u64 {
+        let mut h: u64 = 0xcbf29ce484222325;
+        let mut mix = |bytes: &[u8]| for b in bytes { h = (h ^ *b as u64).wrapping_mul(0x100000001b3); };
+        for d in &self.dirs {
+            mix(d.path.to_string_lossy().as_bytes());
+            if let Ok(m) = std::fs::metadata(&d.path) {
+                mix(&m.len().to_le_bytes());
+                if let Some(t) = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()) { mix(&t.as_secs().to_le_bytes()); }
+            }
+        }
+        h
+    }
+
+    /// The game a file of the archives belongs to, by the start of the archive's name (`tf2_misc` is `tf2`, `hl2_textures` is `hl2`): the game
+    /// folder's own archives win over the Half-Life 2 ones for a path both have. Empty for a file that is in no archive (a loose file, a zip).
+    pub fn source_game(&self, path: &str) -> &str {
+        self.files.get(&Self::norm(path)).and_then(|e| self.dirs.get(e.dir as usize)).map(|d| d.base.split('_').next().unwrap_or("")).unwrap_or("")
+    }
+
     pub fn contains(&self, path: &str) -> bool {
-        let found = self.compiled_path(path).is_some() || self.files.contains_key(&Self::norm(path)) || self.loose_path(path).is_some() || self.workshop.read().unwrap().files.contains_key(&Self::norm(path)) || self.remote_has(&Self::norm(path));
+        let found = self.compiled_path(path).is_some() || self.files.contains_key(&Self::norm(path)) || self.loose_path(path).is_some() || self.workshop.read().unwrap().files.contains_key(&Self::norm(path)) || self.remote_has(&Self::norm(path)) || self.custom_path(&Self::norm(path)).is_some();
         if found { self.note(path); }
         found
     }
@@ -483,7 +611,7 @@ impl VpkSet {
             // (a site's file has no size in its index: ask for the file, which the caller is about to want anyway)
             return self.read(path).ok().map(|b| b.len() as u64);
         }
-        self.files.get(&key).map(Entry::size)
+        self.files.get(&key).map(Entry::size).or_else(|| self.custom_path(&key).and_then(|p| std::fs::metadata(p).ok()).map(|m| m.len()))
     }
 
     /// Lists the immediate children of `dir` ("" for the root).
@@ -561,10 +689,16 @@ impl VpkSet {
                 None => Err(VpkError::NotFound(path.to_string())),
             };
         }
-        let e = *self
-            .files
-            .get(&Self::norm(path))
-            .ok_or_else(|| VpkError::NotFound(path.to_string()))?;
+        let key = Self::norm(path);
+        let Some(e) = self.files.get(&key).copied() else {
+            // not in the game: a folder the user mounted may have it
+            if let Some(p) = self.custom_path(&key) {
+                let mut out = Vec::new();
+                File::open(&p).map_err(io_err(&p))?.take(max as u64).read_to_end(&mut out).map_err(io_err(&p))?;
+                return Ok(out);
+            }
+            return Err(VpkError::NotFound(path.to_string()));
+        };
         let d = &self.dirs[e.dir as usize];
         let total = (e.size() as usize).min(max);
         let mut out = Vec::with_capacity(total);

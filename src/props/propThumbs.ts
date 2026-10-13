@@ -6,6 +6,7 @@
 import * as THREE from "three";
 import { loadMaterial, loadModel } from "../api";
 import { SOURCE_TO_VIEWER } from "../viewer/animator";
+import { keepPicture, keptPicture } from "../thumbCache";
 import { parseMaterial, parsePayload, type MeshData } from "../viewer/payload";
 
 const SIZE = 160;
@@ -47,6 +48,9 @@ async function diffuse(path: string): Promise<{ texture: THREE.DataTexture | nul
 }
 
 async function draw(path: string): Promise<string | null> {
+  // the picture of an earlier launch, if the game has not changed since
+  const kept = await keptPicture("prop", path);
+  if (kept) return kept;
   const data = parsePayload(await loadModel(path));
   const meshes: MeshData[] = [];
   for (const part of data.bodyParts) for (const mesh of part.models[0]?.meshes ?? []) if (mesh.indices.length) meshes.push(mesh);
@@ -81,9 +85,15 @@ async function draw(path: string): Promise<string | null> {
   camera.lookAt(sphere.center);
   const r = stage();
   r.render(scene, camera);
+  keepPicture("prop", path, r.domElement);
   const url = r.domElement.toDataURL("image/png");
   for (const d of disposables) d.dispose();
   return url;
+}
+
+/** Forgets the picture of a model (it was built again). */
+export function forgetThumbnail(path: string) {
+  cache.delete(path);
 }
 
 /** The picture of a prop model (`models/props_c17/barrel001.mdl`) as a data URL; null when it has no geometry or could not be drawn. */

@@ -30,6 +30,13 @@ impl AppState {
         *self.particles.lock().unwrap() = None;
     }
 
+    /// Forgets the models and materials that were read (a folder of loose files was mounted or built into: what it has may be newer).
+    pub fn forget_read_files(&self) {
+        self.models.lock().unwrap().clear();
+        self.materials.lock().unwrap().clear();
+        self.anims.lock().unwrap().clear();
+    }
+
     /// Rescans the custom effect zips after one was added, replaced or removed, and forgets what was read from them.
     pub fn refresh_effects(&self) -> Result<(), String> {
         let vpk = self.vpk()?;
