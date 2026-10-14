@@ -36,7 +36,8 @@ export function lodCommands(cls: string, lod: 1 | 2, models: ImportedModel[]): L
     for (const b of usedBones(model)) used.add(b);
     for (const b of model.skeleton) if (!skeleton.has(b.name)) skeleton.set(b.name, b.parent);
   }
-  return all.filter((c) => (c[0] === "collapse" ? [...used].some((b) => under(skeleton, b, c[1])) : used.has(c[1])));
+  // a collapse takes what hangs below the bone into the bone (the bone itself stays): it matters when the skin uses a bone below it
+  return all.filter((c) => (c[0] === "collapse" ? [...used].some((b) => b !== c[1] && under(skeleton, b, c[1])) : used.has(c[1])));
 }
 
 /** The commands as QC lines (`bonetreecollapse "bip_head"`). */
@@ -45,17 +46,16 @@ export function lodCommandLines(commands: LodBoneCommand[]): string[] {
 }
 
 /**
- * Where each bone goes at the LOD: a collapsed bone, and everything that hangs on it in the skeleton, goes to the collapsed bone's parent; a
- * replaced one to its replacement. The commands are applied in order, and a bone that moved is followed to where it ended.
+ * Where each bone goes at the LOD: everything that hangs below a collapsed bone goes into that bone (the bone itself stays where it is, so a
+ * part skinned to a jiggle bone under the head rides with the head); a replaced bone goes to its replacement. The commands are applied in order,
+ * and a bone that moved is followed to where it ended.
  */
 export function boneRemap(commands: LodBoneCommand[], skeleton: { name: string; parent: string | null }[]): Map<string, string> {
   const parent = new Map(skeleton.map((b) => [b.name, b.parent] as const));
   const goes = new Map<string, string>();
   for (const c of commands) {
     if (c[0] === "replace") { goes.set(c[1], c[2]); continue; }
-    const up = parent.get(c[1]);
-    if (!up) continue;
-    for (const b of parent.keys()) if (under(parent, b, c[1])) goes.set(b, up);
+    for (const b of parent.keys()) if (b !== c[1] && under(parent, b, c[1])) goes.set(b, c[1]);
   }
   const final = new Map<string, string>();
   for (const from of goes.keys()) {

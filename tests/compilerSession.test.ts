@@ -137,7 +137,10 @@ test("a class's bone commands for a LOD are kept when the item's skin uses the b
   assert.ok(!lines2.some((l) => /_R"/.test(l)));
   // LOD 1 of the heavy only gives up the head and the pack: nothing of the suit's
   assert.deepEqual(lodCommands("heavy", 1, [suit]), []);
-  assert.deepEqual(lodCommands("heavy", 1, [skinnedTo(["bip_head"], HEAVY_SKELETON)]), [["collapse", "bip_head"]]);
+  // a collapse takes what hangs below the bone into the bone: a part skinned to the head itself (a hat) is not touched by it, one skinned to a bone under the head is
+  assert.deepEqual(lodCommands("heavy", 1, [skinnedTo(["bip_head"], HEAVY_SKELETON)]), []);
+  const withTail: [string, string | null][] = [...HEAVY_SKELETON, ["jiggle_bone", "bip_head"]];
+  assert.deepEqual(lodCommands("heavy", 1, [skinnedTo(["jiggle_bone"], withTail)]), [["collapse", "bip_head"]]);
   assert.deepEqual(lodCommands("not_a_class", 2, [suit]), []);
 });
 
@@ -145,9 +148,14 @@ test("at a LOD the skin of a bone the class gives up goes to the bone it goes to
   const commands = lodCommands("heavy", 2, [skinnedTo(["bip_collar_L", "bip_index_0_L"], HEAVY_SKELETON)]);
   const remap = boneRemap(commands, HEAVY_SKELETON.map(([name, parent]) => ({ name, parent })));
   assert.equal(remap.get("bip_collar_L"), "bip_spine_3");
-  // the hand goes to the collar (its parent), which goes to the spine; so does the finger that hangs on it
-  assert.equal(remap.get("bip_hand_L"), "bip_spine_3");
-  assert.equal(remap.get("bip_index_0_L"), "bip_spine_3");
+  // the finger goes into the hand, which stays (a collapse leaves the bone it names where it is)
+  assert.equal(remap.get("bip_hand_L"), undefined);
+  assert.equal(remap.get("bip_index_0_L"), "bip_hand_L");
+  // a jiggle bone under the head goes into the head, and keeps its place there
+  const tail: [string, string | null][] = [...HEAVY_SKELETON, ["jiggle_bone", "bip_head"]];
+  const headRemap = boneRemap(lodCommands("heavy", 1, [skinnedTo(["jiggle_bone"], tail)]), tail.map(([name, parent]) => ({ name, parent })));
+  assert.equal(headRemap.get("jiggle_bone"), "bip_head");
+  assert.equal(headRemap.get("bip_head"), undefined);
   const moved = applyBoneRemap(skinnedTo(["bip_collar_L", "bip_pelvis"], HEAVY_SKELETON), remap);
   assert.deepEqual(moved.parts[0].boneNames, ["bip_spine_3", "bip_pelvis"]);
   assert.equal(applyBoneRemap(skinnedTo(["bip_pelvis"], HEAVY_SKELETON), new Map()).parts[0].boneNames[0], "bip_pelvis");

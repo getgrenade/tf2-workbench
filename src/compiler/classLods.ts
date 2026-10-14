@@ -1,8 +1,8 @@
 /**
  * The bone commands of the first two $lod blocks of each player class's QC (the Source SDK's modelsrc/player/<class>/scripts/<class>.qci): the
- * bones the class's model gives up at LOD 1 and LOD 2. `collapse` is `bonetreecollapse bone` (the bone and what hangs on it go to the bone's
- * parent), `replace` is `replacebone from to`. A cosmetic skinned to one of those bones has to give it up the same way at those LODs, or the
- * game moves it with a bone that is no longer there; see `lodCommands` in lodBones.ts.
+ * bones the class's model gives up at LOD 1 and LOD 2. `collapse` is `bonetreecollapse bone` (what hangs below the bone goes into the bone,
+ * which stays), `replace` is `replacebone from to`. A cosmetic skinned to one of those bones has to give it up the same way at those LODs, or
+ * the game moves it with a bone that is no longer there; see `lodCommands` in lodBones.ts.
  */
 export type LodBoneCommand = ["collapse", string] | ["replace", string, string];
 
