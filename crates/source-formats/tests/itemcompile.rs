@@ -31,7 +31,7 @@ fn builds_a_cosmetic_the_importers_way() {
     let spec = ItemSpec {
         name: "workbench_test_tile".into(), display_name: "Test Tile".into(), prefab: "hat".into(), equip_region: "hat".into(),
         bodygroups: vec!["hat".into()], paintable: false,
-        classes: vec![ClassSpec { folder: "sniper".into(), qc_extra: String::new(), lods: vec![LodSpec { source_path: "tile.fbx".into(), smd: SMD.replace("tile", "workbench_test_tile"), dmx: None, triangles: 2, vertices: 4 }] }],
+        classes: vec![ClassSpec { folder: "sniper".into(), qc_extra: String::new(), lod_commands: Vec::new(), lods: vec![LodSpec { source_path: "tile.fbx".into(), smd: SMD.replace("tile", "workbench_test_tile"), dmx: None, triangles: 2, vertices: 4 }] }],
         materials: vec![MaterialSpec { source_name: "tile".into(), vmt: "\"VertexLitGeneric\"\n{\n\t\"$basetexture\"\t\t\"models/workshop/player/items/sniper/workbench_test_tile/workbench_test_tile_color\"\n}\n".into(),
             color: Some(color), normal: None, phongexponent: Some(exponent), illum: None, blue: None }],
         icon, compression: Compression::Dxt,
@@ -73,8 +73,8 @@ fn builds_a_cosmetic_the_importers_way() {
     let mut multi = spec.clone();
     multi.name = "workbench_test_multi".into();
     multi.classes = vec![
-        ClassSpec { folder: "sniper".into(), qc_extra: String::new(), lods: spec.classes[0].lods.clone() },
-        ClassSpec { folder: "scout".into(), qc_extra: String::new(), lods: spec.classes[0].lods.clone() },
+        ClassSpec { folder: "sniper".into(), qc_extra: String::new(), lod_commands: Vec::new(), lods: spec.classes[0].lods.clone() },
+        ClassSpec { folder: "scout".into(), qc_extra: String::new(), lod_commands: Vec::new(), lods: spec.classes[0].lods.clone() },
     ];
     for c in &mut multi.classes { c.lods[0].smd = c.lods[0].smd.replace("workbench_test_tile", "workbench_test_multi"); }
     let built_multi = build(&vpk, &multi, &dir.join("out"), &dir.join("work")).unwrap_or_else(|e| panic!("multiclass build failed: {e}"));

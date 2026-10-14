@@ -958,6 +958,10 @@ body.dockDragging * { cursor: grabbing !important; }
 #viewHud svg { fill: currentColor; }
 #hudBody { background: var(--ui-float); border-radius: var(--ui-radius-xl); width: calc(var(--ui-h-float) + 8px); height: calc(var(--ui-h-float) + 8px); }
 #hudBody svg { fill: none; stroke: currentColor; }
+/* in the icon studio the button that hides parts of the character is a main tool: it says so, and stands out from the black view */
+#canvasWrap.iconStudio #hudBody { width: auto; padding: 0 var(--ui-5) 0 var(--ui-4); grid-auto-flow: column; gap: var(--ui-3); background: var(--ui-accent-soft); border: 1px solid var(--ui-accent-line); color: var(--ui-text-hi); }
+#canvasWrap.iconStudio #hudBody::after { content: "Hide parts"; font-size: 12px; font-weight: 600; }
+#canvasWrap.iconStudio #hudBody:hover { background: var(--ui-accent-mid); border: 1px solid var(--ui-accent-line); }
 #viewToolbar #viewSelect button.once { outline: 1px dashed var(--accent); outline-offset: -3px; }
 .phBar { position: absolute; top: 44px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: var(--ui-1); padding: var(--ui-2); background: var(--ui-float); border: 0; border-radius: var(--ui-radius-xl); backdrop-filter: blur(4px); }
 .phSep { width: 1px; height: 16px; margin: 0 var(--ui-2); background: var(--ui-divider); }

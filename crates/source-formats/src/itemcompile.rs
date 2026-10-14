@@ -46,6 +46,8 @@ pub struct ClassSpec {
     pub lods: Vec<LodSpec>,
     /** QC commands added at the end of the class's QC (the `$jigglebone` blocks of its bones). */
     pub qc_extra: String,
+    /** The commands that go inside its `$lod` blocks, LOD 1 first (`bonetreecollapse "bip_head"`, `replacebone "a" "b"`, `nofacial`). */
+    pub lod_commands: Vec<Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -165,7 +167,19 @@ fn fill_qc(template: &str, spec: &ItemSpec, class: &ClassSpec) -> String {
     for lod in [1usize, 2] {
         let header = format!("<ITEMTEST_REPLACE_LOD{lod}_HEADER>");
         if lod < class.lods.len() {
-            text = text.replace(&header, &format!("$lod {}", LOD_DISTANCES[lod - 1])).replace(&format!("<ITEMTEST_REPLACE_LOD{lod}>"), &file(lod));
+            let lod_header = format!("$lod {}", LOD_DISTANCES[lod - 1]);
+            text = text.replace(&header, &lod_header).replace(&format!("<ITEMTEST_REPLACE_LOD{lod}>"), &file(lod));
+            // the class's bone commands for the LOD go at the end of its block
+            if let Some(commands) = class.lod_commands.get(lod - 1).filter(|c| !c.is_empty()) {
+                if let Some(start) = text.find(&lod_header) {
+                    if let Some(end) = text[start..].find("
+}") {
+                        let lines: String = commands.iter().map(|c| format!("
+{c}")).collect();
+                        text.insert_str(start + end, &lines);
+                    }
+                }
+            }
         } else if let Some(start) = text.find(&header) {
             // a LOD that is not there takes its whole block with it, leaving the blank line
             let end = text[start..].find("\n}").map(|e| start + e + 2).unwrap_or(text.len());
@@ -178,6 +192,33 @@ fn fill_qc(template: &str, spec: &ItemSpec, class: &ClassSpec) -> String {
     let families = if spec.team_colors() { format!("    {{ {} }}\n    {{ {} }}", family(0), family(1)) } else { format!("    {{ {} }}", family(0)) };
     let skin = format!("$cdmaterials \"{materials_dir}\"\n$texturegroup skinfamilies\n{{\n{families}\n}}");
     text.replace("<ITEMTEST_REPLACE_SKIN_OPTIONALBLOCK>", &skin)
+}
+
+/// The game's QC template as the importer saves it in its session file: the markers stay, and the class's bone commands are inside its LOD blocks.
+fn session_qc(template: &str, class: &ClassSpec) -> String {
+    let mut text = template.replace("
+", "
+");
+    for lod in [1usize, 2] {
+        let Some(commands) = class.lod_commands.get(lod - 1).filter(|c| !c.is_empty()) else { continue };
+        let header = format!("<ITEMTEST_REPLACE_LOD{lod}_HEADER>");
+        if let Some(start) = text.find(&header) {
+            if let Some(end) = text[start..].find("
+}") {
+                let lines: String = commands.iter().map(|c| format!("
+{c}")).collect();
+                text.insert_str(start + end, &lines);
+            }
+        }
+    }
+    // the commands the class's QC ends with (the `$jigglebone` blocks): opening the session brings them back
+    if !class.qc_extra.trim().is_empty() { text = format!("{}
+
+{}
+", text.trim_end(), class.qc_extra.replace("
+", "
+").trim_end()); }
+    text
 }
 
 /// The material file of the n-th material: the item's name, then `_1`, `_2`.
@@ -203,7 +244,7 @@ fn win(path: &str) -> String { path.replace('/', "\\") }
 struct Texture { kind: &'static str, /** 0 RED (or shared), 1 the BLU diffuse texture. */ team: u8, vtf_path: String, content_path: String, width: u32, height: u32, depth: u8, source: PathBuf }
 
 /// The manifest.txt of the archive and the session text the importer's Load button reads: the same, except for where the files are.
-fn session_text(spec: &ItemSpec, textures: &[Vec<Texture>], icon_content: &str, zip_path: &Path, in_archive: bool, name_suffix: &str) -> String {
+fn session_text(spec: &ItemSpec, template: &str, textures: &[Vec<Texture>], icon_content: &str, zip_path: &Path, in_archive: bool, name_suffix: &str) -> String {
     let class = spec.folder();
     let item_dir = format!("{ITEM_DIRECTORY}/{class}/{}", spec.name);
     let mut kv = KvOut::new();
@@ -245,6 +286,8 @@ fn session_text(spec: &ItemSpec, textures: &[Vec<Texture>], icon_content: &str, 
     kv.open("classes");
     for c in &spec.classes {
         kv.open(&c.folder);
+        // the class's QC as the importer keeps it in its session: the game's template with the markers still in it, and the bone commands of the LODs
+        kv.pair("QC", &session_qc(template, c));
         let model = spec.model_file(&c.folder);
         for (i, lod) in c.lods.iter().enumerate() {
             kv.open(&format!("LOD{i}"));
@@ -497,7 +540,7 @@ pub fn build(vpk: &VpkSet, spec: &ItemSpec, out_dir: &Path, work_root: &Path) ->
     let icon_content = format!("content/materialsrc/{icon_dir}/{}_large.tga", spec.name);
     let textures: Vec<Vec<Texture>> = (0..spec.materials.len()).map(|i| done.iter().filter(|d| d.index == i).map(|d| Texture { kind: d.texture.kind, team: d.texture.team, vtf_path: d.texture.vtf_path.clone(), content_path: d.texture.content_path.clone(), width: d.texture.width, height: d.texture.height, depth: d.texture.depth, source: d.texture.source.clone() }).collect()).collect();
     let mut zip = ZipBuilder::new();
-    zip.add("manifest.txt", crlf(&session_text(spec, &textures, &icon_content, &zip_path, true, "")));
+    zip.add("manifest.txt", crlf(&session_text(spec, &template, &textures, &icon_content, &zip_path, true, "")));
     let unlit = |texture: &str, vertex_color: bool| crlf(&format!("\"UnlitGeneric\"\n{{\n\t\"$basetexture\"\t\t\"{texture}\"\n\t\"$translucent\"\t\t\"1\"\n{}}}\n", if vertex_color { "\t\"$vertexcolor\"\t\t\"1\"\n" } else { "" }));
     zip.add(&format!("game/materials/{icon_dir}/{}.vmt", spec.name), unlit(&format!("{icon_dir}/{}", spec.name), true));
     zip.add(&format!("game/materials/{icon_dir}/{}.vtf", spec.name), icon_small);
@@ -526,7 +569,7 @@ pub fn build(vpk: &VpkSet, spec: &ItemSpec, out_dir: &Path, work_root: &Path) ->
     fs::create_dir_all(out_dir).map_err(|e| format!("Cannot create {}: {e}", out_dir.display()))?;
     zip.write(&zip_path).map_err(|e| format!("Cannot write {}: {e}", zip_path.display()))?;
     let session = out_dir.join(format!("{}.txt", spec.name));
-    fs::write(&session, crlf(&session_text(spec, &textures, &spec.icon.to_string_lossy(), &zip_path, false, ""))).map_err(|e| e.to_string())?;
+    fs::write(&session, crlf(&session_text(spec, &template, &textures, &spec.icon.to_string_lossy(), &zip_path, false, ""))).map_err(|e| e.to_string())?;
     log.push(format!("{} files, {} KB, built in {} ms", zip.len(), fs::metadata(&zip_path).map(|m| m.len() / 1024).unwrap_or(0), started.elapsed().as_millis()));
     let _ = fs::remove_dir_all(&work);
     Ok(Built { zip: zip_path, session, log, millis: started.elapsed().as_millis() })
@@ -540,7 +583,7 @@ mod tests {
         ItemSpec {
             name: "a_cowboyhat".into(), display_name: "The Cowboy Hat".into(), prefab: "hat".into(), equip_region: "hat".into(),
             bodygroups: vec!["hat".into()], paintable: false,
-            classes: vec![ClassSpec { folder: "sniper".into(), qc_extra: String::new(), lods: vec![LodSpec { source_path: "C:\\hat.fbx".into(), smd: "version 1\n".into(), dmx: None, triangles: 100, vertices: 80 }, LodSpec { source_path: "C:\\hat_lod.fbx".into(), smd: "version 1\n".into(), dmx: None, triangles: 50, vertices: 40 }] }],
+            classes: vec![ClassSpec { folder: "sniper".into(), qc_extra: String::new(), lod_commands: Vec::new(), lods: vec![LodSpec { source_path: "C:\\hat.fbx".into(), smd: "version 1\n".into(), dmx: None, triangles: 100, vertices: 80 }, LodSpec { source_path: "C:\\hat_lod.fbx".into(), smd: "version 1\n".into(), dmx: None, triangles: 50, vertices: 40 }] }],
             materials: vec![MaterialSpec { source_name: "ND_ID_MAT_TEAL".into(), vmt: "\"VertexLitGeneric\"\n{\n}\n".into(), color: Some("c.tga".into()), normal: None, phongexponent: None, illum: None, blue: None }],
             icon: "icon.tga".into(), compression: Compression::Dxt,
         }
@@ -554,6 +597,64 @@ mod tests {
         let qc = fill_qc(template, &s, &s.classes[0]);
         let expected = "$upaxis Y\n\n$modelname \"workshop/player/items/sniper/a_cowboyhat/a_cowboyhat.mdl\"\n\n$surfaceprop \"default\"\n\n$body \"default\" \"a_cowboyhat.smd\"\n\n$lod 11\n{\nreplacemodel \"a_cowboyhat.smd\" \"a_cowboyhat_lod1.smd\"\n}\n\n\n\n$cdmaterials \"models\\workshop\\player\\items\\sniper\\a_cowboyhat\"\n$texturegroup skinfamilies\n{\n    { \"a_cowboyhat\" }\n}\n\n$sequence \"ref\" \"a_cowboyhat.smd\"\n\n$attachment unusual \"bip_head\" 0 0 0 rotate 0 0 0\n";
         assert_eq!(qc, expected);
+    }
+
+    #[test]
+    fn the_session_keeps_the_qc_template_with_the_bone_commands() {
+        let mut s = spec();
+        s.classes[0].lod_commands = vec![vec!["replacebone \"bip_pack\" \"bip_pelvis\"".into()], vec![]];
+        s.classes[0].qc_extra = "$jigglebone \"tail\"
+{
+	is_flexible
+}".into();
+        let template = "$body \"default\" \"<ITEMTEST_REPLACE_LOD0>\"
+<ITEMTEST_REPLACE_LOD1_HEADER>
+{
+replacemodel \"<ITEMTEST_REPLACE_LOD0>\" \"<ITEMTEST_REPLACE_LOD1>\"
+}
+";
+        let session = session_text(&s, template, &[vec![]], "C:/icon.tga", Path::new("C:/a.zip"), false, "");
+        assert!(session.contains("\"QC\""), "{session}");
+        assert!(session.contains("$jigglebone \\\"tail\\\"
+{
+	is_flexible
+}"), "{session}");
+        assert!(session.contains("<ITEMTEST_REPLACE_LOD1_HEADER>
+{
+replacemodel \\\"<ITEMTEST_REPLACE_LOD0>\\\" \\\"<ITEMTEST_REPLACE_LOD1>\\\"
+replacebone \\\"bip_pack\\\" \\\"bip_pelvis\\\"
+}"), "{session}");
+    }
+
+    #[test]
+    fn the_class_bone_commands_go_inside_the_lod_blocks() {
+        let mut s = spec();
+        let first = s.classes[0].lods[0].clone();
+        s.classes[0].lods.push(first);
+        s.classes[0].lod_commands = vec![vec!["bonetreecollapse \"bip_head\"".into()], vec!["replacebone \"bip_collar_L\" \"bip_spine_3\"".into(), "nofacial".into()]];
+        let qc = fill_qc("<ITEMTEST_REPLACE_LOD1_HEADER>
+{
+replacemodel \"<ITEMTEST_REPLACE_LOD0>\" \"<ITEMTEST_REPLACE_LOD1>\"
+}
+
+<ITEMTEST_REPLACE_LOD2_HEADER>
+{
+replacemodel \"<ITEMTEST_REPLACE_LOD0>\" \"<ITEMTEST_REPLACE_LOD2>\"
+}
+<ITEMTEST_REPLACE_SKIN_OPTIONALBLOCK>", &s, &s.classes[0]);
+        assert!(qc.starts_with("$lod 11
+{
+replacemodel \"a_cowboyhat.smd\" \"a_cowboyhat_lod1.smd\"
+bonetreecollapse \"bip_head\"
+}
+"), "{qc}");
+        assert!(qc.contains("$lod 22
+{
+replacemodel \"a_cowboyhat.smd\" \"a_cowboyhat_lod2.smd\"
+replacebone \"bip_collar_L\" \"bip_spine_3\"
+nofacial
+}
+"), "{qc}");
     }
 
     #[test]
@@ -585,14 +686,24 @@ mod tests {
     fn the_session_text_has_the_importers_shape() {
         let s = spec();
         let textures = vec![vec![Texture { kind: "base", team: 0, vtf_path: "x".into(), content_path: "content/materialsrc/models/a.tga".into(), width: 512, height: 512, depth: 32, source: "C:\\a.tga".into() }]];
-        let text = session_text(&s, &textures, "content/materialsrc/backpack/x_large.tga", Path::new("C:\\Steam\\a_cowboyhat.zip"), true, "");
+        let text = session_text(&s, "$body \"default\" \"<ITEMTEST_REPLACE_LOD0>\"
+<ITEMTEST_REPLACE_LOD1_HEADER>
+{
+replacemodel \"<ITEMTEST_REPLACE_LOD0>\" \"<ITEMTEST_REPLACE_LOD1>\"
+}
+", &textures, "content/materialsrc/backpack/x_large.tga", Path::new("C:\\Steam\\a_cowboyhat.zip"), true, "");
         assert!(text.starts_with("\"asset\"\r\n{\r\n\t\"ImportSession\"\r\n\t{\r\n\t\t\"prefab\"\t\t\"hat\"\r\n"));
         assert!(text.contains("\"base_texture_channels\"\t\t\"4\"") && text.contains("\"base_texture_alpha\"\t\t\"1\""));
         assert!(text.contains("\"model_player\"\t\t\"models/workshop/player/items/sniper/a_cowboyhat/a_cowboyhat.mdl\""));
         assert!(text.contains("\"propername\"\t\t\"1\""));
         assert!(text.contains("\"sniper\"\t\t\"1\""));
         assert!(text.contains("\"materialId\"\t\t\"ND_ID_MAT_TEAL\""));
-        let session = session_text(&s, &textures, "C:\\icon.tga", Path::new("C:\\a.zip"), false, "");
+        let session = session_text(&s, "$body \"default\" \"<ITEMTEST_REPLACE_LOD0>\"
+<ITEMTEST_REPLACE_LOD1_HEADER>
+{
+replacemodel \"<ITEMTEST_REPLACE_LOD0>\" \"<ITEMTEST_REPLACE_LOD1>\"
+}
+", &textures, "C:\\icon.tga", Path::new("C:\\a.zip"), false, "");
         assert!(session.starts_with("\"data\"") && !session.contains("\"steamid\""));
         assert!(session.contains("\"file\"\t\t\"C:\\\\hat.fbx\""));
     }

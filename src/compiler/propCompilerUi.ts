@@ -52,6 +52,7 @@ export function createPropCompilerUi(host: PropCompilerHost) {
   let status = "";
   let builtPath = "";
   let timer = 0;
+  let poll = 0;
 
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -62,6 +63,7 @@ export function createPropCompilerUi(host: PropCompilerHost) {
   /** A change: remembered, the preview follows shortly (typing a number should not rebuild the mesh on each key), the panel is redrawn when `redraw`. */
   function changed(redraw: boolean) {
     save();
+    status = ""; // what the last build said is about what was there then
     if (redraw) render();
     schedule();
   }
@@ -175,6 +177,12 @@ export function createPropCompilerUi(host: PropCompilerHost) {
     outRow.dataset.fileDrop = "folder";
     outRow.addEventListener(FILE_DROP_EVENT, (e) => { const dropped = acceptedPath("folder", (e as CustomEvent<FileDropDetail>).detail.paths); if (dropped) { d.outDir = dropped; changed(true); } });
     const list = h("div", { className: "cmpIssues" });
+    const missing = session.failedPaths().length;
+    if (missing) {
+      const drop = h("button", { textContent: `Remove the ${missing} file${missing === 1 ? "" : "s"} that could not be read`, title: "Take the missing or unreadable files out of the prop" });
+      drop.onclick = () => { session.dropFailed(); changed(true); };
+      list.append(drop);
+    }
     if (!issues.length) list.append(h("div", { className: "dim hint", textContent: "Ready to build." }));
     for (const i of issues) list.append(h("div", { className: "cmpIssue " + i.level, textContent: (i.level === "error" ? "✖ " : "⚠ ") + i.text }));
     const blocked = issues.some((i) => i.level === "error") || !d.outDir;
@@ -263,11 +271,15 @@ export function createPropCompilerUi(host: PropCompilerHost) {
       if (!loaded) { loaded = true; await session.loadAll(); }
       render();
       host.setPreview(session.preview());
+      window.clearInterval(poll);
+      // a file changed on disk is read again, and an error about it goes when it is fixed
+      poll = window.setInterval(() => { if (active) void session.refresh().catch((e) => console.error(e)); }, 1500);
     },
     /** It was left: the prop comes out of the scene. */
     hide() {
       active = false;
       window.clearTimeout(timer);
+      window.clearInterval(poll);
       host.setPreview(null);
     },
     render,

@@ -9,7 +9,7 @@ import { fadeAmount, maskIcon, type IconFade } from "../compiler/iconMask";
 import { importSourceDir, readItemSession, readPropSession, saveItemIcon, buildItem, buildProp, loadTextureFrames, readSourceFile, revealFile, sourceSiblings, sourceStamp } from "../api";
 import { parseTextureFrames } from "./sourceMaterials";
 import { getWeaponProfile, importEffectZip, removeCustomEffect, type WeaponProfile, type UnusualEffectInfo } from "../api";
-import { listSequences, loadMaterial, loadModel, loadSession, prepareWorkshopTaunt, readTextFile, saveSession, writeBinaryFile, writeTextFile, type WorkshopTaunt } from "../api";
+import { listSequences, loadMaterial, loadModel, loadSession, prepareWorkshopTaunt, readTextFile, saveSession, writeAdjustedModel, writeBinaryFile, writeTextFile, type WorkshopTaunt } from "../api";
 import { loadItemDb } from "./itemCatalog";
 import { parseScene, type SceneEntity, type SceneFile } from "./scene";
 import { deletePoseFile, openPosesFolder, readPoses, refreshWorkshop as refreshWorkshopCommand, savePoseFile, workshopStamp as workshopStampCommand } from "../api";
@@ -47,6 +47,7 @@ import { defaultBodyGroupsFor } from "./bodyGroups";
 import { purgeIcons } from "./itemIcons";
 import { reloadItemDb } from "./itemCatalog";
 import type { PoseHud } from "./poseHud";
+import { createRigControls, type RigControls } from "../rig/rigControls";
 import type { LimbId } from "./poseRig";
 import { PLAY_ACTIONS, PLAY_DAMAGE_ACTIONS, PLAY_SLOTS, encodeParam, setsOf, type PlaySlot } from "./playLogic";
 import { itemImageFor, itemModelFor, slotForClass, weaponCategory, itemSkinFor, itemUsableBy, parseAnimInfo, parseMaterial, parsePayload, tauntPropSequence, tauntSequence, weaponIdleSequences, type ClipData, type ItemInfo, type PaintInfo, type MaterialData, type ModelData } from "./payload";
@@ -458,6 +459,7 @@ export function createViewTab(els: Els) {
       return { ok: true, path: built.zip, message: `Built ${request.name}.zip in ${built.millis} ms${warnings.length ? ` (${warnings.length} warning${warnings.length === 1 ? "" : "s"})` : ""}.` };
     },
     reveal: (path) => void revealFile(path),
+    writeModel: (path, bytes) => writeAdjustedModel(path, bytes),
   });
   const entities: Entity[] = [];
   /** The groups of the hierarchy. */
@@ -1146,6 +1148,7 @@ export function createViewTab(els: Els) {
     gizmoButtons.rotate.disabled = lightEditing && !viewer!.lightGizmos.rotatable;
     gizmoButtons.view.disabled = lightEditing && !viewer!.lightGizmos.rotatable;
     viewer?.rig.setGizmoParts(gizmoParts);
+    viewer?.blenderRig.setGizmoParts(gizmoParts);
     viewer?.setEntityGizmoParts(characterGizmoParts);
     try {
       localStorage.setItem("tf2workbench.gizmoParts2", JSON.stringify(gizmoParts));
@@ -1380,6 +1383,7 @@ export function createViewTab(els: Els) {
       });
       viewer.onPostRender = nav.update;
       viewer.rig.setGizmoParts(gizmoParts);
+      viewer.blenderRig.setGizmoParts(gizmoParts);
       viewer.setEntityGizmoParts(characterGizmoParts);
       viewer.setGizmoSpace(gizmoLocal);
       viewer.setShading(shading);
@@ -1395,6 +1399,16 @@ export function createViewTab(els: Els) {
       viewer.rig.onEdit = () => {
         els.pose.hud.undo.disabled = !selected?.actor.canUndo;
         els.pose.hud.redo.disabled = !selected?.actor.canRedo;
+      };
+      viewer.blenderRig.onSelect = () => syncPoseUi();
+      viewer.blenderRig.onEdit = () => {
+        els.pose.hud.undo.disabled = !selected?.actor.canUndo;
+        els.pose.hud.redo.disabled = !selected?.actor.canRedo;
+        rigControls?.refresh();
+      };
+      viewer.blenderRig.onModal = (text) => {
+        els.pose.hud.status.textContent = text ?? "";
+        if (text === null) syncPoseUi();
       };
       viewer.rig.onModal = (text) => {
         // the G / R transform's hint, over the view (nothing when it ends)
@@ -2517,6 +2531,9 @@ export function createViewTab(els: Els) {
 
   const P = els.pose;
   const H = P.hud;
+  /** The panel of a Blender rig (desktop, personal use). */
+  let rigControls: RigControls | null = null;
+  if (!__WEB__) rigControls = createRigControls({ slot: H.rigSlot, button: H.rigButton, setMode: (on) => H.setRigMode(on), viewer: () => viewer, actor: () => selected?.actor ?? null, cls: () => selected?.cls ?? "", changed: () => { els.pose.hud.undo.disabled = !selected?.actor.canUndo; els.pose.hud.redo.disabled = !selected?.actor.canRedo; } });
   /** The class whose poses the library shows now (it follows the selected character). */
   let libraryClass = "";
 
@@ -2530,6 +2547,7 @@ export function createViewTab(els: Els) {
     if (!posing && v.rig.actor) v.rig.setActor(null);
     if (posing) v.rig.setGroups(activeGroups());
     H.root.hidden = !posing;
+    rigControls?.sync(posing);
     v.setActorGizmo(posing ? null : gizmoEntity?.actor ?? null);
     applyGizmoParts();
     if (posing) H.keepMapInside();
@@ -3015,6 +3033,7 @@ export function createViewTab(els: Els) {
   /** After the pose was changed by something other than the rig's own controls. */
   function poseChangedElsewhere() {
     viewer?.rig.afterExternalChange();
+    if (viewer?.blenderRig.active) viewer.blenderRig.afterExternalChange();
     syncPoseUi();
   }
   H.undo.onclick = () => {

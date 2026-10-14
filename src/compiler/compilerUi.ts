@@ -68,6 +68,8 @@ export interface CompilerHost {
   /** Builds the item on the native side and returns what to tell the artist (and the archive's path, to show it). */
   build(request: ItemBuildRequest): Promise<{ ok: boolean; message: string; path?: string }>;
   reveal?(path: string): void;
+  /** Writes a copy of a model (`adjusted_<name>.fbx`, `temp_<name>_lod1.fbx`) beside the original. Desktop only. */
+  writeModel?(path: string, bytes: Uint8Array): Promise<void>;
 }
 
 const STORAGE_KEY = "tf2workbench.compiler";
@@ -355,9 +357,26 @@ export function createCompilerUi(host: CompilerHost) {
       list.append(row);
     }
     const out: HTMLElement[] = [list];
+    if (host.writeModel && Object.keys(session.data.turns).length) {
+      const exportCopy = h("button", { textContent: "Export adjusted FBX", title: "Write a copy of each model file of the item, with the turned axes in it, beside the original as adjusted_<name>.fbx; the item then uses those files (the importer builds from the FBX, so it gets the axes too)" });
+      exportCopy.onclick = () => void exportAdjusted();
+      out.push(h("div", { className: "row2" }, exportCopy));
+    }
     const bone = itemBones.find((b) => b.name === selectedBone);
     if (bone) out.push(boneEditor(bone));
     return out;
+  }
+
+  /** Writes the item's models as adjusted_*.fbx beside the originals, with the turned axes in them, and points the item at the copies. */
+  async function exportAdjusted() {
+    if (!host.writeModel) return;
+    try {
+      const done = await session.exportAdjusted((path, bytes) => host.writeModel!(path, bytes));
+      status = done.length ? `Wrote ${done.length} file${done.length === 1 ? "" : "s"} (adjusted_*.fbx beside the originals). The item uses them now, with the axes in them.` : "No model file to write.";
+    } catch (error) {
+      status = error instanceof Error ? error.message : String(error);
+    }
+    changed(true);
   }
 
   /** Puts the copied jiggle on bones: all of it but the length, which belongs to the bone (a bone that has none yet gets the length of its own span). */
@@ -477,6 +496,7 @@ export function createCompilerUi(host: CompilerHost) {
     region.onchange = () => { d.region = region.value; changed(false); };
     const teamSwitch = checkbox("Team colours", d.teamColors, (on) => { session.setTeamColors(on); changed(true); }, "A RED and a BLU skin: each material gets a BLU diffuse texture and its own tints; the other textures are shared");
     const smartFill = checkbox("Smart fill", d.smartFill, (on) => { d.smartFill = on; changed(false); }, SMART_FILL_RULES);
+    const tempLods = checkbox("Temporary LODs", d.tempLods, (on) => { d.tempLods = on; changed(true); }, "LOD 1 and LOD 2 that have no file are made from LOD 0: lighter copies that fit the triangle budgets and keep every material, with the skin of LOD 0. To try the item in the game before the real LODs are made; they are built into the item like real ones.");
     const bodygroups = h("div", { className: "chips" });
     for (const b of BODYGROUPS) {
       const chip = h("span", { className: "chip" + (d.bodygroups.includes(b) ? " active" : ""), textContent: b.replace(/_/g, " "), title: `Hides the ${b.replace(/_/g, " ")} of the class` });
@@ -491,11 +511,11 @@ export function createCompilerUi(host: CompilerHost) {
       const model = session.model(cls, i);
       const budget = TRIANGLE_BUDGET[i];
       const info = model
-        ? `${model.triangles} triangles of ${budget}, ${model.vertices} vertices, ${model.materials.length} material${model.materials.length === 1 ? "" : "s"}`
+        ? `${session.isTemp(cls, i) ? "temporary: " : ""}${model.triangles} triangles of ${budget}, ${model.vertices} vertices, ${model.materials.length} material${model.materials.length === 1 ? "" : "s"}`
         : files[i] ? "" : i === 0 ? (session.isMulticlass() || !session.classesWithModels().length ? "required" : `optional: leave empty for a ${cls} without the item`) : "optional";
       const key = `lod${i}:${cls}`;
       const bad = !!note(key) || session.failures.has(files[i]);
-      return fileRow(`LOD ${i}`, files[i], "fbx", (p) => void session.setLod(cls, i, p).then(() => changed(true)), note(key) || (session.failures.get(files[i]) ?? info), bad ? "x" : "", true);
+      return fileRow(`LOD ${i}`, files[i], "fbx", (p) => void session.setLod(cls, i, p).then(() => changed(true)), note(key) || (session.failures.get(files[i]) ?? info), bad ? "x" : "");
     });
     const lodGrid = h("div", { className: "cmpLods" }, ...lods);
 
@@ -571,6 +591,12 @@ Choose another .tga` : "Choose the backpack icon (.tga)" });
     }
 
     const list = h("ul", { className: "cmpIssues" });
+    const missing = session.failedPaths().length;
+    if (missing) {
+      const drop = h("button", { textContent: `Remove the ${missing} file${missing === 1 ? "" : "s"} that could not be read`, title: "Take the missing or unreadable files out of the item" });
+      drop.onclick = () => { session.dropFailed(); changed(true); };
+      list.append(h("li", {}, drop));
+    }
     if (issues.length === 0) list.append(h("li", { className: "ok", textContent: "Ready to build." }));
     for (const i of issues) list.append(h("li", { className: i.level, textContent: i.text }));
     const errors = issues.filter((i) => i.level === "error").length;
@@ -591,6 +617,7 @@ Choose another .tga` : "Choose the backpack icon (.tga)" });
           h("label", { className: "cmpNum" }, h("span", { textContent: "Region" }), region),
           teamSwitch,
           smartFill,
+          tempLods,
           select("Compression", d.compression, [{ value: "none", label: "None" }, { value: "dxt", label: "DXT" }], (v) => { d.compression = v; changed(false); }),
           h("label", { textContent: "Hides" }), bodygroups),
         h("div", { className: "cmpIcon" },
@@ -650,6 +677,7 @@ Choose another .tga` : "Choose the backpack icon (.tga)" });
   function changed(restructure: boolean) {
     save();
     void restructure;
+    status = ""; // what the last build said is about what was there then
     schedule();
     render();
   }
@@ -697,6 +725,8 @@ Choose another .tga` : "Choose the backpack icon (.tga)" });
     try {
       const sel = host.selection();
       if (!sel) throw new Error("Select a character first.");
+      // the temporary LODs are files too, so that the session file of the item can be opened again
+      if (host.writeModel) await session.writeTempLods((path, bytes) => host.writeModel!(path, bytes));
       const result = await host.build(makeBuildRequest(session, sel.cls));
       status = result.message;
       builtPath = result.ok ? result.path ?? "" : "";

@@ -151,7 +151,7 @@ export const sourceSiblings = (path: string) => invoke<string[]>("source_sibling
 export interface ItemBuildRequest {
   name: string; displayName: string; prefab: string; equipRegion: string; bodygroups: string[]; paintable: boolean;
   /** The classes with a model of their own (one: that class's folder; several: an all-class item), each with its LODs. */
-  classes: { folder: string; /** QC commands added to the class's QC (the `$jigglebone` blocks). */ qcExtra: string; lods: { sourcePath: string; smd: string; /** The model as a binary .dmx (bytes) when it has flexes: the smd is empty then. */ dmx?: number[]; triangles: number; vertices: number }[] }[];
+  classes: { folder: string; /** QC commands added to the class's QC (the `$jigglebone` blocks). */ qcExtra: string; /** The commands inside its LOD 1 and LOD 2 blocks (bone commands, `nofacial`). */ lodCommands?: string[][]; lods: { sourcePath: string; smd: string; /** The model as a binary .dmx (bytes) when it has flexes: the smd is empty then. */ dmx?: number[]; triangles: number; vertices: number }[] }[];
   materials: { sourceName: string; vmt: string; color: string | null; normal: string | null; phongexponent: string | null; illum: string | null; blue: { vmt: string; color: string | null } | null }[];
   icon: string;
   /** How the model textures are stored: DXT (the importer's), or exact pixels. */
@@ -201,6 +201,9 @@ export const importSourceDir = () => invoke<string>("import_source_dir");
 export const readItemSession = (path: string) => invoke<string>("read_item_session", { path });
 export const writeBinaryFile = (path: string, bytes: Uint8Array) =>
   invoke<void>("write_binary_file", bytes, { headers: { path: encodeURIComponent(path) } });
+/** Writes a copy of a model (an `adjusted_*.fbx` or `temp_*.fbx` file) beside the original. */
+export const writeAdjustedModel = (path: string, bytes: Uint8Array) =>
+  invoke<void>("write_adjusted_model", bytes, { headers: { path: encodeURIComponent(path) } });
 /** The scene of the last session (JSON text) and its autosave. */
 export const loadSession = () => invoke<string | null>("load_session");
 export const saveSession = (contents: string) => invoke<void>("save_session", { contents });
@@ -239,3 +242,8 @@ export const playerGibs=(path:string)=>invoke<GibDefinition[]>("player_gibs",{pa
 
 export interface ModelPhysics {solids:{index:number;bone:string;mass:number}[];joints:{parent:number;child:number;min:number[];max:number[];friction:number[]}[];collisionPairs:number[][];collisionRules?:boolean;selfCollisions?:boolean}
 export const modelPhysics=(path:string)=>invoke<ModelPhysics>("model_physics",{path});
+
+/** Blender executables found on this machine, newest first (desktop). */
+export const findBlender = () => invoke<string[]>("find_blender");
+/** The rig of a .blend file as JSON, read with Blender in the background (`blender`: the executable, empty for the newest found). */
+export const exportBlendRig = (blend: string, blender: string) => invoke<string>("export_blend_rig", { blend, blender });

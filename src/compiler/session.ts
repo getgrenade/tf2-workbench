@@ -1,5 +1,9 @@
 import type { MaterialData, ModelData, TextureData } from "../viewer/payload";
 import type { ImportedModel } from "./fbx";
+import { decimateModel } from "./decimate";
+import { transferSkin } from "./skinTransfer";
+import { applyBoneRemap, boneRemap, lodCommandLines, lodCommands } from "./lodBones";
+import { writeFbx } from "./fbxWrite";
 import { importModel } from "./importModel";
 import { decodeTga, iconProblem, textureProblem, type TextureKind, type TgaImage } from "./tga";
 import { buildPreviewMaterial, buildPreviewModel, type PreviewBone, type PreviewTextures } from "./preview";
@@ -77,6 +81,8 @@ export interface CompilerData {
   turns: Record<string, BoneTurn>;
   /** Picking a model or texture fills the rest from the names of the files beside it (see the interface for the rules). */
   smartFill: boolean;
+  /** LOD 1 and 2 that are not given are made from LOD 0 (lighter copies that fit the budgets), to try the item in the game before the real ones exist. */
+  tempLods: boolean;
   icon: string;
   /** How the textures are stored: DXT as the importer makes them, or exact pixels (to see whether the game takes them). */
   compression: "dxt" | "none";
@@ -85,7 +91,7 @@ export interface CompilerData {
 export const blankMaterial = (): CompilerMaterial => ({ color: "", blueColor: "", blueTint: null, normal: "", phongexponent: "", illum: "", settings: { ...DEFAULT_MATERIAL, customProxies: [] } });
 
 export const blankData = (): CompilerData => ({
-  name: "", displayName: "", prefab: "hat", region: "hat", bodygroups: ["hat"], classes: {}, materials: {}, teamColors: false, smartFill: true, jiggles: {}, turns: {}, icon: "", compression: "dxt",
+  name: "", displayName: "", prefab: "hat", region: "hat", bodygroups: ["hat"], classes: {}, materials: {}, teamColors: false, smartFill: true, tempLods: false, jiggles: {}, turns: {}, icon: "", compression: "dxt",
 });
 
 export interface Issue { key: string; level: "error" | "warning"; text: string }
@@ -120,6 +126,8 @@ export class CompilerSession {
   private readonly images = new Map<string, LoadedImage>();
   /** Why a path could not be read, by path. */
   readonly failures = new Map<string, string>();
+  /** The version of a file that could not be read when it was last tried again (it is not tried again until it changes). */
+  private readonly retried = new Map<string, number>();
   icon: LoadedImage | null = null;
   private readonly ramps = new Map<string, TextureData | null>();
   private readonly cubemaps = new Map<string, TextureData[] | null>();
@@ -288,13 +296,149 @@ export class CompilerSession {
       const stamp = await this.io.stamp(this.icon.path);
       if (stamp !== null && stamp !== this.icon.stamp) { await this.setIcon(this.icon.path); changed = true; }
     }
+    // a texture or the icon that could not be read is tried again when the file is there (and different) now
+    for (const path of this.failedPaths()) {
+      if (this.images.has(path) || Object.values(this.data.classes).some((files) => files.includes(path))) continue;
+      const stamp = await this.io.stamp(path);
+      if (stamp === null || this.retried.get(path) === stamp) continue;
+      this.retried.set(path, stamp);
+      if (this.data.icon === path) await this.setIcon(path); else await this.loadImage(path);
+      if (!this.failures.has(path)) changed = true;
+    }
     if (changed) { this.syncMaterials(); this.onChange(); }
     return changed;
   }
 
+  // --- the adjusted copy of the models ---------------------------------------------------------------------------------
+
+  /**
+   * Writes each model file of the item as an FBX beside the original, named `adjusted_<name>.fbx`, with the turned axes of the bones in it
+   * (what the item importer builds from), then makes those files the item's models and takes the turns off (they are in the files now).
+   * Nothing changes when a file cannot be written. Returns the paths written.
+   */
+  async exportAdjusted(write: (path: string, bytes: Uint8Array) => Promise<void>): Promise<string[]> {
+    const jobs: { cls: string; index: number; from: string; to: string; bytes: Uint8Array }[] = [];
+    for (const [cls, files] of Object.entries(this.data.classes)) {
+      files.forEach((from, index) => {
+        const loaded = this.models.get(cls)?.[index];
+        if (!from || !loaded) return;
+        const slash = Math.max(from.lastIndexOf("/"), from.lastIndexOf("\\"));
+        const file = from.slice(slash + 1).replace(/\.[^.]*$/, "");
+        const to = `${from.slice(0, slash + 1)}${/^adjusted_/i.test(file) ? file : `adjusted_${file}`}.fbx`;
+        jobs.push({ cls, index, from, to, bytes: writeFbx(loaded.model, this.data.turns) });
+      });
+    }
+    for (const job of jobs) await write(job.to, job.bytes);
+    for (const job of jobs) { this.data.classes[job.cls][job.index] = job.to; this.loaded(job.cls)[job.index] = null; this.failures.delete(job.from); }
+    this.data.turns = {};
+    for (const job of jobs) await this.loadModel(job.cls, job.index);
+    this.syncMaterials();
+    this.onChange();
+    return jobs.map((j) => j.to);
+  }
+
+  // --- the temporary LODs as files ------------------------------------------------------------------------------------
+
+  /** Where the temporary LODs of each class were written (`sniper:1` -> the path), so that the session file names real files. */
+  private readonly tempFiles = new Map<string, string>();
+  tempLodFile(cls: string, index: number): string { return this.tempFiles.get(`${cls}:${index}`) ?? ""; }
+
+  /**
+   * Writes the temporary LODs (see `tempLods`) as FBX files in the folder of the class's LOD 0, named `temp_<name of LOD 0>_lod1.fbx`, so that
+   * what the item's session file names exists on disk and the item opens again from it. They are the lighter copies as they are made (the
+   * turned axes are not in them: they are in LOD 0 when it is the adjusted copy). A file is written again each time.
+   */
+  async writeTempLods(write: (path: string, bytes: Uint8Array) => Promise<void>): Promise<string[]> {
+    const written: string[] = [];
+    for (const cls of Object.keys(this.data.classes)) {
+      const from = this.lods(cls)[0];
+      if (!from) continue;
+      const slash = Math.max(from.lastIndexOf("/"), from.lastIndexOf("\\"));
+      const base = from.slice(slash + 1).replace(/\.[^.]*$/, "").replace(/^temp_/i, "").replace(/[_. -]?lod0$/i, ""); // hat_lod0 -> hat_lod1: the name without its LOD number
+      for (let i = 1; i < NUM_LODS; i++) {
+        if (!this.isTemp(cls, i)) { this.tempFiles.delete(`${cls}:${i}`); continue; }
+        const model = this.model(cls, i);
+        if (!model || model.flexes?.length) continue;
+        const to = `${from.slice(0, slash + 1)}temp_${base}_lod${i}.fbx`;
+        await write(to, writeFbx(model, {}, { skeleton: false }));
+        this.tempFiles.set(`${cls}:${i}`, to);
+        written.push(to);
+      }
+    }
+    return written;
+  }
+
+  // --- files that could not be read ---------------------------------------------------------------------------------
+
+  /** Every file the item names now: the models, the textures, the icon. */
+  referencedPaths(): Set<string> {
+    const out = new Set<string>();
+    for (const files of Object.values(this.data.classes)) for (const p of files) if (p) out.add(p);
+    for (const m of Object.values(this.data.materials)) for (const p of [m.color, m.blueColor, m.normal, m.phongexponent, m.illum]) if (p) out.add(p);
+    if (this.data.icon) out.add(this.data.icon);
+    return out;
+  }
+
+  /** The files the item names that could not be read (gone, or not a model / texture). A file that was swapped for another is not one of them. */
+  failedPaths(): string[] {
+    const named = this.referencedPaths();
+    return [...this.failures.keys()].filter((p) => named.has(p));
+  }
+
+  /** Takes the files that could not be read out of the item (a model, a texture or the icon that is gone), and forgets what was said about them. */
+  dropFailed() {
+    const failed = new Set(this.failedPaths());
+    for (const [cls, files] of Object.entries(this.data.classes)) {
+      files.forEach((p, i) => { if (failed.has(p)) { files[i] = ""; this.loaded(cls)[i] = null; this.auto.delete(`${cls}:lod${i}`); } });
+      if (files.every((p) => !p)) { delete this.data.classes[cls]; this.models.delete(cls); }
+    }
+    for (const [name, m] of Object.entries(this.data.materials)) {
+      for (const role of ["color", "blueColor", "normal", "phongexponent", "illum"] as const) if (failed.has(m[role])) { m[role] = ""; this.auto.delete(`${name}:${role}`); }
+    }
+    if (failed.has(this.data.icon)) { this.data.icon = ""; this.icon = null; }
+    for (const p of [...this.failures.keys()]) this.failures.delete(p);
+    this.syncMaterials();
+    this.onChange();
+  }
+
   // --- what was read ------------------------------------------------------------------------------------------------
 
-  model(cls: string, index: number): ImportedModel | null { return this.models.get(cls)?.[index]?.model ?? null; }
+  model(cls: string, index: number): ImportedModel | null { return this.loadedLods(cls)[index]?.model ?? null; }
+
+  /** The LODs of a class as the item has them: the files that were read, and the temporary ones for the LODs after the first that have none (when that is on). */
+  private loadedLods(cls: string): (LoadedModel | null)[] {
+    const real = this.models.get(cls) ?? [null, null, null];
+    if (!this.data.tempLods || !real[0]) return real;
+    return real.map((m, i) => m ?? (i > 0 ? { path: "", stamp: 0, model: this.tempLod(real[0]!.model, i) } : null));
+  }
+
+  private readonly temps = new WeakMap<ImportedModel, Map<number, ImportedModel>>();
+
+  private tempLod(lod0: ImportedModel, index: number): ImportedModel {
+    let made = this.temps.get(lod0);
+    if (!made) this.temps.set(lod0, (made = new Map()));
+    let model = made.get(index);
+    if (!model) {
+      // each one lighter than the one before, and never over its budget
+      model = decimateModel(lod0, Math.min(TRIANGLE_BUDGET[index], Math.floor(lod0.triangles * (index === 1 ? 0.6 : 0.3))));
+      made.set(index, model);
+    }
+    return model;
+  }
+
+  private readonly skinned = new WeakMap<ImportedModel, Map<ImportedModel, ImportedModel>>();
+
+  /** A LOD for the preview: with the skin of LOD 0 where it has none. */
+  private skinnedLike(lod0: ImportedModel, lod: ImportedModel): ImportedModel {
+    let byLod0 = this.skinned.get(lod);
+    if (!byLod0) this.skinned.set(lod, (byLod0 = new Map()));
+    let made = byLod0.get(lod0);
+    if (!made) byLod0.set(lod0, (made = transferSkin(lod0, lod)));
+    return made;
+  }
+
+  /** Whether a LOD is one the session made (it has no file). */
+  isTemp(cls: string, index: number): boolean { return this.data.tempLods && index > 0 && !!this.models.get(cls)?.[0] && !this.models.get(cls)?.[index]; }
   image(path: string): TgaImage | null { return this.images.get(path)?.image ?? null; }
 
   /** The classes the item has models for, in the order they were given. */
@@ -411,7 +555,9 @@ export class CompilerSession {
     const out: Issue[] = [];
     const error = (key: string, text: string) => out.push({ key, level: "error", text });
     const warn = (key: string, text: string) => out.push({ key, level: "warning", text });
-    for (const [path, message] of this.failures) error(`file:${path}`, `${fileName(path)}: ${message}`);
+    // only the files the item names now: one that was swapped for another says nothing any more
+    const named = this.referencedPaths();
+    for (const [path, message] of this.failures) if (named.has(path)) error(`file:${path}`, `${fileName(path)}: ${message}`);
     if (!this.itemName) error("name", "The item needs a name.");
     else if (this.itemName !== this.data.name.trim()) warn("name", `Files will be named "${this.itemName}".`);
     const classes = this.classesWithModels();
@@ -419,7 +565,7 @@ export class CompilerSession {
     const counts: { cls: string; lods: number; materials: number }[] = [];
     for (const cls of classes) {
       const where = classes.length > 1 ? ` of ${cls}` : "";
-      const models = this.models.get(cls) ?? [null, null, null];
+      const models = this.loadedLods(cls);
       if (!models[0]) error(`lod0:${cls}`, `Add the model${where} (LOD 0).`);
       let previous = models[0]?.model.materials.length ?? 0;
       for (let i = 0; i < NUM_LODS; i++) {
@@ -475,6 +621,19 @@ export class CompilerSession {
 
   // --- the preview ----------------------------------------------------------------------------------------------------
 
+  /**
+   * The commands the QC of a class's model gets inside its LOD 1 and LOD 2 blocks: the bones the class gives up there that the item's skin uses
+   * (`bonetreecollapse`, `replacebone`; see lodBones.ts), and `nofacial` at LOD 2 for an item with shape keys.
+   */
+  lodQcCommands(cls: string): [string[], string[]] {
+    const loaded = this.loadedLods(cls);
+    const lod0 = loaded[0]?.model;
+    if (!lod0) return [[], []];
+    const lines = ([1, 2] as const).map((lod) => lodCommandLines(lodCommands(cls, lod, [lod0, ...(loaded[lod] ? [loaded[lod]!.model] : [])])));
+    if (lod0.flexes?.length) lines[1].push("nofacial");
+    return [lines[0], lines[1]];
+  }
+
   /** The `$jigglebone` blocks of a class's model: the bones of the model that have a setup (a bone another class's model lacks is left out of that class). */
   jiggleQc(cls: string): string {
     const model = this.model(cls, 0);
@@ -483,16 +642,25 @@ export class CompilerSession {
 
   /** The cosmetic the viewer shows for the item on a class, with the materials it needs; null while that class has no model. */
   async preview(classData: ModelData, cls: string, lod = 0): Promise<{ data: ModelData; materials: Map<string, MaterialData>; customBones: string[]; skeleton: PreviewBone[]; bodygroups: Record<string, number> } | null> {
-    const lod0 = this.models.get(cls)?.[0];
+    const lod0 = this.loadedLods(cls)[0];
     if (!lod0) return null;
     // the LOD the viewer is at: the item's own file for it, or the nearest lower one it was given (as the game falls back)
     let shown = lod0;
-    for (let i = Math.min(lod, NUM_LODS - 1); i > 0; i--) if (this.models.get(cls)?.[i]) { shown = this.models.get(cls)![i]!; break; }
+    for (let i = Math.min(lod, NUM_LODS - 1); i > 0; i--) { const given = this.loadedLods(cls)[i]; if (given) { shown = given; break; } }
     const names = this.materialNames();
     const name = this.itemName || "item";
     const materialPath = (index: number, team: Team = 0) => `materials/models/${this.itemFolder(cls)}/${materialFileName(name, index, team)}.vmt`;
     const own = lod0.model.materials;
-    const result = buildPreviewModel(shown.model, classData, `models/${this.itemFolder(cls)}/${this.modelFile(cls) || "item"}.mdl`, (material) => {
+    // a LOD that came without a skin (the game's importer gives it LOD 0's) is shown with LOD 0's, and gives up the bones the class gives up there
+    let shownModel = shown === lod0 ? lod0.model : this.skinnedLike(lod0.model, shown.model);
+    if (shown !== lod0) {
+      const at = this.loadedLods(cls).indexOf(shown);
+      if (at === 1 || at === 2) {
+        const skeleton = lod0.model.skeleton.length ? lod0.model.skeleton : shown.model.skeleton;
+        shownModel = applyBoneRemap(shownModel, boneRemap(lodCommands(cls, at, [lod0.model, shown.model]), skeleton));
+      }
+    }
+    const result = buildPreviewModel(shownModel, classData, `models/${this.itemFolder(cls)}/${this.modelFile(cls) || "item"}.mdl`, (material) => {
       const index = Math.min(MAX_MATERIALS - 1, Math.max(0, own.indexOf(material)));
       // RED, then BLU: the same material without team colours
       return [materialPath(index), materialPath(index, this.data.teamColors ? 1 : 0)];
@@ -551,7 +719,7 @@ export class CompilerSession {
       prefab: PREFABS.includes(s.prefab as Prefab) ? (s.prefab as Prefab) : blank.prefab,
       region: str(s.region, blank.region),
       bodygroups: Array.isArray(s.bodygroups) ? s.bodygroups.filter((b): b is string => BODYGROUPS.includes(b as string)) : blank.bodygroups,
-      classes, materials: {}, teamColors: s.teamColors === true, smartFill: s.smartFill !== false, icon: str(s.icon, ""), compression: s.compression === "none" ? "none" : "dxt",
+      classes, materials: {}, teamColors: s.teamColors === true, smartFill: s.smartFill !== false, tempLods: s.tempLods === true, icon: str(s.icon, ""), compression: s.compression === "none" ? "none" : "dxt",
       jiggles: Object.fromEntries(Object.entries(s.jiggles && typeof s.jiggles === "object" ? s.jiggles : {}).map(([bone, setup]) => [bone, readJiggle(setup)])),
       turns: Object.fromEntries(Object.entries(s.turns && typeof s.turns === "object" ? s.turns : {}).flatMap(([bone, turn]): [string, BoneTurn][] => (Array.isArray(turn) && turn.length === 3 && turn.every((v) => typeof v === "number" && Number.isFinite(v)) ? [[bone, [turn[0], turn[1], turn[2]]]] : []))),
     };

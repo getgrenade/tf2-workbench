@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod blender;
 mod commands;
 mod payload;
 mod settings;
@@ -15,6 +16,8 @@ fn main() {
         .manage(native_particles::NativeParticles::default())
         .manage(play_mouse::PlayMouse::default())
         .invoke_handler(tauri::generate_handler![
+            blender::find_blender,
+            blender::export_blend_rig,
             play_mouse::play_mouse_start,
             play_mouse::play_mouse_stop,
             commands::find_tf2,
@@ -64,6 +67,7 @@ fn main() {
             commands::source_stamp,
             commands::source_siblings,
             commands::write_binary_file,
+            commands::write_adjusted_model,
             commands::save_item_icon,
             commands::import_source_dir,
             commands::read_item_session,

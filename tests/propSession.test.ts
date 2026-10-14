@@ -191,3 +191,31 @@ test("a rim light is written with phong, with its own exponent and boost", () =>
   assert.match(on, /"\$rimlightboost"\t\t"2"/);
   assert.doesNotMatch(propVmt("a", "b", textures, { ...DEFAULT_PROP_MATERIAL, phong: true }, "wood"), /rimlight/);
 });
+
+test("a file that could not be read stops being an error when another one is picked, and can be dropped", async () => {
+  const files: Record<string, ArrayBuffer> = { "C:/art/crate.smd": bytes(SMD("crate")), "C:/art/crate_diffuse.tga": tga(64) };
+  const s = new PropSession(io(files));
+  s.data.name = "crate";
+  await s.setLod(0, "C:/art/gone.smd"); // not there
+  assert.deepEqual(s.failedPaths(), ["C:/art/gone.smd"]);
+  await s.setLod(0, "C:/art/crate.smd");
+  assert.deepEqual(s.failedPaths(), [], "the file that was swapped out says nothing any more");
+  s.data.lods[2] = "C:/art/lost.smd";
+  await s.loadAll();
+  assert.deepEqual(s.failedPaths(), ["C:/art/lost.smd"]);
+  s.dropFailed();
+  assert.equal(s.data.lods[2], "");
+  assert.deepEqual(s.failedPaths(), []);
+  assert.deepEqual(s.issues().filter((i) => /lost/.test(i.text)), []);
+});
+
+test("a file that could not be read is read when it appears", async () => {
+  const files: Record<string, ArrayBuffer> = {};
+  const s = new PropSession(io(files));
+  await s.setLod(0, "C:/art/late.smd");
+  assert.equal(s.failedPaths().length, 1);
+  files["C:/art/late.smd"] = bytes(SMD("crate"));
+  assert.equal(await s.refresh(), true);
+  assert.deepEqual(s.failedPaths(), []);
+  assert.ok(s.model(0));
+});

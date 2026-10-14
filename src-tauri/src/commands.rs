@@ -61,7 +61,7 @@ pub struct ItemBuildRequest {
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ClassRequest { folder: String, #[serde(default)] qc_extra: String, lods: Vec<LodRequest> }
+pub struct ClassRequest { folder: String, #[serde(default)] qc_extra: String, #[serde(default)] lod_commands: Vec<Vec<String>>, lods: Vec<LodRequest> }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LodRequest { source_path: String, smd: String, #[serde(default)] dmx: Option<Vec<u8>>, triangles: u32, vertices: u32 }
@@ -138,7 +138,7 @@ pub async fn build_item(state: State<'_, AppState>, request: ItemBuildRequest) -
         name: request.name, display_name: request.display_name, prefab: request.prefab, equip_region: request.equip_region,
         bodygroups: request.bodygroups, paintable: request.paintable, icon: PathBuf::from(request.icon),
         compression: if request.compression == "none" { source_formats::vtf_write::Compression::None } else { source_formats::vtf_write::Compression::Dxt },
-        classes: request.classes.into_iter().map(|c| ClassSpec { folder: c.folder, qc_extra: c.qc_extra, lods: c.lods.into_iter().map(|l| LodSpec { source_path: l.source_path, smd: l.smd, dmx: l.dmx, triangles: l.triangles, vertices: l.vertices }).collect() }).collect(),
+        classes: request.classes.into_iter().map(|c| ClassSpec { folder: c.folder, qc_extra: c.qc_extra, lod_commands: c.lod_commands, lods: c.lods.into_iter().map(|l| LodSpec { source_path: l.source_path, smd: l.smd, dmx: l.dmx, triangles: l.triangles, vertices: l.vertices }).collect() }).collect(),
         materials: request.materials.into_iter().map(|m| MaterialSpec { source_name: m.source_name, vmt: m.vmt, color: path(m.color), normal: path(m.normal), phongexponent: path(m.phongexponent), illum: path(m.illum), blue: m.blue.map(|b| BlueSpec { vmt: b.vmt, color: path(b.color) }) }).collect(),
     };
     let out = tf.join("workshop").join("import_source");
@@ -728,6 +728,20 @@ pub fn write_binary_file(request: tauri::ipc::Request<'_>) -> Result<(), String>
     let path = request.headers().get("path").and_then(|v| v.to_str().ok()).ok_or("missing path header")?;
     let decoded = percent_decode(path);
     std::fs::write(output_path(&decoded)?, bytes).map_err(|e| e.to_string())
+}
+
+/// Writes a copy of an artist's model beside the original (the adjusted copy, or a temporary LOD): the raw body to the path in the `path`
+/// header (percent-encoded), which has to be an .fbx whose name starts with `adjusted_` or `temp_` (nothing else is written this way, and no
+/// file of another name is replaced).
+#[tauri::command]
+pub fn write_adjusted_model(request: tauri::ipc::Request<'_>) -> Result<(), String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else { return Err("expected a raw body".into()) };
+    let path = request.headers().get("path").and_then(|v| v.to_str().ok()).ok_or("missing path header")?;
+    let path = PathBuf::from(percent_decode(path));
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_ascii_lowercase();
+    let is_fbx = path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("fbx"));
+    if !is_fbx || !(name.starts_with("adjusted_") || name.starts_with("temp_")) { return Err(format!("refusing to write {}: only adjusted_*.fbx and temp_*.fbx files", path.display())); }
+    std::fs::write(&path, bytes).map_err(|e| format!("Cannot write {}: {e}", path.display()))
 }
 
 fn percent_decode(s: &str) -> String {

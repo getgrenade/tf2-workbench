@@ -19,6 +19,8 @@ import { GroundShadow } from "./groundShadow";
 import { DEFAULT_GROUND, GroundPlane, type GroundState } from "./groundPlane";
 import { freeSlot, slotOffset } from "./layout";
 import { RigOverlay } from "./rigOverlay";
+import { BlenderRigOverlay } from "./blenderRigOverlay";
+import { BlenderRigNone, type BlenderRigApi } from "./blenderRigApi";
 import { GizmoSet, createGizmo, gizmoKey } from "./gizmos";
 import { turnMatrix, type BoneTurn } from "../compiler/boneAxes";
 import { cameraProjection } from "./cameraData";
@@ -184,6 +186,8 @@ export class Viewer {
   onLightChange: (l: LightState) => void = () => {};
   /** The control rig shown on a character that is being posed. */
   readonly rig: RigOverlay;
+  /** The controls of a Blender rig (desktop, personal use): shown instead of `rig` while one is in use. */
+  readonly blenderRig: BlenderRigApi;
   /** Called when the character being posed went back to playing an animation (the user picked a sequence). */
   onPoseEnded: () => void = () => {};
   /** Called when the user clicks a character in the view (null: the empty background). */
@@ -553,15 +557,16 @@ void main() {
     // grabbing the view yourself ends a running snap to an axis
     this.controls.addEventListener("start", () => this.viewAnim++);
     this.rig = new RigOverlay(this.camera, this.renderer.domElement, this.controls, this.scene);
+    this.blenderRig = __WEB__ ? new BlenderRigNone() : new BlenderRigOverlay(this.camera, this.renderer.domElement, this.controls, this.scene);
     this.cameras = new CameraRig(this.scene, this.camera, this.controls, container, this.renderer.domElement);
     this.cameraOverlay = new CameraOverlay(this.cameras, container);
-    this.cameras.onEnter = () => { this.viewAnim++; this.setActorGizmo(null); this.rig.setActor(null); };
+    this.cameras.onEnter = () => { this.viewAnim++; this.setActorGizmo(null); this.rig.setActor(null); this.blenderRig.setActor(null); };
     this.lightGizmos = new LightGizmos(this.scene, this.camera, this.controls, this.renderer.domElement,
       () => this.light.rig?.lights.find(l => l.id === this.light.rig?.selected) ?? null,
-      () => !!this.light.rig?.marker && !this.cameras.editing && !this.rig.active && !this.gizmoActor && !this.selectedActor?.isLive,
+      () => !!this.light.rig?.marker && !this.cameras.editing && !this.rig.active && !this.blenderRig.active && !this.gizmoActor && !this.selectedActor?.isLive,
       () => { this.updateLight(); this.updatePointLight(); this.onLightChange(this.getLight()); },
       () => this.light.rig?.lights ?? [],
-      () => this.lightIndicatorsOn && !this.rig.active && !this.selectedActor?.isLive);
+      () => this.lightIndicatorsOn && !this.rig.active && !this.blenderRig.active && !this.selectedActor?.isLive);
     // a directional light reaches the whole scene, so its gizmo is in the middle of it (not at whichever character is selected)
     this.lightGizmos.anchor = () => this.center;
     this.lightGizmos.reach = () => this.radius * 1.4;
@@ -603,7 +608,9 @@ void main() {
         this.rig.setActor(null);
         this.onPoseEnded();
       }
+      if (this.blenderRig.actor && !this.blenderRig.actor.isPosing) this.blenderRig.setActor(null);
       if (this.rig.active) this.rig.update();
+      if (this.blenderRig.active) this.blenderRig.update();
       this.mats.updateDynamic(now / 1000);
       if (!this.cameras.active) this.controls.update();
       this.updateLight();
@@ -1201,7 +1208,7 @@ void main() {
   /** The other selected characters, lights and cameras that the gizmo moves, turns and scales with the character it is on; the gizmo sits at their average. */
   /** True while the pointer is over a gizmo handle (of a character, a light, a camera or the pose rig): a press there belongs to the gizmo. */
   get gizmoHot(): boolean {
-    return [this.pointMove, this.entityMove, this.entityRotate, this.entityScale, this.entityView, this.entityViewMove].some((t) => t.enabled && t.axis !== null) || this.lightGizmos.hot || this.rig.gizmoHot || this.cameras.hot;
+    return [this.pointMove, this.entityMove, this.entityRotate, this.entityScale, this.entityView, this.entityViewMove].some((t) => t.enabled && t.axis !== null) || this.lightGizmos.hot || this.rig.gizmoHot || this.blenderRig.gizmoHot || this.cameras.hot;
   }
 
   /** True while a mouse transform (Shift + W / E / R) of a character, a light or a camera is in progress: the next click confirms it. */
@@ -1460,14 +1467,14 @@ void main() {
       const undo=hotkeyMatches("edit.undo",event),redo=!undo&&redoMatches(event);
       if(undo||redo) {
         const actor=this.gizmoActor??this.selectedActor;
-        if(!actor||actor.isPosing||actor.isLive||this.rig.active||this.entityModal||[this.entityMove,this.entityRotate,this.entityScale,this.entityView,this.entityViewMove].some(t=>t.dragging)) return;
+        if(!actor||actor.isPosing||actor.isLive||this.rig.active||this.blenderRig.active||this.entityModal||[this.entityMove,this.entityRotate,this.entityScale,this.entityView,this.entityViewMove].some(t=>t.dragging)) return;
         this.stepEntityHistory(redo);
         event.preventDefault();event.stopImmediatePropagation();
         return;
       }
       if(event.ctrlKey||event.metaKey) return;
       if(event.altKey) {
-        if(gizmoKey(event)&&!event.repeat&&!this.entityModal&&this.gizmoActor&&!this.rig.active&&this.entityPointer.inside&&![this.entityMove,this.entityRotate,this.entityScale,this.entityView,this.entityViewMove].some(t=>t.dragging)) {
+        if(gizmoKey(event)&&!event.repeat&&!this.entityModal&&this.gizmoActor&&!this.rig.active&&!this.blenderRig.active&&this.entityPointer.inside&&![this.entityMove,this.entityRotate,this.entityScale,this.entityView,this.entityViewMove].some(t=>t.dragging)) {
           const actor=this.gizmoActor;
           this.beginEntityEdit(actor);
           const tool=gizmoKey(event);
@@ -1493,7 +1500,7 @@ void main() {
         else return;
         event.preventDefault();event.stopImmediatePropagation();return;
       }
-      if(!this.gizmoActor||this.rig.active||!this.entityPointer.inside||event.repeat||[this.entityMove,this.entityRotate,this.entityScale,this.entityView,this.entityViewMove].some(t=>t.dragging)) return;
+      if(!this.gizmoActor||this.rig.active||this.blenderRig.active||!this.entityPointer.inside||event.repeat||[this.entityMove,this.entityRotate,this.entityScale,this.entityView,this.entityViewMove].some(t=>t.dragging)) return;
       const tool=event.shiftKey?gizmoKey(event):null;
       if(!tool) return;
       const actor=this.gizmoActor;
@@ -1707,7 +1714,7 @@ void main() {
 
   /** Everything drawn over the scene that is not part of it (gizmos, markers, camera and light symbols): left out of captures and of the shadow and lighting passes. */
   private get editorObjects(): THREE.Object3D[] {
-    return [this.gizmo, this.pointGizmo, this.pointMove.getHelper(), ...this.lightGizmos.objects, ...this.entityGizmos.objects, ...this.rig.objects, ...this.cameras.objects, ...(this.boneHelper ? [this.boneHelper.group] : []), ...(this.boneRotate ? this.boneRotate.set.objects : [])];
+    return [this.gizmo, this.pointGizmo, this.pointMove.getHelper(), ...this.lightGizmos.objects, ...this.entityGizmos.objects, ...this.rig.objects, ...this.blenderRig.objects, ...this.cameras.objects, ...(this.boneHelper ? [this.boneHelper.group] : []), ...(this.boneRotate ? this.boneRotate.set.objects : [])];
   }
 
   private buildGizmo() {
@@ -1795,6 +1802,7 @@ void main() {
       down = null;
       if (!d || e.button !== 0) return;
       if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4 || performance.now() - d.t > 600) return; // a drag orbits the camera
+      if (this.blenderRig.active) { this.blenderRig.select(this.blenderRig.pick(e.clientX, e.clientY) ?? null); return; }
       if (this.rig.active) {
         // while posing, a click on a control ring selects it; elsewhere it clears the selection. Characters and cosmetics cannot be clicked
         // then (no glow, no selection change, no paint chart): the clicks belong to the rig.
@@ -1808,6 +1816,7 @@ void main() {
       this.onPick(hit?.actor ?? null, hit ? { item: hit.item, x: e.clientX, y: e.clientY } : undefined, d.shift);
     });
     el.addEventListener("pointermove", (e) => {
+      if (this.blenderRig.active && e.buttons === 0) { const id = this.blenderRig.pick(e.clientX, e.clientY); if (this.blenderRig.hover(id)) el.style.cursor = id ? "pointer" : ""; return; }
       if (!this.rig.active || e.buttons !== 0) return;
       const id = this.rig.pick(e.clientX, e.clientY);
       if (this.rig.hover(id)) el.style.cursor = id ? "pointer" : "";
@@ -1901,6 +1910,7 @@ void main() {
     const space = local ? "local" : "world";
     this.entityGizmos.setSpace(space); this.cameras.setSpace(space); this.lightGizmos.setSpace(space);
     this.rig.setLocal(local);
+    this.blenderRig.setLocal(local);
   }
 
   private pickMaterials = new Map<number, THREE.ShaderMaterial>();

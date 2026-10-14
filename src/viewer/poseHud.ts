@@ -59,6 +59,11 @@ export interface PoseHud {
   poleDot: Map<LimbId, SVGElement>;
   /** A line under the toolbar for the hint of the transform in progress. */
   status: HTMLElement;
+  /** Where a Blender rig's controls go (in the map panel), the button in the panel's head that switches it on and off, and the switch that
+   * shows them in place of the body map and its buttons. */
+  rigSlot: HTMLElement;
+  rigButton: HTMLButtonElement;
+  setRigMode(on: boolean): void;
 }
 
 function svg<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string | number> = {}, parent?: Element): SVGElementTagNameMap[K] {
@@ -138,7 +143,16 @@ export function createPoseHud(host: HTMLElement): PoseHud {
   head.className = "phMapHead";
   head.title = "Drag to move this panel";
   head.innerHTML = '<span class="phGrip" aria-hidden="true"></span><span class="phMapTitle">Pose</span>';
+  const rigButton = document.createElement("button");
+  rigButton.className = "phRigBtn";
+  rigButton.textContent = "Blender rig";
+  rigButton.hidden = true;
+  head.appendChild(rigButton);
   map.appendChild(head);
+  const rigSlot = document.createElement("div");
+  rigSlot.className = "phRig";
+  rigSlot.hidden = true;
+  map.appendChild(rigSlot);
   const regions = new Map<string, SVGElement>();
   const limbSwitch = new Map<LimbId, SVGGElement>();
   const poleDot = new Map<LimbId, SVGElement>();
@@ -167,6 +181,11 @@ export function createPoseHud(host: HTMLElement): PoseHud {
   }
 
   map.appendChild(groups);
+  const setRigMode = (on: boolean) => {
+    figure.style.display = on ? "none" : "";
+    groups.hidden = on;
+    rigSlot.hidden = !on;
+  };
 
   // dragging the panel by its handle; the place is remembered
   let pos: { x: number; y: number } | null = null;
@@ -225,5 +244,5 @@ export function createPoseHud(host: HTMLElement): PoseHud {
 
   root.append(bar, status, map);
   host.appendChild(root);
-  return { root, show: show.input, mirror: mirror.input, eye: eye.input, undo, redo, resetBone, resetAll, library, groups, mapPanel: map, keepMapInside, regions, limbSwitch, poleDot, status };
+  return { root, show: show.input, mirror: mirror.input, eye: eye.input, undo, redo, resetBone, resetAll, library, groups, mapPanel: map, keepMapInside, regions, limbSwitch, poleDot, status, rigSlot, rigButton, setRigMode };
 }

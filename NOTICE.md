@@ -18,6 +18,7 @@ These are the files and folders that follow the SDK:
 | `crates/source-formats/src/mdl.rs`, `anim.rs` | the studio model and animation formats (`studio.h`, `studio.cpp`) |
 | `src/viewer/jiggle.ts`, `flex.ts`, `gaze.ts` | jiggle bones, flex controllers and eye gaze after the engine's code |
 | `src/viewer/proxies.ts`, `sourceShader.ts`, `eyeShader.ts` | material proxies and the shaders that imitate the engine's |
+| `src/compiler/classLods.ts` | the bone commands of the first two `$lod` blocks of the player classes (`modelsrc/player/<class>/scripts/<class>.qci` of the SDK content): bone names only |
 | `native/particle-probe/` | a small program that links Valve's particle libraries; it is built on your machine against your own copy of the SDK, which is not included here |
 
 Redistribution of this project, or of substantial portions of it, must stay free of charge and must keep the license file, the notices

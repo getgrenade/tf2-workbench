@@ -118,6 +118,8 @@ export class PropSession {
   data: PropData = blankPropData();
   /** What was wrong with each file the artist named (by path). */
   readonly failures = new Map<string, string>();
+  /** The version of a file that could not be read when it was last tried again (it is not tried again until it changes). */
+  private readonly retried = new Map<string, number>();
   private readonly models: (Loaded | null)[] = [null, null, null];
   private readonly images = new Map<string, LoadedImage>();
   private collisionText: { path: string; stamp: number; text: string } | null = null;
@@ -249,6 +251,60 @@ export class PropSession {
     this.syncMaterials();
     for (const m of Object.values(this.data.materials)) for (const p of [m.color, m.normal, m.phongexponent, m.illum]) if (p) await this.loadImage(p);
     if (this.data.collisionFile) await this.setCollisionFile(this.data.collisionFile);
+    this.onChange();
+  }
+
+  // --- files that could not be read ---------------------------------------------------------------------------------------------------
+
+  /** Every file the prop names now. */
+  referencedPaths(): Set<string> {
+    const d = this.data, out = new Set<string>();
+    for (const p of d.lods) if (p) out.add(p);
+    for (const m of Object.values(d.materials)) for (const p of [m.color, m.normal, m.phongexponent, m.illum]) if (p) out.add(p);
+    if (d.collisionFile) out.add(d.collisionFile);
+    return out;
+  }
+
+  /** Reads again the files that changed on disk since they were read (and the ones that could not be read, when they are there now); true when something did. */
+  async refresh(): Promise<boolean> {
+    let changed = false;
+    for (let i = 0; i < PROP_NUM_LODS; i++) {
+      const path = this.data.lods[i];
+      if (!path) continue;
+      const stamp = await this.io.stamp(path);
+      if (stamp !== null && (!this.models[i] || this.models[i]!.stamp !== stamp)) { await this.loadModel(i); changed = true; }
+    }
+    for (const [path, loaded] of [...this.images]) {
+      const stamp = await this.io.stamp(path);
+      if (stamp !== null && stamp !== loaded.stamp) { await this.loadImage(path); changed = true; }
+    }
+    for (const path of this.failedPaths()) {
+      if (this.data.lods.includes(path) || this.images.has(path)) continue;
+      const stamp = await this.io.stamp(path);
+      if (stamp === null || this.retried.get(path) === stamp) continue;
+      this.retried.set(path, stamp);
+      if (this.data.collisionFile === path) { await this.setCollisionFile(path); changed = true; }
+      else { await this.loadImage(path); changed = true; }
+    }
+    if (changed) { this.syncMaterials(); this.onChange(); }
+    return changed;
+  }
+
+  /** The files the prop names that could not be read. */
+  failedPaths(): string[] {
+    const named = this.referencedPaths();
+    return [...this.failures.keys()].filter((p) => named.has(p));
+  }
+
+  /** Takes the files that could not be read out of the prop, and forgets what was said about them. */
+  dropFailed() {
+    const failed = new Set(this.failedPaths());
+    const d = this.data;
+    d.lods.forEach((p, i) => { if (failed.has(p)) { d.lods[i] = ""; this.models[i] = null; } });
+    for (const m of Object.values(d.materials)) for (const role of ["color", "normal", "phongexponent", "illum"] as const) if (failed.has(m[role])) m[role] = "";
+    if (failed.has(d.collisionFile)) { d.collisionFile = ""; this.collisionText = null; }
+    this.failures.clear();
+    this.syncMaterials();
     this.onChange();
   }
 

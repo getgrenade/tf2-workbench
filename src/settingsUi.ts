@@ -4,6 +4,7 @@ import { clearTauntCache, tauntCachePath } from "./api";
 import { loadSettings, onSettingsChange, settings as currentSettings, updateSetting, updateSettings } from "./settingsStore";
 import { DEFAULT_ACCENT, DEFAULT_BASE, normaliseAccent, normaliseBase } from "./theme";
 import { createHotkeysSection } from "./hotkeysUi";
+import { createRigSettings } from "./rig/rigSettings";
 
 /** Colours to start from in the interface colour rows (any colour can still be picked). */
 const ACCENT_PRESETS = ["#e08a3c", "#e0b03c", "#58b368", "#38b6c4", "#4f8fe8", "#9b6be0", "#e06a9c", "#e0584c"];
@@ -17,10 +18,11 @@ const ALL_SECTIONS = [
   { id: "interface", label: "Interface" },
   { id: "viewport", label: "Viewport" },
   { id: "hotkeys", label: "Hotkeys" },
+  { id: "rigs", label: "Rigs" },
   { id: "storage", label: "Storage" },
 ] as const;
 /** (the web build keeps nothing on disk: no Storage section) */
-const SECTIONS = ALL_SECTIONS.filter((s) => !(__WEB__ && s.id === "storage"));
+const SECTIONS = ALL_SECTIONS.filter((s) => !(__WEB__ && (s.id === "storage" || s.id === "rigs")));
 type SectionId = (typeof ALL_SECTIONS)[number]["id"];
 const SECTION_KEY = "tf2workbench.settingsSection";
 
@@ -182,6 +184,7 @@ export async function createSettingsUi(root: HTMLElement) {
     interface: () => [...(__WEB__ ? [] : [group("Size", scaleRow())]), createThemeSection(), group("Display", ...toggles("interface"))],
     viewport: () => [group("Navigation", ...toggles("viewport").slice(0, 2), scrollRow()), group("Screenshots", screenshotRow(), ...toggles("viewport").slice(2))],
     hotkeys: () => [createHotkeysSection()],
+    rigs: () => (__WEB__ ? [] : [createRigSettings()]),
     storage: () => [cacheGroup()],
   };
 

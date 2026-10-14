@@ -21,14 +21,15 @@ export function makeBuildRequest(session: CompilerSession, current: string): Ite
       const slot = (material: string) => materialFileName(session.itemName, session.materialSlot(cls, material));
       const flexed = !!model.flexes?.length;
       lods.push({
-        sourcePath: session.lods(cls)[i],
+        // a LOD the session made has no file: the name it would have next to LOD 0
+        sourcePath: session.lods(cls)[i] || session.tempLodFile(cls, i) || withLodSuffix(session.lods(cls)[0], i),
         smd: flexed ? "" : writeSmd(model, slot, "bip_head", d.turns),
         ...(flexed ? { dmx: Array.from(writeDmx(model, slot, "bip_head", d.turns)) } : {}),
         triangles: model.triangles,
         vertices: model.vertices,
       });
     }
-    if (lods.length) classes.push({ folder: cls, lods, qcExtra: session.jiggleQc(cls) });
+    if (lods.length) classes.push({ folder: cls, lods, qcExtra: session.jiggleQc(cls), lodCommands: session.lodQcCommands(cls) });
   }
   if (!classes.length) throw new Error("The item has no model.");
   const materials = names.map((name, i): ItemBuildRequest["materials"][number] => {
@@ -58,4 +59,11 @@ export function makeBuildRequest(session: CompilerSession, current: string): Ite
     icon: d.icon,
     compression: d.compression,
   };
+}
+
+/** The name a LOD 1 or 2 would have next to the file of LOD 0 (`hat.fbx` -> `hat_lod1.fbx`). */
+function withLodSuffix(lod0: string, index: number): string {
+  const dot = lod0.lastIndexOf(".");
+  const slash = Math.max(lod0.lastIndexOf("/"), lod0.lastIndexOf("\\"));
+  return dot > slash ? `${lod0.slice(0, dot)}_lod${index}${lod0.slice(dot)}` : `${lod0}_lod${index}`;
 }
