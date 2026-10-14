@@ -42,5 +42,5 @@ the two files in `rigs/` (ignored by git) the tests do nothing.
 
 ## Licence note
 
-Blender is GPL. The solver follows Blender's algorithms (how it works out parents, constraints, bendy bones and IK) closely: keep that in mind
-before distributing this part of the code under another licence.
+Blender is GPL, and the solver follows Blender's algorithms (how it works out parents, constraints, bendy bones and IK) closely: the project is
+GPL-3.0-or-later for that reason (see NOTICE.md). Blender itself is not included.
