@@ -14,9 +14,26 @@ const EXTRA: { name: string; label: string }[] = [
   { name: "effects/pyrocube", label: "Pyroland" },
 ];
 
+/**
+ * The cubemaps of some of the game's maps (`maps/<map>`), which come with the program: they are in no game archive. The names are the maps'
+ * and the labels what the list shows; the program only has the ones that were built in the map.
+ */
+export const MAP_CUBEMAPS: { name: string; label: string }[] = [
+  { name: "maps/cp_dustbowl", label: "Dustbowl (CP)" },
+  { name: "maps/cp_foundry", label: "Foundry (CP)" },
+  { name: "maps/cp_gorge", label: "Gorge (CP)" },
+  { name: "maps/cp_granary", label: "Granary (CP)" },
+  { name: "maps/cp_gravelpit", label: "Gravel Pit (CP)" },
+  { name: "maps/cp_well", label: "Well (CP)" },
+  { name: "maps/ctf_2fort", label: "2Fort (CTF)" },
+  { name: "maps/ctf_doublecross", label: "Double Cross (CTF)" },
+  { name: "maps/ctf_foundry", label: "Foundry (CTF)" },
+  { name: "maps/pl_upward", label: "Upward (PL)" },
+];
+
 /** "cubemaps/cubemap_gold001" as "Gold 001". */
 export function cubemapLabel(name: string): string {
-  const extra = EXTRA.find((e) => e.name === name);
+  const extra = EXTRA.find((e) => e.name === name) ?? MAP_CUBEMAPS.find((e) => e.name === name);
   if (extra) return extra.label;
   const m = /^([a-z_]*?)(\d+)?$/i.exec(name.replace(/^cubemaps\/cubemap_/, ""));
   const word = (m?.[1] || name).replace(/_/g, " ");
@@ -29,7 +46,8 @@ export function listCubemaps(): Promise<string[]> {
   names ??= searchPaths("materials/cubemaps/cubemap_", 400).then((paths) => {
     const found = paths.filter((p) => /^materials\/cubemaps\/[^/]+\.vtf$/i.test(p) && !/\.hdr\.vtf$/i.test(p)).map((p) => p.replace(/^materials\//i, "").replace(/\.vtf$/i, "")).sort();
     if (!found.length) throw new Error("no cubemaps yet");
-    return [...found, ...EXTRA.map((e) => e.name)];
+    // the maps' own cubemaps are in the program (the web build has the game's only)
+    return [...found, ...EXTRA.map((e) => e.name), ...(__WEB__ ? [] : MAP_CUBEMAPS.map((e) => e.name))];
   }).catch((e) => { names = null; throw e; });
   return names;
 }

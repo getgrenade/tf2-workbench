@@ -6,6 +6,7 @@ pub mod itemcompile;
 pub mod propcompile;
 pub mod items;
 pub mod kv;
+pub mod map_cubemaps;
 pub mod material;
 pub mod mdl;
 pub mod model;

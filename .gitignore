@@ -14,3 +14,6 @@ dist-web/
 
 # rigs made by other people (personal use): exported rig files and the Blender results the solver is tested against
 /rigs/
+
+# the map cubemaps that come with the program (see NOTICE.md)
+!/crates/source-formats/assets/map_cubemaps/*.vtf

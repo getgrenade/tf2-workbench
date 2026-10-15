@@ -193,3 +193,27 @@ fn a_cubemap_of_the_game_loads_as_a_material_of_its_own() {
         }
     }
 }
+
+#[test]
+fn the_cubemaps_of_the_maps_are_in_the_program_and_load_as_materials() {
+    // no game needed: they come with the program. The archive is only asked for what is not a map's.
+    let vpk = steam::find_tf2().and_then(|tf| VpkSet::open_folder(&tf).ok());
+    let Some(vpk) = vpk else { return };
+    assert!(source_formats::map_cubemaps::MAPS.len() >= 10);
+    for map in source_formats::map_cubemaps::MAPS {
+        let m = material::load(&vpk, &format!("{}maps/{map}.vmt", material::CUBEMAP_PREFIX)).unwrap_or_else(|e| panic!("{map}: {e}"));
+        let faces: Vec<_> = m.textures.iter().filter(|(slot, _)| slot.starts_with("env")).collect();
+        assert_eq!(faces.len(), 6, "{map}: {:?}", m.errors);
+        let mut means = Vec::new();
+        for (_, img) in &faces {
+            assert!(img.width >= 10 && img.width == img.height, "{map}: {}x{}", img.width, img.height);
+            let n = (img.rgba.len() / 4) as u64;
+            let sum: [u64; 3] = img.rgba.chunks_exact(4).fold([0; 3], |a, p| [a[0] + p[0] as u64, a[1] + p[1] as u64, a[2] + p[2] as u64]);
+            means.push([sum[0] / n, sum[1] / n, sum[2] / n]);
+        }
+        println!("{map}: {}x{} faces, mean colour per face {:?}", faces[0].1.width, faces[0].1.height, means);
+        // the faces of a real cubemap are not all the same picture
+        if means.iter().all(|m| m == &means[0]) { println!("  ^ every face is the same"); }
+    }
+    assert!(material::load(&vpk, &format!("{}maps/not_a_map.vmt", material::CUBEMAP_PREFIX)).is_err());
+}

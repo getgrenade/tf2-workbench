@@ -1,5 +1,7 @@
 /** The Reflections section of the World panel: which cubemap of the game the shiny materials of the scene reflect, and how brightly. */
 import { cubemapLabel, listCubemaps } from "./reflection";
+
+const isMap = (name: string) => name.startsWith("maps/");
 import type { ReflectionState } from "./reflectionState";
 
 interface ReflectionHost {
@@ -44,7 +46,11 @@ export function createReflectionUi(section: HTMLElement, host: ReflectionHost) {
     void listCubemaps().then((found) => {
       listed = true;
       const current = host.get().cubemap;
-      pick.replaceChildren(new Option("Default", ""), ...found.map((n) => new Option(cubemapLabel(n), n)));
+      // the game's own, then the maps' in a group of their own
+      const maps = document.createElement("optgroup");
+      maps.label = "Maps";
+      maps.append(...found.filter(isMap).map((n) => new Option(cubemapLabel(n), n)));
+      pick.replaceChildren(new Option("Default", ""), ...found.filter((n) => !isMap(n)).map((n) => new Option(cubemapLabel(n), n)), ...(maps.children.length ? [maps] : []));
       if (current && !found.includes(current)) pick.append(new Option(cubemapLabel(current), current));
       status.textContent = "";
       sync();

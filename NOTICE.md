@@ -3,7 +3,8 @@
 TF2 Workbench is a fan project. Copyright (c) 2026 getgrenade. Its own code is free software under the GNU General Public License, version 3 or
 (at your option) any later version (see [LICENSE](LICENSE)), except the files listed under "Valve Source 1 SDK" below, which stay under Valve's
 license. It is not affiliated with or endorsed by Valve Corporation. Team Fortress 2, Source and the Source engine are trademarks and property of
-Valve Corporation. No game files are included in this repository.
+Valve Corporation. No game files are included in this repository, except the ten small cubemaps of Valve's maps in
+`crates/source-formats/assets/map_cubemaps/` (the maps' own cubemap files, 32x32 or 16x16 pixels a face, used to light a scene in the viewer), which stay Valve's.
 
 ## Blender
 

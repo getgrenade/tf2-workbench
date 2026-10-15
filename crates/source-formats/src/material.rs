@@ -90,6 +90,17 @@ fn cubemap_material(vpk: &VpkSet, vmt_path: &str) -> Result<Material> {
 }
 
 fn load_cubemap(vpk: &VpkSet, name: &str, max_face: u32) -> Result<Vec<vtf::Image>> {
+    // the cubemap of a map (`maps/cp_badlands`) is kept in the program, not in the game
+    if let Some(map) = name.strip_prefix("maps/") {
+        let Some(bytes) = crate::map_cubemaps::get(map) else { return fail(format!("no cubemap of the map {map}")) };
+        let info = vtf::info(bytes).map_err(|e| ParseError(format!("{name}: {e}")))?;
+        let mut mip = 0;
+        while (info.width >> mip) > max_face && mip + 1 < info.mip_count { mip += 1; }
+        // a cubemap that is black all through (a map saved before its cubemaps were built) lights nothing: it is refused
+        let faces = vtf::decode_faces(bytes, mip).map_err(|e| ParseError(format!("{name}: {e}")))?;
+        if faces.iter().all(|f| f.rgba.chunks_exact(4).all(|p| p[0] | p[1] | p[2] == 0)) { return fail(format!("the cubemap of {map} is empty")); }
+        return Ok(faces);
+    }
     let mut path = vtf_path(name);
     // some cubemaps exist only in their HDR form (the goggles of Pyroland)
     if !vpk.contains(&path) && vpk.contains(&path.replace(".vtf", ".hdr.vtf")) {
