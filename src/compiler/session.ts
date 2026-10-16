@@ -642,7 +642,7 @@ export class CompilerSession {
       });
     }
     for (const { path, names } of this.armatureFiles()) {
-      warn(`armature:${path}`, `${fileName(path)} has an extra bone, ${names.join(", ")}, that is no bone of the rig (an armature object of the exporter): the item importer counts it as one of the item's bones. Take it out of the file with the button below.`);
+      warn(`armature:${path}`, `${fileName(path)}: extra bone ${names.join(", ")} (counts as one of the item's bones).`);
     }
     if (customBones.length > BONE_BUDGET) error("bones", `The item has ${customBones.length} bones of its own (${customBones.join(", ")}); the limit is ${BONE_BUDGET}.`);
     for (const name of this.materialNames()) {
