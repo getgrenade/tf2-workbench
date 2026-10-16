@@ -6,7 +6,8 @@ import { usedBones } from "./smd";
 /**
  * Writes an imported model as a binary Datamodel file (.dmx, encoding 2, the one the game's own exporter writes). An .smd cannot carry the
  * shape keys of a model, a .dmx can: the compiler writes the model this way when it has flexes. The structure is the one Valve's
- * `dmfbxserializer` writes for a flexed item (a_2matflexedmonkey): a skeleton of DmeJoint under one DmeDag, one DmeMesh with a DmeFaceSet for
+ * `dmfbxserializer` writes for a flexed item (a_2matflexedmonkey): a skeleton of DmeJoint (the top ones directly under the model: a DmeDag around them
+ * would be a bone of the item's own, studiomdl makes a bone of every dag), one DmeMesh with a DmeFaceSet for
  * each material, a DmeVertexDeltaData for each shape key and a DmeCombinationOperator with the sliders that drive them, which is how
  * studiomdl makes the model's flex controllers without a word of QC.
  */
@@ -105,8 +106,6 @@ export function writeDmx(model: ImportedModel, materialName: (material: string) 
   const bind: Elem[] = [];
   const dagTransform = (name: string, m: THREE.Matrix4) => { const t = transformOf(name, m); transforms.push(t); bind.push(transformOf(name, m)); return t; };
   const identity = new THREE.Matrix4();
-  const armature = el("DmeDag", "root");
-  armature.attrs.push(a("transform", T.element, dagTransform("root", identity)), a("shape", T.element, null), a("visible", T.bool, true));
   const joints = new Map<string, Elem>();
   const jointIndex = new Map<string, number>();
   for (const name of names) {
@@ -117,17 +116,12 @@ export function writeDmx(model: ImportedModel, materialName: (material: string) 
     joint.attrs.push(a("transform", T.element, dagTransform(name, local)), a("shape", T.element, null), a("visible", T.bool, true), refs("children", []));
     joints.set(name, joint);
   }
-  const childrenOf = (parent: Elem | null, parentName: string | null) => {
-    const kids = names.filter((n) => parentOf(n) === parentName).map((n) => joints.get(n)!);
-    (parent ?? armature).attrs.push(...(parent ? [] : [refs("children", kids)]));
-    if (parent) parent.attrs.find((x) => x.name === "children")!.value = kids;
-    return kids;
-  };
-  childrenOf(null, null);
-  for (const name of names) childrenOf(joints.get(name)!, name);
+  const childrenOf = (parentName: string | null) => names.filter((n) => parentOf(n) === parentName).map((n) => joints.get(n)!);
+  const topJoints = childrenOf(null);
+  for (const name of names) joints.get(name)!.attrs.find((x) => x.name === "children")!.value = childrenOf(name);
 
   // one mesh: the vertices of every part one after the other, a face set for each part
-  const fallback = jointIndex.get(fallbackBone) ?? 1;
+  const fallback = jointIndex.get(fallbackBone) ?? 0;
   const positions: number[][] = [], normals: number[][] = [], uvs: number[][] = [], weights: number[] = [], joint: number[] = [];
   const sets: Elem[] = [];
   const base: number[] = [];
@@ -180,11 +174,11 @@ export function writeDmx(model: ImportedModel, materialName: (material: string) 
   const modelTransform = transformOf("model", identity);
   const modelEl = el("DmeModel", "model", [
     a("transform", T.element, modelTransform), a("shape", T.element, null), a("visible", T.bool, true),
-    refs("children", [armature, meshDag]), refs("jointTransforms", transforms), refs("baseStates", [el("DmeTransformList", "bind", [refs("transforms", bind)])]),
+    refs("children", [...topJoints, meshDag]), refs("jointTransforms", transforms), refs("baseStates", [el("DmeTransformList", "bind", [refs("transforms", bind)])]),
   ]);
   const root = el("DmElement", "root", [a("skeleton", T.element, modelEl), a("model", T.element, modelEl)]);
 
-  const all: Elem[] = [root, modelEl, modelTransform, armature, ...joints.values(), meshDag, mesh, data, ...sets, ...deltaStates];
+  const all: Elem[] = [root, modelEl, modelTransform, ...joints.values(), meshDag, mesh, data, ...sets, ...deltaStates];
   // the sliders of the shape keys
   if (flexes.length) {
     const controls = (model.flexControls?.length ? model.flexControls : flexes.map((f) => ({ name: f.name, raw: [f.name], stereo: false, eyelid: false, wrinkle: [0] }))).map((c) =>

@@ -70,7 +70,7 @@ pub struct LodRequest { source_path: String, smd: String, #[serde(default)] dmx:
 pub struct BlueRequest { vmt: String, color: Option<String> }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MaterialRequest { blue: Option<BlueRequest>, source_name: String, vmt: String, color: Option<String>, normal: Option<String>, phongexponent: Option<String>, illum: Option<String> }
+pub struct MaterialRequest { blue: Option<BlueRequest>, source_name: String, vmt: String, color: Option<String>, normal: Option<String>, phongexponent: Option<String>, illum: Option<String>, #[serde(default)] paintable: bool }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -139,7 +139,7 @@ pub async fn build_item(state: State<'_, AppState>, request: ItemBuildRequest) -
         bodygroups: request.bodygroups, paintable: request.paintable, icon: PathBuf::from(request.icon),
         compression: if request.compression == "none" { source_formats::vtf_write::Compression::None } else { source_formats::vtf_write::Compression::Dxt },
         classes: request.classes.into_iter().map(|c| ClassSpec { folder: c.folder, qc_extra: c.qc_extra, lod_commands: c.lod_commands, lods: c.lods.into_iter().map(|l| LodSpec { source_path: l.source_path, smd: l.smd, dmx: l.dmx, triangles: l.triangles, vertices: l.vertices }).collect() }).collect(),
-        materials: request.materials.into_iter().map(|m| MaterialSpec { source_name: m.source_name, vmt: m.vmt, color: path(m.color), normal: path(m.normal), phongexponent: path(m.phongexponent), illum: path(m.illum), blue: m.blue.map(|b| BlueSpec { vmt: b.vmt, color: path(b.color) }) }).collect(),
+        materials: request.materials.into_iter().map(|m| MaterialSpec { source_name: m.source_name, vmt: m.vmt, color: path(m.color), normal: path(m.normal), phongexponent: path(m.phongexponent), illum: path(m.illum), paintable: m.paintable, blue: m.blue.map(|b| BlueSpec { vmt: b.vmt, color: path(b.color) }) }).collect(),
     };
     let out = tf.join("workshop").join("import_source");
     let work = std::env::temp_dir().join("tf2-workbench-item-build");
@@ -154,7 +154,8 @@ pub fn reveal_file(path: String) -> Result<(), String> {
     let p = PathBuf::from(&path);
     if p.is_dir() {
         use std::os::windows::process::CommandExt;
-        let plain = p.canonicalize().unwrap_or(p).to_string_lossy().replace(r"\?\", "").replace('/', "\\");
+        // (the \\?\ prefix of a canonical path is one explorer does not take: it opens Documents instead)
+        let plain = p.canonicalize().unwrap_or(p).to_string_lossy().replace(r"\\?\", "").replace('/', "\\");
         std::process::Command::new("explorer").raw_arg(format!("\"{plain}\"")).spawn().map_err(|e| e.to_string())?;
         return Ok(());
     }

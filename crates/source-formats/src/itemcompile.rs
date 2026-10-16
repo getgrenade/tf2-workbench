@@ -60,6 +60,8 @@ pub struct MaterialSpec {
     pub normal: Option<PathBuf>,
     pub phongexponent: Option<PathBuf>,
     pub illum: Option<PathBuf>,
+    /// The material takes paint (the importer keeps this switch in its session as paintable<n>, which the text it saves has to say too).
+    pub paintable: bool,
     /// The BLU skin of a team-coloured item: the material's own file and, when its diffuse texture is not the RED one, that texture.
     /// Normal, exponent and glow textures are shared by both skins (the importer's material editor has one of each).
     pub blue: Option<BlueSpec>,
@@ -254,7 +256,12 @@ fn session_text(spec: &ItemSpec, template: &str, textures: &[Vec<Texture>], icon
     kv.pair("equip_region", &spec.equip_region);
     kv.pair("name", &spec.name);
     kv.pair("skin_type", if spec.team_colors() { "1" } else { "0" });
+    // the bodygroups the item hides, then the icon and the switches of the importer's material editor (one for each of its two material slots)
+    kv.open("bodygroup");
+    for b in &spec.bodygroups { kv.pair(b, "1"); }
+    kv.close();
     kv.pair("icon", &if in_archive { win(icon_content) } else { String::from(icon_content) });
+    for i in 0..2 { kv.pair(&format!("paintable{i}"), if spec.materials.get(i).is_some_and(|m| m.paintable) { "1" } else { "0" }); }
     kv.open("Materials");
     for (i, m) in spec.materials.iter().enumerate() { kv.pair(&format!("Material{i}"), &m.source_name); }
     kv.open("Skins");
@@ -284,7 +291,12 @@ fn session_text(spec: &ItemSpec, template: &str, textures: &[Vec<Texture>], icon
     kv.close(); // Skins
     kv.close(); // Materials
     kv.open("classes");
-    for c in &spec.classes {
+    // every class has its block, in the importer's order; the ones the item has no model for are empty
+    let order = ["scout", "sniper", "soldier", "demo", "medic", "heavy", "pyro", "spy", "engineer"];
+    let mut shown: Vec<(String, Option<&ClassSpec>)> = order.iter().map(|f| (f.to_string(), spec.classes.iter().find(|c| c.folder == *f))).collect();
+    for c in &spec.classes { if !order.contains(&c.folder.as_str()) { shown.push((c.folder.clone(), Some(c))); } }
+    for (folder, class_spec) in shown {
+        let Some(c) = class_spec else { kv.open(&folder); kv.close(); continue };
         kv.open(&c.folder);
         // the class's QC as the importer keeps it in its session: the game's template with the markers still in it, and the bone commands of the LODs
         kv.pair("QC", &session_qc(template, c));
@@ -304,9 +316,6 @@ fn session_text(spec: &ItemSpec, template: &str, textures: &[Vec<Texture>], icon
     kv.close();
     kv.pair("loopable", "-1.000000");
     kv.pair("output", &zip_path.to_string_lossy().to_ascii_lowercase());
-    kv.open("bodygroup");
-    for b in &spec.bodygroups { kv.pair(b, "1"); }
-    kv.close();
     kv.open("ItemSchema");
     kv.pair("import_name", &spec.name);
     if !spec.display_name.is_empty() { kv.pair("name", &spec.display_name); }
@@ -584,7 +593,7 @@ mod tests {
             name: "a_cowboyhat".into(), display_name: "The Cowboy Hat".into(), prefab: "hat".into(), equip_region: "hat".into(),
             bodygroups: vec!["hat".into()], paintable: false,
             classes: vec![ClassSpec { folder: "sniper".into(), qc_extra: String::new(), lod_commands: Vec::new(), lods: vec![LodSpec { source_path: "C:\\hat.fbx".into(), smd: "version 1\n".into(), dmx: None, triangles: 100, vertices: 80 }, LodSpec { source_path: "C:\\hat_lod.fbx".into(), smd: "version 1\n".into(), dmx: None, triangles: 50, vertices: 40 }] }],
-            materials: vec![MaterialSpec { source_name: "ND_ID_MAT_TEAL".into(), vmt: "\"VertexLitGeneric\"\n{\n}\n".into(), color: Some("c.tga".into()), normal: None, phongexponent: None, illum: None, blue: None }],
+            materials: vec![MaterialSpec { source_name: "ND_ID_MAT_TEAL".into(), vmt: "\"VertexLitGeneric\"\n{\n}\n".into(), color: Some("c.tga".into()), normal: None, phongexponent: None, illum: None, paintable: false, blue: None }],
             icon: "icon.tga".into(), compression: Compression::Dxt,
         }
     }

@@ -3,7 +3,8 @@ import type { ImportedModel, ImportedPart } from "./fbx";
 /**
  * The skin of a LOD that came without one, taken from LOD 0: every vertex gets the bones and weights of the nearest vertex of LOD 0. The game's
  * importer does this when it builds the item (the lower LODs are made without weights), so a LOD made that way shows on the character in the
- * preview as it will in the game, close enough to judge the shape. Only for the preview: the build keeps the LOD as it was given.
+ * preview as it will in the game, close enough to judge the shape. The build writes the LOD this way too (see makeBuildRequest): its .smd needs
+ * the bones, with their places, that its vertices follow.
  */
 
 /** Whether a part has no skin of its own (the loader marks a mesh that was not skinned with an empty bone name). */

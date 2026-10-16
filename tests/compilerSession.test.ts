@@ -306,3 +306,27 @@ test("an armature node of an FBX is an extra bone for the importer: it is told o
   // a file written without an armature has none to take out
   assert.deepEqual((await s.removeArmatures(async () => { throw new Error("nothing to write"); })).written, []);
 });
+
+test("a LOD that came without a skin is built with the bones of LOD 0 (else studiomdl hangs it on one bone at its own origin)", async () => {
+  const { writeFbx } = await import("../src/compiler/fbxWrite.ts");
+  const { makeBuildRequest } = await import("../src/compiler/request.ts");
+  const lines = ["version 1", "nodes", '  0 "bip_head" -1', '  1 "prop_bone" 0', "end", "skeleton", "time 0", "  0 0 0 60 0 0 0", "  1 0 0 5 0 0 0", "end", "triangles"];
+  const v = (x: number, y: number, bone: number) => `  ${bone}  ${x} 0 ${y + 60}  0 1 0  ${x} ${y}  1 ${bone} 1.0`;
+  lines.push("m", v(0, 0, 0), v(1, 0, 1), v(0, 1, 0), "end", "");
+  const model = importModel("hat.smd", new TextEncoder().encode(lines.join("\n")).buffer as ArrayBuffer);
+  const files: Record<string, ArrayBuffer> = {
+    "C:/art/hat_lod0.fbx": writeFbx(model).slice().buffer as ArrayBuffer,
+    "C:/art/hat_lod1.fbx": writeFbx(model, {}, { skeleton: false }).slice().buffer as ArrayBuffer,
+  };
+  const s = new CompilerSession(io(files));
+  s.data.smartFill = false;
+  s.data.name = "hat";
+  await s.setLod("sniper", 0, "C:/art/hat_lod0.fbx");
+  await s.setLod("sniper", 1, "C:/art/hat_lod1.fbx");
+  assert.equal(s.model("sniper", 1)!.skeleton.length, 0, "the file has no skeleton");
+  const request = makeBuildRequest(s, "");
+  const nodes = (smd: string) => smd.split("\n").filter((l) => /^\s+\d+ "/.test(l)).map((l) => l.trim().split(" ")[1].replace(/"/g, ""));
+  const lods = request.classes[0].lods;
+  assert.deepEqual(nodes(lods[0].smd), ["bip_head", "prop_bone"]);
+  assert.deepEqual(nodes(lods[1].smd), ["bip_head", "prop_bone"], "LOD 1 follows the same bones as LOD 0, where they are");
+});

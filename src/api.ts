@@ -156,7 +156,7 @@ export interface ItemBuildRequest {
   name: string; displayName: string; prefab: string; equipRegion: string; bodygroups: string[]; paintable: boolean;
   /** The classes with a model of their own (one: that class's folder; several: an all-class item), each with its LODs. */
   classes: { folder: string; /** QC commands added to the class's QC (the `$jigglebone` blocks). */ qcExtra: string; /** The commands inside its LOD 1 and LOD 2 blocks (bone commands, `nofacial`). */ lodCommands?: string[][]; lods: { sourcePath: string; smd: string; /** The model as a binary .dmx (bytes) when it has flexes: the smd is empty then. */ dmx?: number[]; triangles: number; vertices: number }[] }[];
-  materials: { sourceName: string; vmt: string; color: string | null; normal: string | null; phongexponent: string | null; illum: string | null; blue: { vmt: string; color: string | null } | null }[];
+  materials: { sourceName: string; vmt: string; color: string | null; normal: string | null; phongexponent: string | null; illum: string | null; /** The material takes paint: the session text says so for the importer. */ paintable?: boolean; blue: { vmt: string; color: string | null } | null }[];
   icon: string;
   /** How the model textures are stored: DXT (the importer's), or exact pixels. */
   compression?: "dxt" | "none";

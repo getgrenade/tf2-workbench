@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
 import { connectOrphanModels } from "./fbxRepair";
+import { importerMaterialNames } from "./fbxStrip";
 import { computeNormals, windingSign } from "./mesh";
 
 /**
@@ -185,6 +186,8 @@ export interface ImportedModel {
    * for a bone of the item, which the skeleton above does not list: it is one of the few the item may have.
    */
   armatures?: string[];
+  /** The materials in the order of the material slots of the file, when that is not the order they are listed in (by name, as the importer lists them). */
+  fileMaterialOrder?: string[];
   /** The shape keys of the file (from a .dmx), with the sliders that drive them. */
   flexes?: ImportedFlex[];
   flexControls?: ImportedFlexControl[];
@@ -210,7 +213,7 @@ const BLANK_IMAGE = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABA
 export function importFbx(buffer: ArrayBuffer): ImportedModel {
   const manager = new THREE.LoadingManager();
   manager.setURLModifier(() => BLANK_IMAGE);
-  const load = (data: ArrayBuffer) => importScene(new FBXLoader(manager).parse(data, ""), readFbxAxes(data));
+  const load = (data: ArrayBuffer) => importScene(new FBXLoader(manager).parse(data, ""), readFbxAxes(data), importerMaterialNames(buffer));
   try {
     return load(buffer);
   } catch (error) {
@@ -224,7 +227,7 @@ export function importFbx(buffer: ArrayBuffer): ImportedModel {
 }
 
 /** The model of a loaded scene (the part of the import that the file format has no say in). */
-export function importScene(root: THREE.Object3D, axes: FbxAxes): ImportedModel {
+export function importScene(root: THREE.Object3D, axes: FbxAxes, materialNames = new Map<string, string>()): ImportedModel {
   root.updateMatrixWorld(true);
   // p -> (p . right, p . up, p . front): the file's frame to the Y-up frame
   const toGame = new THREE.Matrix4().set(
@@ -249,6 +252,7 @@ export function importScene(root: THREE.Object3D, axes: FbxAxes): ImportedModel 
   });
 
   const accumulate = new Map<string, Builder>();
+  const slotOrder: string[] = [];
   const bounds = new THREE.Box3();
   // the blend shapes of the meshes (shape keys): by name, where each moves which vertices; the meshes number their vertices on from each other
   const moves: FlexMoves = new Map();
@@ -287,8 +291,12 @@ export function importScene(root: THREE.Object3D, axes: FbxAxes): ImportedModel 
         }
       });
     }
+    // (two materials that would go by the same name keep their own)
+    const nameOf = (own: string) => { const named = materialNames.get(own); return named && ![...materialNames].some(([other, n]) => other !== own && n === named) ? named : own; };
+    // the slots of the mesh, in their order (not the order the triangles use them in)
+    for (const slot of materials) { const n = nameOf(slot?.name || "material"); if (!slotOrder.includes(n)) slotOrder.push(n); }
     for (const group of groups) {
-      const material = materials[group.materialIndex ?? 0]?.name || "material";
+      const material = nameOf(materials[group.materialIndex ?? 0]?.name || "material");
       let builder = accumulate.get(material);
       if (!builder) accumulate.set(material, (builder = new Builder(material)));
       for (let k = 0; k < group.count; k++) {
@@ -310,7 +318,10 @@ export function importScene(root: THREE.Object3D, axes: FbxAxes): ImportedModel 
     }
   });
 
-  const parts = [...accumulate.values()].map((b) => b.finish());
+  // The importer lists the materials of a model by name (A_hat before z_glass, whatever the order the file has them in): so does the item, whose
+  // material files are numbered by that order.
+  const inFile = [...accumulate.values()].map((b) => b.finish());
+  const parts = [...inFile].sort((x, y) => (x.material.toLowerCase() < y.material.toLowerCase() ? -1 : x.material.toLowerCase() > y.material.toLowerCase() ? 1 : 0));
   const flexes = weldFlexes(parts, moves);
   const triangles = parts.reduce((t, part) => t + part.indices.length / 3, 0);
   const vertices = parts.reduce((t, part) => t + part.positions.length / 3, 0);
@@ -324,8 +335,15 @@ export function importScene(root: THREE.Object3D, axes: FbxAxes): ImportedModel 
     bounds: { min: empty ? [0, 0, 0] : bounds.min.toArray(), max: empty ? [0, 0, 0] : bounds.max.toArray() },
     axes,
     ...(armatures.length ? { armatures } : {}),
+    ...(slotOrderOf(slotOrder, parts.map((p) => p.material)) ? { fileMaterialOrder: slotOrderOf(slotOrder, parts.map((p) => p.material)) } : {}),
     ...(flexes.length ? { flexes, flexControls: flexes.map((f) => ({ name: f.name, raw: [f.name], stereo: false, eyelid: false, wrinkle: [0] })) } : {}),
   };
+}
+
+/** The slot order of the materials (only the ones the model uses), when it differs from the listed order; undefined when it is the same. */
+function slotOrderOf(slots: string[], listed: string[]): string[] | undefined {
+  const order = slots.filter((n) => listed.includes(n));
+  return order.some((n, i) => n !== listed[i]) ? order : undefined;
 }
 
 /** The closest bone above an unskinned mesh in the file. */

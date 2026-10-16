@@ -1,6 +1,7 @@
 import type { ItemBuildRequest } from "../api";
 import { writeSmd } from "./smd";
 import { writeDmx } from "./dmxWrite";
+import { transferSkin } from "./skinTransfer";
 import { materialFileName, NUM_LODS, type CompilerSession } from "./session";
 
 /**
@@ -15,8 +16,12 @@ export function makeBuildRequest(session: CompilerSession, current: string): Ite
   for (const cls of session.classesWithModels()) {
     const lods: ItemBuildRequest["classes"][number]["lods"] = [];
     for (let i = 0; i < NUM_LODS; i++) {
-      const model = session.model(cls, i);
-      if (!model) continue;
+      const given = session.model(cls, i);
+      if (!given) continue;
+      // A LOD that came without a skin (a mesh with no armature, as the exporter writes the lower LODs) is skinned like LOD 0, with its bones: written as it
+      // is it would hang on one bone at its own origin, and studiomdl would put it where that bone is in the class, not where the mesh is.
+      const lod0 = i > 0 ? session.model(cls, 0) : null;
+      const model = lod0 ? transferSkin(lod0, given) : given;
       // the materials of a class's model are the item's by their position
       const slot = (material: string) => materialFileName(session.itemName, session.materialSlot(cls, material));
       const flexed = !!model.flexes?.length;
@@ -42,6 +47,7 @@ export function makeBuildRequest(session: CompilerSession, current: string): Ite
       normal: given.normal ? m.normal : null,
       phongexponent: given.phongexponent ? m.phongexponent : null,
       illum: given.illum ? m.illum : null,
+      paintable: m.settings.paintable,
       // the BLU skin: its own material file, and its own diffuse texture when it has one (else the material points at the RED one)
       blue: d.teamColors ? { vmt: session.vmtText(current, name, i, 1), color: session.blueIsOwn(name) ? m.blueColor : null } : null,
     };

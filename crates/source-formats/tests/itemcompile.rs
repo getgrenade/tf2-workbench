@@ -33,11 +33,20 @@ fn builds_a_cosmetic_the_importers_way() {
         bodygroups: vec!["hat".into()], paintable: false,
         classes: vec![ClassSpec { folder: "sniper".into(), qc_extra: String::new(), lod_commands: Vec::new(), lods: vec![LodSpec { source_path: "tile.fbx".into(), smd: SMD.replace("tile", "workbench_test_tile"), dmx: None, triangles: 2, vertices: 4 }] }],
         materials: vec![MaterialSpec { source_name: "tile".into(), vmt: "\"VertexLitGeneric\"\n{\n\t\"$basetexture\"\t\t\"models/workshop/player/items/sniper/workbench_test_tile/workbench_test_tile_color\"\n}\n".into(),
-            color: Some(color), normal: None, phongexponent: Some(exponent), illum: None, blue: None }],
+            color: Some(color), normal: None, phongexponent: Some(exponent), illum: None, paintable: true, blue: None }],
         icon, compression: Compression::Dxt,
     };
     let built = build(&vpk, &spec, &dir.join("out"), &dir.join("work")).unwrap_or_else(|e| panic!("build failed: {e}"));
     assert!(built.zip.is_file() && built.session.is_file());
+    // the session text says what the importer saves in its own: the paint switch of each material slot, and a block for every class
+    let session = fs::read_to_string(&built.session).unwrap();
+    assert!(session.contains("\"paintable0\"\t\t\"1\"") && session.contains("\"paintable1\"\t\t\"0\""), "{session}");
+    let mut at = 0;
+    for class in ["scout", "sniper", "soldier", "demo", "medic", "heavy", "pyro", "spy", "engineer"] {
+        // (the keys of the classes are at the same depth, one after the other)
+        let found = session[at..].find(&format!("\t\t\t\"{class}\"\r\n")).unwrap_or_else(|| panic!("no block for {class}"));
+        at += found + 1;
+    }
 
     // the archive reads back the way the importer's own do
     let zip = ZipFile::open(&built.zip).unwrap();
