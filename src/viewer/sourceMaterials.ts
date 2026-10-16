@@ -224,7 +224,9 @@ export class SourceMaterials {
     // WantsSkinShader() in vertexlitgeneric_dx9_helper.cpp: phong materials with a lightwarp (or
     // base-alpha phong mask, or a bump map) are drawn by the Skin shader, which forces half-lambert.
     const skinPath = phong && (!!warp || flag("$basemapalphaphongmask") || !!bump);
-    const tint = resolvePhongTint(p, !!exp);
+    // a phong tint the proxies make (the paint chain: $color2 * $yellow ...) is the tint the material has
+    const proxiedTint = (m?.proxies ?? []).some((x) => Object.entries(x.params).some(([k, v]) => k.toLowerCase() === "resultvar" && v.toLowerCase() === "$phongtint")) ? vars["$phongtint"] : undefined;
+    const tint = resolvePhongTint(proxiedTint ? { ...p, "$phongtint": proxiedTint.join(" ") } : p, !!exp);
 
     const material = new THREE.ShaderMaterial({
       // translucent and additive layers (glass, glows) do not cast a ground shadow

@@ -252,3 +252,57 @@ test("the temporary LODs are named from the name of LOD 0 without its LOD number
     assert.equal(written[0], `C:/m/${expected}`, file);
   }
 });
+
+test("the shape keys of a model are written into an FBX and read back, with the armature node taken out", async () => {
+  const { writeFbx } = await import("../src/compiler/fbxWrite.ts");
+  const { importFbx } = await import("../src/compiler/fbx.ts");
+  const source = importModel("hat.smd", gridSmd(2));
+  // two shape keys on vertices of the first part: one moves two vertices, the other one
+  source.flexes = [
+    { name: "smile", part: Uint16Array.from([0, 0]), vertex: Uint32Array.from([1, 2]), delta: Float32Array.from([0, 0.5, 0, 0.25, 0, 0]) },
+    { name: "frown", part: Uint16Array.from([0]), vertex: Uint32Array.from([3]), delta: Float32Array.from([0, 0, -1]) },
+  ];
+  const bytes = writeFbx(source, {}, { armature: "hat_ARM" });
+  const back = importFbx(bytes.slice().buffer as ArrayBuffer);
+  assert.deepEqual(back.armatures, ["hat_ARM"]);
+  const total = (flex: NonNullable<typeof back.flexes>[number]) => {
+    const sum = [0, 0, 0];
+    for (let i = 0; i < flex.part.length; i++) for (let k = 0; k < 3; k++) sum[k] += flex.delta[i * 3 + k];
+    return { moved: flex.part.length, sum: sum.map((x) => Math.round(x * 1000) / 1000) };
+  };
+  const named = Object.fromEntries((back.flexes ?? []).map((f) => [f.name, total(f)]));
+  assert.deepEqual(Object.keys(named).sort(), ["frown", "smile"]);
+  assert.ok(named.smile.moved >= 2 && named.frown.moved >= 1, "every moved vertex is there (a vertex shaded two ways is more than one)");
+  assert.deepEqual(named.frown.sum.map((x) => Math.sign(x)), [0, 0, -1]);
+  assert.deepEqual(named.smile.sum.map((x) => Math.sign(x)), [1, 1, 0]);
+  // the armature is taken out of a file that has shape keys too
+  const files: Record<string, ArrayBuffer> = { "C:/art/hat.fbx": bytes.slice().buffer as ArrayBuffer };
+  const s = new CompilerSession(io(files));
+  s.data.smartFill = false;
+  await s.setLod("sniper", 0, "C:/art/hat.fbx");
+  const result = await s.removeArmatures(async (path, out) => { files[path] = out.slice().buffer as ArrayBuffer; });
+  assert.deepEqual(result.written, ["C:/art/hat.fbx"]);
+  assert.equal(s.model("sniper", 0)!.armatures, undefined);
+  assert.deepEqual((s.model("sniper", 0)!.flexes ?? []).map((f) => f.name).sort(), ["frown", "smile"]);
+});
+
+test("an armature node of an FBX is an extra bone for the importer: it is told of, and taken out of the file in place", async () => {
+  const { writeFbx } = await import("../src/compiler/fbxWrite.ts");
+  const source = importModel("hat.smd", gridSmd(2));
+  const files: Record<string, ArrayBuffer> = { "C:/art/hat.fbx": writeFbx(source, {}, { armature: "sniper_ARM" }).slice().buffer as ArrayBuffer };
+  const s = new CompilerSession(io(files));
+  s.data.smartFill = false;
+  await s.setLod("sniper", 0, "C:/art/hat.fbx");
+  assert.deepEqual(s.model("sniper", 0)!.armatures, ["sniper_ARM"]);
+  assert.deepEqual(s.model("sniper", 0)!.skeleton.map((b) => b.name), ["bip_head"], "the node is no bone of the skeleton that is read");
+  assert.ok(s.issues().some((i) => i.key === "armature:C:/art/hat.fbx" && /sniper_ARM/.test(i.text)));
+  const result = await s.removeArmatures(async (path, bytes) => { files[path] = bytes.slice().buffer as ArrayBuffer; });
+  assert.deepEqual(result.written, ["C:/art/hat.fbx"]);
+  assert.deepEqual(result.skipped, []);
+  assert.equal(s.model("sniper", 0)!.armatures, undefined);
+  assert.deepEqual(s.model("sniper", 0)!.skeleton.map((b) => b.name), ["bip_head"]);
+  assert.equal(s.model("sniper", 0)!.triangles, source.triangles, "the mesh is the same");
+  assert.ok(!s.issues().some((i) => i.key.startsWith("armature:")));
+  // a file written without an armature has none to take out
+  assert.deepEqual((await s.removeArmatures(async () => { throw new Error("nothing to write"); })).written, []);
+});

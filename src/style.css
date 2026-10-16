@@ -795,6 +795,8 @@ td.n { text-align: right; font-variant-numeric: tabular-nums; }
 .popHint { color: var(--dim); font-size: var(--ui-fs-small); white-space: nowrap; }
 .popArrow { color: var(--dim); font-size: var(--ui-fs-small); margin-left: 10px; }
 .popSep { height: 1px; margin: 4px 2px; background: var(--line); }
+.popRemove { margin-left: 14px; width: 18px; height: 18px; display: grid; place-items: center; border-radius: var(--ui-radius); color: var(--dim); font-size: 14px; line-height: 1; cursor: pointer; }
+.popRemove:hover { background: color-mix(in srgb, var(--ui-danger, #e0645c) 28%, transparent); color: var(--ui-danger, #e0645c); }
 
 .propEmpty { padding: 6px 0 10px; }
 .propEmpty[hidden] { display: none; }
@@ -1128,3 +1130,16 @@ body.dndActive.dndRefused * { cursor: no-drop !important; }
 .propBar select.propGame { max-width: 150px; margin: 0; }
 .entTeam.skin { background: color-mix(in srgb, var(--fg) 14%, transparent); color: var(--dim); }
 .propSkins { flex-wrap: wrap; }
+
+/* the small modal questions (a name, yes or no) */
+.uiModalBack { position: fixed; inset: 0; z-index: 3000; display: grid; place-items: center; background: var(--ui-shade-3); }
+.uiModal { width: min(360px, calc(100vw - 32px)); padding: var(--ui-5) var(--ui-6); display: flex; flex-direction: column; gap: var(--ui-4); background: var(--panel); border: 1px solid var(--ui-line-strong); border-radius: var(--ui-radius-xl); box-shadow: 0 12px 32px var(--ui-shade-3); }
+.uiModal h3 { margin: 0; font-size: 13px; }
+.uiModal p { margin: 0; color: var(--fg); line-height: 1.45; }
+.uiModal label { display: flex; flex-direction: column; gap: var(--ui-2); color: var(--dim); font-size: var(--ui-fs-small); }
+.uiModal input.text { width: 100%; height: var(--ui-h-l); }
+.uiModalButtons { display: flex; justify-content: flex-end; gap: var(--ui-3); }
+.uiModalButtons button { min-width: 76px; height: var(--ui-h-l); }
+.uiModalButtons button.primary { border-color: var(--ui-accent-line); background: var(--ui-accent-soft); color: var(--fg); }
+.uiModalButtons button.danger { border-color: var(--ui-danger, #e0645c); background: color-mix(in srgb, var(--ui-danger, #e0645c) 24%, transparent); color: var(--fg); }
+.uiModalButtons button:disabled { opacity: .4; cursor: default; }

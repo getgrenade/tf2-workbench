@@ -20,16 +20,19 @@ export class LightingRenderer {
   private rows = 1;
   private depth = bodyMaskPass(new THREE.ShaderMaterial({
     vertexShader: `#include <skinning_pars_vertex>
+attribute float aDetached; varying float vDetached;
 varying vec2 vUv;
-void main() { vUv = uv; vec3 transformed = position;
+void main() { vUv = uv; vDetached = aDetached; vec3 transformed = position;
 #include <skinbase_vertex>
 #include <skinning_vertex>
 gl_Position = projectionMatrix * modelViewMatrix * vec4(transformed, 1.0); }`,
     fragmentShader: `#include <packing>
-uniform sampler2D tBase; uniform float uAlphaTest; uniform mat3 uUvXf; varying vec2 vUv;
+uniform sampler2D tBase; uniform float uAlphaTest; uniform mat3 uUvXf; uniform float uModel; varying vec2 vUv; varying float vDetached;
 void main() { if (uAlphaTest > 0.0 && texture2D(tBase, (uUvXf * vec3(vUv, 1.0)).xy).a < uAlphaTest) discard;
-gl_FragColor = packDepthToRGBA(gl_FragCoord.z); }`,
-    uniforms: { tBase: { value: null }, uAlphaTest: { value: 0 }, uUvXf: { value: new THREE.Matrix3() } }, side: THREE.DoubleSide,
+// the depth in 24 bits, and in the fourth channel whether this is the body of a model (1) or a part that is put on it, or hangs on it (0): see rigLitBy
+vec3 enc = fract(gl_FragCoord.z * vec3(1.0, 255.0, 65025.0)); enc -= enc.yzz * vec3(1.0 / 255.0, 1.0 / 255.0, 0.0);
+gl_FragColor = vec4(enc, vDetached > 0.5 ? 0.0 : uModel); }`,
+    uniforms: { tBase: { value: null }, uAlphaTest: { value: 0 }, uUvXf: { value: new THREE.Matrix3() }, uModel: { value: 1 } }, side: THREE.DoubleSide,
   }));
   constructor(private shared: SharedUniforms) {
     Object.assign(shared, {
@@ -38,7 +41,9 @@ gl_FragColor = packDepthToRGBA(gl_FragCoord.z); }`,
       uRigParams: { value: Array.from({ length: MAX_LIGHTS }, () => new THREE.Vector4(0, 1, 1, 0)) }, uRigShadow: { value: new Array(MAX_LIGHTS).fill(0) },
       uRigShadowMatrix: { value: Array.from({ length: MAX_LIGHTS * 6 }, () => new THREE.Matrix4()) },
       tRigShadow: { value: null }, uRigShadowSlot: { value: new Array(MAX_LIGHTS).fill(0) }, uRigShadowGrid: { value: new THREE.Vector2(1, 1) },
-      uRigShadowBias: { value: DEFAULT_SHADOW_QUALITY.bias }, uRigShadowSoft: { value: 0 }, uRigShadowTexel: { value: new Array(MAX_LIGHTS).fill(0) },
+      uRigShadowBias: { value: DEFAULT_SHADOW_QUALITY.bias }, uRigShadowSoft: { value: 0 }, uRigShadowTile: { value: 1024 }, uRigShadowDetail: { value: DEFAULT_SHADOW_QUALITY.detail },
+      uRigShadowStrength: { value: new Array(MAX_LIGHTS).fill(1) }, uRigTerminator: { value: 0 }, uRigShadowTint: { value: new THREE.Vector3() }, uRigContact: { value: 0 }, uRigContactLength: { value: 3 },
+      tRigDepth: { value: null }, uRigViewProj: { value: new THREE.Matrix4() }, uRigViewRow: { value: new THREE.Vector4() }, uRigDepthRange: { value: new THREE.Vector3(.1, 1000, 0) }, uRigShadowTexel: { value: new Array(MAX_LIGHTS).fill(0) },
       uRigShadowNearFar: { value: Array.from({ length: MAX_LIGHTS }, () => new THREE.Vector2(.1, 1)) },
     });
     const uploadMask = this.depth.onBeforeRender.bind(this.depth);
@@ -48,6 +53,9 @@ gl_FragColor = packDepthToRGBA(gl_FragCoord.z); }`,
       this.depth.uniforms.tBase.value = material.uniforms?.tBase?.value ?? null;
       this.depth.uniforms.uAlphaTest.value = material.uniforms?.uAlphaTest?.value ?? 0;
       this.depth.uniforms.uUvXf.value = material.uniforms?.uUvXf?.value ?? new THREE.Matrix3();
+      // a part that is put on a model (a cosmetic) is told from the model itself (see rigLitBy in the lighting shader)
+      this.depth.uniforms.uModel.value = (args[4] as THREE.Object3D).userData.cosmeticSlot ? 0 : 1;
+      this.depth.uniformsNeedUpdate = true;
     };
   }
   update(rig: LightingRig | undefined, camera: THREE.Camera) {
@@ -56,6 +64,10 @@ gl_FragColor = packDepthToRGBA(gl_FragCoord.z); }`,
     this.quality = rig?.shadow ?? DEFAULT_SHADOW_QUALITY;
     this.shared.uRigShadowBias.value = this.quality.bias;
     this.shared.uRigShadowSoft.value = this.quality.softness * .012;
+    this.shared.uRigShadowDetail.value = this.quality.detail;
+    this.shared.uRigTerminator.value = this.quality.terminator;
+    this.shared.uRigShadowTint.value.copy(lightColor(this.quality.tint, 1));
+    this.shared.uRigContactLength.value = this.quality.contactLength;
     let slot = 0, point = false;
     for (let i = 0; i < MAX_LIGHTS; i++) {
       const light = this.active[i];
@@ -70,6 +82,7 @@ gl_FragColor = packDepthToRGBA(gl_FragCoord.z); }`,
       const light = this.active[i];
       this.shared.uRigColor.value[i].copy(light ? lightColor(light.color, light.enabled ? light.intensity : 0) : new THREE.Vector3());
       this.shared.uRigShadow.value[i] = light?.enabled && light.shadows ? 1 : 0;
+      this.shared.uRigShadowStrength.value[i] = light?.shadowStrength ?? 1;
       if (!light)
         continue;
       this.shared.uRigDirection.value[i].copy(worldDirection(light, camera.quaternion));
@@ -99,6 +112,7 @@ gl_FragColor = packDepthToRGBA(gl_FragCoord.z); }`,
     });
     // the size of a tile: what is asked for, as far as the graphics card and the memory allow
     const tile = Math.max(64, Math.min(this.quality.resolution, Math.floor(renderer.capabilities.maxTextureSize / Math.max(this.columns, this.rows)), Math.floor(Math.sqrt(MAX_ATLAS_PIXELS / (this.columns * this.rows)))));
+    this.shared.uRigShadowTile.value = tile;
     const width = this.columns * tile, height = this.rows * tile;
     if (this.target && (this.target.width !== width || this.target.height !== height)) { this.target.dispose(); this.target = null; }
     const key = JSON.stringify(this.active) + center.toArray().join(",") + radius + "|" + tile + "|" + this.quality.bias;
@@ -191,6 +205,56 @@ gl_FragColor = packDepthToRGBA(gl_FragCoord.z); }`,
       renderer.setClearColor(previous.color, previous.alpha);
     }
   }
-  dispose() { this.target?.dispose(); this.depth.dispose(); }
+  private contactTarget: THREE.WebGLRenderTarget | null = null;
+  /** Whether a light casts shadows that the contact shadows would add to. */
+  private get contactWanted() { return this.quality.contact > 0 && this.active.some(l => l.enabled && l.shadows); }
+  /**
+   * Contact shadows: the scene is drawn once more (depth only, with the light's cheap shadow material), from the camera of the picture, and the
+   * lighting shader follows a short ray from every pixel toward each light through that depth: what stands in front of the ray, a little, shadows
+   * the pixel. It adds the small shadows where things touch that the shadow map's bias lets go of.
+   */
+  renderContact(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera, width: number, height: number, exclude: THREE.Object3D[]) {
+    if (!this.contactWanted) {
+      this.shared.uRigContact.value = 0;
+      this.shared.tRigDepth.value = null;
+      if (this.contactTarget) { this.contactTarget.depthTexture?.dispose(); this.contactTarget.dispose(); this.contactTarget = null; }
+      return;
+    }
+    width = Math.max(1, Math.round(width)); height = Math.max(1, Math.round(height));
+    if (this.contactTarget && (this.contactTarget.width !== width || this.contactTarget.height !== height)) { this.contactTarget.depthTexture?.dispose(); this.contactTarget.dispose(); this.contactTarget = null; }
+    this.contactTarget ??= new THREE.WebGLRenderTarget(width, height, { depthTexture: new THREE.DepthTexture(width, height), minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+    const hidden = new Map<THREE.Object3D, boolean>();
+    const hide = (o: THREE.Object3D) => { if (!hidden.has(o)) { hidden.set(o, o.visible); o.visible = false; } };
+    for (const o of exclude) hide(o);
+    scene.traverse(o => { const mesh = o as THREE.Mesh; if (mesh.isMesh && (Array.isArray(mesh.material) || mesh.material.userData.noShadow || mesh.userData.preview)) hide(o); });
+    const previous = { target: renderer.getRenderTarget(), color: renderer.getClearColor(new THREE.Color()), alpha: renderer.getClearAlpha(), background: scene.background, override: scene.overrideMaterial, scissor: renderer.getScissorTest(), };
+    try {
+      camera.updateMatrixWorld(true);
+      scene.background = null;
+      scene.overrideMaterial = this.depth;
+      this.depth.uniforms.uModel.value = 1;
+      renderer.setRenderTarget(this.contactTarget);
+      renderer.setScissorTest(false);
+      renderer.setClearColor(0xffffff, 1);
+      renderer.clear();
+      renderer.render(scene, camera);
+    } finally {
+      scene.background = previous.background;
+      scene.overrideMaterial = previous.override;
+      for (const [o, visible] of hidden) o.visible = visible;
+      renderer.setRenderTarget(previous.target);
+      renderer.setScissorTest(previous.scissor);
+      renderer.setClearColor(previous.color, previous.alpha);
+    }
+    const view = camera.matrixWorldInverse.elements;
+    const perspective = camera as THREE.PerspectiveCamera, ortho = (camera as THREE.OrthographicCamera).isOrthographicCamera === true;
+    this.shared.uRigViewProj.value.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    // the distance of a point along the view axis is minus the z of the point in the view
+    this.shared.uRigViewRow.value.set(-view[2], -view[6], -view[10], -view[14]);
+    this.shared.uRigDepthRange.value.set(perspective.near, perspective.far, ortho ? 1 : 0);
+    this.shared.tRigDepth.value = this.contactTarget.depthTexture;
+    this.shared.uRigContact.value = this.quality.contact;
+  }
+  dispose() { this.target?.dispose(); this.contactTarget?.depthTexture?.dispose(); this.contactTarget?.dispose(); this.depth.dispose(); }
   invalidate() { this.key = ""; this.casters = []; }
 }

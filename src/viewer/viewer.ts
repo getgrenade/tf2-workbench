@@ -6,6 +6,7 @@ import * as THREE from "three";
 import { rectsOverlap, type BoxHits, type BoxRect } from "./boxSelect";
 import { keyboardScaleFactor } from "./scaleGizmo";
 import { PlacementHistory, type PlacementSnapshot } from "./placementHistory";
+import { editHistory } from "./editHistory";
 import { CameraRig } from "./cameraRig";
 import { CameraOverlay } from "./cameraOverlay";
 import { parseOverlay } from "./overlayData";
@@ -559,6 +560,7 @@ void main() {
     this.rig = new RigOverlay(this.camera, this.renderer.domElement, this.controls, this.scene);
     this.blenderRig = __WEB__ ? new BlenderRigNone() : new BlenderRigOverlay(this.camera, this.renderer.domElement, this.controls, this.scene);
     this.cameras = new CameraRig(this.scene, this.camera, this.controls, container, this.renderer.domElement);
+    this.cameras.holdOrbit = () => this.gizmoHot;
     this.cameraOverlay = new CameraOverlay(this.cameras, container);
     this.cameras.onEnter = () => { this.viewAnim++; this.setActorGizmo(null); this.rig.setActor(null); this.blenderRig.setActor(null); };
     this.lightGizmos = new LightGizmos(this.scene, this.camera, this.controls, this.renderer.domElement,
@@ -948,7 +950,12 @@ void main() {
     const held = specs.some((s) => s.weapon) ? actor.heldWeapon : null;
     const weaponModel = held ? await loadParticleModel(held.path) : null;
     for (const spec of specs) {
-      if (!spec.weapon) {
+      if (spec.attachment) {
+        const attachment = model?.attachments.find((a) => a.name.toLowerCase() === spec.attachment);
+        if (!attachment) continue; // another model has no such attachment: nothing to start it at
+        const frame = new THREE.Matrix4();
+        wants.push({ system: spec.system, key: path + ":" + spec.attachment, target: () => ({ actor, cp: () => { frame.identity(); const bone = actor.particleBoneFrame(attachment.bone); if (bone) frame.copy(bone).multiply(attachment.local); return frame.clone(); }, boxes: () => [] }) });
+      } else if (!spec.weapon) {
         if (model) wants.push({ system: spec.system, key: path!, target: () => ({ actor, cp: () => new THREE.Matrix4(), boxes: () => nativeHitboxes(actor, model) }) });
       } else if (held && weaponModel) {
         const boxes = cosmeticHitboxes(actor, held.itemId, held.path, weaponModel);
@@ -1360,6 +1367,10 @@ void main() {
     };
   }
 
+  /** The steps of the edits of a character's place (a character that is taken out of the scene hands them over, to give them to its return). */
+  takePlacementHistory(actor: Actor): PlacementHistory | null { return this.entityHistory.get(actor) ?? null; }
+  givePlacementHistory(actor: Actor, history: PlacementHistory | null) { if (history) this.entityHistory.set(actor, history); }
+
   private historyOf(actor: Actor): PlacementHistory {
     let history = this.entityHistory.get(actor);
     if (!history) { history = new PlacementHistory(); this.entityHistory.set(actor, history); }
@@ -1467,8 +1478,15 @@ void main() {
       const undo=hotkeyMatches("edit.undo",event),redo=!undo&&redoMatches(event);
       if(undo||redo) {
         const actor=this.gizmoActor??this.selectedActor;
-        if(!actor||actor.isPosing||actor.isLive||this.rig.active||this.blenderRig.active||this.entityModal||[this.entityMove,this.entityRotate,this.entityScale,this.entityView,this.entityViewMove].some(t=>t.dragging)) return;
-        this.stepEntityHistory(redo);
+        if(actor&&(actor.isPosing||actor.isLive||this.rig.active||this.blenderRig.active)) return;
+        if(this.entityModal||[this.entityMove,this.entityRotate,this.entityScale,this.entityView,this.entityViewMove].some(t=>t.dragging)||editHistory.busy) return;
+        // the edits of what the scene is made of (a model deleted, a light added ...) and of a character's place are two histories: the one that was last used goes first
+        const placement=actor?this.entityHistory.get(actor):undefined;
+        const placed=redo?placement?.redoSeq():placement?.undoSeq();
+        const structural=redo?editHistory.topRedoSeq():editHistory.topUndoSeq();
+        if(structural!==undefined&&(placed===undefined||structural>placed)) void (redo?editHistory.redo():editHistory.undo());
+        else if(actor) this.stepEntityHistory(redo);
+        else return;
         event.preventDefault();event.stopImmediatePropagation();
         return;
       }
@@ -2513,8 +2531,10 @@ void main() {
   legacyPointPosition(): [number, number, number] { return this.shared.uPointPos.value.toArray(); }
   get sceneRadius(): number { return this.radius; }
 
-  private renderLightShadows(moved: boolean) {
-    this.lightingRenderer.render(this.renderer,this.scene,this.center,this.radius,[...this.shadowQuads(),this.floorGrid.mesh,this.facingMarker,...this.editorObjects],moved);
+  private renderLightShadows(moved: boolean, camera: THREE.Camera = this.camera, width = this.sceneTarget.width, height = this.sceneTarget.height) {
+    const exclude = [...this.shadowQuads(),this.floorGrid.mesh,this.facingMarker,...this.editorObjects];
+    this.lightingRenderer.render(this.renderer,this.scene,this.center,this.radius,exclude,moved);
+    this.lightingRenderer.renderContact(this.renderer,this.scene,camera,width,height,exclude);
   }
 
   private fixedVerticalFov: number | null = null;
@@ -2644,13 +2664,15 @@ void main() {
   }
 
   /** Camera on the selected character's eyes, about 11 units of head height in view (for checking eye shading). */
-  focusFace() {
-    if (this.cameras.active) this.cameras.leave();
+  focusFace(navigated = false) {
+    const navigating = navigated && this.cameras.navigatingView;
+    if (!navigating && this.cameras.active) this.cameras.leave();
     const eyes = this.selectedActor?.eyeMaterials ?? [];
     if (eyes.length === 0) return;
     const c = new THREE.Vector3();
     for (const e of eyes) c.add(e.uniforms.uEyeOrigin.value);
     c.divideScalar(eyes.length);
+    if (navigating) { this.cameras.frameBall(c, 5.5, 1); return; }
     const dist = 5.5 / Math.tan((this.camera.fov * Math.PI) / 360);
     this.camera.near = 0.5;
     if (this.camera.isOrthographicCamera) { this.camera.halfHeight = 5.5; this.camera.zoom = 1; }
@@ -2936,15 +2958,33 @@ void main() {
   }
 
   /** Camera on the selected character's full body, from where it looks now. */
-  focusBody() {
-    if (this.cameras.active) this.cameras.leave();
+  focusBody(navigated = false) {
     const actor = this.selectedActor;
+    // a camera that is navigated stays the view: it is moved to frame the character, looking the way it does
+    if (navigated && this.cameras.navigatingView) {
+      if (actor?.hasModel) this.frameNavigated(actor.computeBounds(new THREE.Box3()));
+      return;
+    }
+    if (this.cameras.active) this.cameras.leave();
     if (!actor?.hasModel) return;
     this.frameCamera(actor.computeBounds(new THREE.Box3()), true, undefined, true);
   }
 
+  /** Frames bounds with the camera that is navigated (it keeps its direction and field of view). */
+  private frameNavigated(box: THREE.Box3) {
+    if (box.isEmpty()) return;
+    const size = box.getSize(new THREE.Vector3());
+    this.cameras.frameBall(box.getCenter(new THREE.Vector3()), Math.max(size.x, size.y, size.z) * 0.5);
+  }
+
   /** Camera back on all the characters, from where it looks now. */
-  focusAll() {
+  focusAll(navigated = false) {
+    if (navigated && this.cameras.navigatingView) {
+      const box = new THREE.Box3();
+      for (const a of this.actorList) if (a.hasModel) box.union(a.computeBounds(this.tmpBox));
+      this.frameNavigated(box);
+      return;
+    }
     if (this.cameras.active) this.cameras.leave();
     if (this.actorList.length === 0) return;
     this.frame(true, true, undefined, true);
@@ -3125,7 +3165,7 @@ void main() {
       return out;
     };
     try {
-      this.renderLightShadows(true);
+      this.renderLightShadows(true, cam, w, h);
       this.updateParticleDepth(cam, w, h);
       // the picture behind the scene is the camera's own: it is in a shot of the camera, over the whole of it, and in no other picture
       this.cameras.backdrop.beginCapture(!!shot, w / h);

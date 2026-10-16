@@ -208,6 +208,7 @@ pub async fn index_tf2(app: tauri::AppHandle, state: State<'_, AppState>, tf_dir
     let s = vpk.stats();
     // the custom effects the user imported are mounted over the game's files, like the workshop's zips
     if let Ok(dir) = effects_dir(&app) { vpk.set_effects_dir(dir); }
+    let _ = cubemaps_folder(&app); // the user's cubemaps (a scene can name one before the list is asked for)
     // the addons of the game's own custom folder, and the folders the user mounted earlier
     let _ = vpk.mount_custom(&PathBuf::from(&tf_dir).join("custom"), true);
     for saved in saved_custom_content(&app) { let _ = vpk.mount_custom(&saved, false); }
@@ -421,6 +422,32 @@ pub async fn get_weapon_profile(state: State<'_,AppState>, item_id: u32, class: 
 pub async fn list_unusual_effects(state: State<'_, AppState>) -> Result<Vec<UnusualEffectDto>, String> {
     let vpk = state.vpk()?;
     tauri::async_runtime::spawn_blocking(move || unusual_effects(&vpk)).await.map_err(|e| e.to_string())?
+}
+
+/// The folder of the user's cubemaps (`<config>/cubemaps`): each `.vtf` in it is a cubemap of the list. The one that comes with the program is
+/// put there when it is missing.
+pub fn cubemaps_folder(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = config_dir(app)?.join("cubemaps");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Cannot create {}: {e}", dir.display()))?;
+    let own = dir.join("2fort.vtf");
+    if !own.exists() {
+        if let Some(bytes) = source_formats::map_cubemaps::get("2fort") { let _ = std::fs::write(&own, bytes); }
+    }
+    source_formats::material::set_user_cubemaps_dir(dir.clone());
+    Ok(dir)
+}
+
+/// The names of the cubemaps in the cubemaps folder (read again at every call: a file that was added shows up).
+#[tauri::command]
+pub fn list_cubemaps(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    cubemaps_folder(&app)?;
+    Ok(source_formats::material::user_cubemaps())
+}
+
+/// The path of the cubemaps folder (to open it).
+#[tauri::command]
+pub fn cubemaps_dir(app: tauri::AppHandle) -> Result<String, String> {
+    Ok(cubemaps_folder(&app)?.to_string_lossy().into_owned())
 }
 
 /// Where the custom effect zips live (the user's imports).
@@ -742,6 +769,20 @@ pub fn write_adjusted_model(request: tauri::ipc::Request<'_>) -> Result<(), Stri
     let is_fbx = path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("fbx"));
     if !is_fbx || !(name.starts_with("adjusted_") || name.starts_with("temp_")) { return Err(format!("refusing to write {}: only adjusted_*.fbx and temp_*.fbx files", path.display())); }
     std::fs::write(&path, bytes).map_err(|e| format!("Cannot write {}: {e}", path.display()))
+}
+
+/// Writes a model file again where it is: only an .fbx that already exists (the armature node taken out of it). It is written beside it and then
+/// moved over it, so that a file that fails to be written is not lost.
+#[tauri::command]
+pub fn rewrite_model_file(request: tauri::ipc::Request<'_>) -> Result<(), String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else { return Err("expected a raw body".into()) };
+    let path = request.headers().get("path").and_then(|v| v.to_str().ok()).ok_or("missing path header")?;
+    let path = PathBuf::from(percent_decode(path));
+    let is_fbx = path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("fbx"));
+    if !is_fbx || !path.is_file() { return Err(format!("refusing to rewrite {}: only an existing .fbx file", path.display())); }
+    let temp = path.with_extension("fbx.tmp");
+    std::fs::write(&temp, bytes).map_err(|e| format!("Cannot write {}: {e}", temp.display()))?;
+    std::fs::rename(&temp, &path).map_err(|e| { let _ = std::fs::remove_file(&temp); format!("Cannot replace {}: {e}", path.display()) })
 }
 
 fn percent_decode(s: &str) -> String {

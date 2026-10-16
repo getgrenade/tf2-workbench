@@ -70,6 +70,8 @@ export interface CompilerHost {
   reveal?(path: string): void;
   /** Writes a copy of a model (`adjusted_<name>.fbx`, `temp_<name>_lod1.fbx`) beside the original. Desktop only. */
   writeModel?(path: string, bytes: Uint8Array): Promise<void>;
+  /** Writes a model file again where it is (an existing .fbx: the armature node taken out of it). Desktop only. */
+  rewriteModel?(path: string, bytes: Uint8Array): Promise<void>;
 }
 
 const STORAGE_KEY = "tf2workbench.compiler";
@@ -367,6 +369,18 @@ export function createCompilerUi(host: CompilerHost) {
     return out;
   }
 
+  /** Takes the armature node out of the item's FBX files, in place. */
+  async function removeArmatures() {
+    if (!host.rewriteModel) return;
+    try {
+      const { written, skipped } = await session.removeArmatures((path, bytes) => host.rewriteModel!(path, bytes));
+      status = [written.length ? `Wrote ${written.length} file${written.length === 1 ? "" : "s"} without the extra bone.` : "", ...skipped.map((s) => `${s.path.split(/[\\/]/).pop()} was left as it is: ${s.reason}.`)].filter(Boolean).join(" ");
+    } catch (error) {
+      status = error instanceof Error ? error.message : String(error);
+    }
+    changed(true);
+  }
+
   /** Writes the item's models as adjusted_*.fbx beside the originals, with the turned axes in them, and points the item at the copies. */
   async function exportAdjusted() {
     if (!host.writeModel) return;
@@ -596,6 +610,12 @@ Choose another .tga` : "Choose the backpack icon (.tga)" });
       const drop = h("button", { textContent: `Remove the ${missing} file${missing === 1 ? "" : "s"} that could not be read`, title: "Take the missing or unreadable files out of the item" });
       drop.onclick = () => { session.dropFailed(); changed(true); };
       list.append(h("li", {}, drop));
+    }
+    const armatures = session.armatureFiles();
+    if (armatures.length && host.rewriteModel) {
+      const fix = h("button", { textContent: `Remove the extra bone from ${armatures.length} file${armatures.length === 1 ? "" : "s"}`, title: "Writes the FBX again where it is, without the armature node (the file is replaced: keep a copy of it if you want the original)" });
+      fix.onclick = () => void removeArmatures();
+      list.append(h("li", {}, fix));
     }
     if (issues.length === 0) list.append(h("li", { className: "ok", textContent: "Ready to build." }));
     for (const i of issues) list.append(h("li", { className: i.level, textContent: i.text }));

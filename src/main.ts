@@ -3,6 +3,8 @@ import "./tokens.css";
 import { accordify } from "./accordion";
 import { createDocks } from "./dock/dock";
 import { PANEL_DEFS, defaultLayout } from "./dock/defaultLayout";
+import { askConfirm, askName } from "./dock/layoutDialogs";
+import { deleteSavedLayout, hasSavedLayout, layoutName, loadSavedLayouts, registerLayout } from "./dock/savedLayouts";
 import { openMenu } from "./viewer/popMenu";
 import "./style.css";
 import { findTf2, indexTf2 } from "./api";
@@ -459,10 +461,27 @@ if (__WEB__) document.getElementById("propsPane")?.remove();
 // the Add menu of the outliner opens the prop browser
 document.addEventListener("workbench:reveal-panel", (e) => { const id = (e as CustomEvent<string>).detail; if (docks.panels().some((p) => p.id === id)) docks.reveal(id); });
 $("viewOverlaysMore").onclick = () => openOverlaySettings($("viewOverlaysMore"));
+/** Asks for a name and keeps the layout of the docks as it is now (where the panels are, which ones were put away) under it. */
+async function registerCurrentLayout() {
+  const raw = await askName({ title: "Register layout", label: "Name of the layout", ok: "Register" });
+  const name = raw === null ? "" : layoutName(raw);
+  if (!name) return;
+  if (hasSavedLayout(name) && !(await askConfirm({ title: "Replace the layout?", message: `A layout called "${name}" is registered already. Replace it with the layout as it is now?`, ok: "Replace" }))) return;
+  registerLayout(name, docks.snapshot());
+}
+
+/** Deleting a registered layout asks first (the × of its entry in the menu). */
+async function deleteRegisteredLayout(name: string) {
+  if (await askConfirm({ title: "Delete the layout?", message: `Delete the layout "${name}"? This cannot be undone.`, ok: "Delete", danger: true })) deleteSavedLayout(name);
+}
+
 $("layoutMenu").onclick = () => {
   openMenu($("layoutMenu"), [
-    ...docks.panels().map((p) => ({ label: p.title, checked: p.visible, keepOpen: true, run: () => docks.togglePanel(p.id) })),
+    { label: "Register layout…", run: () => void registerCurrentLayout() },
+    ...docks.panels().map((p, i) => ({ label: p.title, checked: p.visible, keepOpen: true, separator: i === 0, run: () => docks.togglePanel(p.id) })),
     { label: "Reset layout", separator: true, run: () => docks.reset() },
+    // the layouts that were registered, under the default one
+    ...loadSavedLayouts().map((s) => ({ label: s.name, run: () => docks.apply(s.layout), remove: () => void deleteRegisteredLayout(s.name), removeTitle: `Delete the layout "${s.name}"` })),
   ]);
 };
 

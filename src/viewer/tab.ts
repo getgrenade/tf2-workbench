@@ -9,7 +9,7 @@ import { fadeAmount, maskIcon, type IconFade } from "../compiler/iconMask";
 import { importSourceDir, readItemSession, readPropSession, saveItemIcon, buildItem, buildProp, loadTextureFrames, readSourceFile, revealFile, sourceSiblings, sourceStamp } from "../api";
 import { parseTextureFrames } from "./sourceMaterials";
 import { getWeaponProfile, importEffectZip, removeCustomEffect, type WeaponProfile, type UnusualEffectInfo } from "../api";
-import { listSequences, loadMaterial, loadModel, loadSession, prepareWorkshopTaunt, readTextFile, saveSession, writeAdjustedModel, writeBinaryFile, writeTextFile, type WorkshopTaunt } from "../api";
+import { listSequences, loadMaterial, loadModel, loadSession, prepareWorkshopTaunt, readTextFile, saveSession, rewriteModelFile, writeAdjustedModel, writeBinaryFile, writeTextFile, type WorkshopTaunt } from "../api";
 import { loadItemDb } from "./itemCatalog";
 import { parseScene, type SceneEntity, type SceneFile } from "./scene";
 import { deletePoseFile, openPosesFolder, readPoses, refreshWorkshop as refreshWorkshopCommand, savePoseFile, workshopStamp as workshopStampCommand } from "../api";
@@ -23,7 +23,10 @@ import { createBrowserSort, createBrowserView, makeTile, setTileImage } from "./
 import { createCameraUi } from "./cameraUi";
 import { createSceneTabs } from "./sceneTabs";
 import { gizmoKey } from "./gizmos";
-import { createHierarchy, type OutlinerNode, type Pick } from "./hierarchy";
+import { createHierarchy, type HierarchyHooks, type OutlinerNode, type Pick } from "./hierarchy";
+import { editHistory } from "./editHistory";
+import type { PlacementHistory } from "./placementHistory";
+import type { SceneCamera } from "./cameraData";
 import { combine, createBoxSelect, type BoxHits, type BoxMode } from "./boxSelect";
 import { createTransformFields } from "./transformFields";
 import { openMenu } from "./popMenu";
@@ -61,10 +64,10 @@ import { bakeClip, createAnimUi, newAnimState, type AnimEls, type AnimState } fr
 import { createFlexUi, flexGlobalsFor, type FlexEls } from "./flexUi";
 import { DEFAULT_FOV_X, DEFAULT_POINT_LIGHT, Viewer, type CosmeticSpec, type LightState, type PointLightState } from "./viewer";
 import { createLightingUi } from "./lightingUi";
-import { defaultLightingRig, newRigLight, parseLightingRig } from "./lighting";
+import { defaultLightingRig, newRigLight, parseLightingRig, type RigLight } from "./lighting";
 import { blankUnusuals, parseUnusualSettings, loadUnusualCatalog as fetchUnusualCatalog, customEffectZips, type UnusualSettings } from "./particles/assets";
 import { DEFAULT_SHADOW, type ShadowParams } from "./shadowMath";
-import { CONDITION_KEYS, CONDITION_LABELS, anyCondition, parseConditions, uberMaterialPath, type ConditionKey } from "./conditions";
+import { CONDITION_CLASS, CONDITION_KEYS, CONDITION_LABELS, anyCondition, parseConditions, uberMaterialPath, type ConditionKey } from "./conditions";
 import { DEFAULT_FOG, parseFog, type FogState } from "./fog";
 import { DEFAULT_AO, parseAo, type AoState } from "./aoMath";
 import { hotkeyMatches, redoMatches } from "../hotkeys";
@@ -460,6 +463,7 @@ export function createViewTab(els: Els) {
     },
     reveal: (path) => void revealFile(path),
     writeModel: (path, bytes) => writeAdjustedModel(path, bytes),
+    rewriteModel: (path, bytes) => rewriteModelFile(path, bytes),
   });
   const entities: Entity[] = [];
   /** The groups of the hierarchy. */
@@ -484,11 +488,11 @@ export function createViewTab(els: Els) {
     return CLASSES.find(([, m]) => m === mdl)?.[0] ?? (isBuildingCls(mdl) ? propLabel(mdl.split("#")[0]) : "…");
   };
 
-  function newEntity(actor: Actor, cls: string, team: number): Entity {
+  function newEntity(actor: Actor, cls: string, team: number, id?: number): Entity {
     // a model of a path that is not a building is a prop: its geometry is in Source's frame
     actor.sourceBind = isBuildingCls(cls) && !buildingOf(cls);
     return {
-      id: nextEntity++,
+      id: id ?? nextEntity++,
       hidden: false,
       lod: 0,
       unusuals: blankUnusuals(),
@@ -1377,8 +1381,8 @@ export function createViewTab(els: Els) {
 
         toggleCamera: () => {
           const rig = viewer?.cameras;
-          if (rig?.active) lookThroughCamera(rig.active);
-          else { const id = lastCamera(); if (id) lookThroughCamera(id); }
+          if (rig?.active) lookThroughCamera(rig.active, false);
+          else { const id = lastCamera(); if (id) lookThroughCamera(id, false); }
         },
       });
       viewer.onPostRender = nav.update;
@@ -1477,6 +1481,7 @@ export function createViewTab(els: Els) {
   /** Loads a character's class model and starts its default animation. */
   async function show(e: Entity, cls: string, preset?: AnimPreset) {
     e.cls = cls;
+    if (e === selected) renderConditions(); // some effects are the toggles of one class
     if (isBuildingCls(cls)) preset = { ...preset, seqName: preset?.seqName ?? defaultBuildingSequence(cls) };
     if (!preset && e.actor.inspectOnly) preset = { seqName: "ref" }; // an item opened alone stays in the reference pose on every class
     const token = ++e.showToken;
@@ -1660,6 +1665,8 @@ export function createViewTab(els: Els) {
     if (condReset) condReset.disabled = !e || !anyCondition(e.actor.conditions);
     if (!e) return;
     for (const key of CONDITION_KEYS) {
+      const only = CONDITION_CLASS[key];
+      if (only && gameClassOf(e.cls) !== only && !e.actor.conditions[key]) continue;
       const b = document.createElement("button");
       b.textContent = CONDITION_LABELS[key];
       b.classList.toggle("on", e.actor.conditions[key]);
@@ -1999,13 +2006,16 @@ export function createViewTab(els: Els) {
   }
 
   /** Looks through a camera (making it the picked one), or comes back out when the view already is through it. */
-  function lookThroughCamera(id: string) {
-    nothingSelected = false;
+  /** Looks through a camera, or leaves its view; with `select` the camera is also selected (the outliner button), without it the selection stays as it is (the camera button of the view). */
+  function lookThroughCamera(id: string, select = true) {
     const rig = ensureViewer().cameras;
-    propsKind = "camera";
-    propsCamera = id;
-    renderCameraUi.select(id);
-    selCameras = new Set([...selCameras, id]);
+    if (select) {
+      nothingSelected = false;
+      propsKind = "camera";
+      propsCamera = id;
+      renderCameraUi.select(id);
+      selCameras = new Set([...selCameras, id]);
+    }
     if (rig.active === id) rig.exit();
     else {
       prepareCamera();
@@ -2146,7 +2156,7 @@ export function createViewTab(els: Els) {
           if (!e) continue;
           selectEntity(e);
           const before = new Set(entities.map((x) => x.id));
-          await addEntity(true);
+          await addEntity(true, false);
           const fresh = entities.find((x) => !before.has(x.id));
           if (fresh) made.push({ kind: "character", id: String(fresh.id) });
         } else if (p.kind === "light") {
@@ -2158,6 +2168,7 @@ export function createViewTab(els: Els) {
       }
       if (made.length) selectPicks(made, made[made.length - 1]);
       renderEntities();
+      recordAdd("Paste", made);
     } finally { pasting = false; }
   }
   window.addEventListener("keydown", (ev) => {
@@ -2174,8 +2185,180 @@ export function createViewTab(els: Els) {
     else void pasteClipboard();
   });
 
+  // --- undo of what the scene is made of -------------------------------------------------------------------
+
+  /** A thing taken out of the scene, with all it takes to put it back. */
+  type Captured =
+    | { kind: "character"; id: number; index: number; data: SceneEntity; history: PlacementHistory | null }
+    | { kind: "light"; id: string; index: number; light: RigLight }
+    | { kind: "camera"; id: string; index: number; camera: SceneCamera };
+
+  function capturePick(p: Pick): Captured | null {
+    if (p.kind === "character") {
+      const e = entityById(Number(p.id));
+      if (!e) return null;
+      return { kind: "character", id: e.id, index: entities.indexOf(e), data: serializeEntity(e), history: ensureViewer().takePlacementHistory(e.actor) };
+    }
+    if (p.kind === "light") {
+      const c = lightingUi?.capture(p.id);
+      return c ? { kind: "light", id: p.id, index: c.index, light: c.light } : null;
+    }
+    const c = ensureViewer().cameras.capture(p.id);
+    return c ? { kind: "camera", id: p.id, index: c.index, camera: c.camera } : null;
+  }
+  const stillThere = (c: Captured) =>
+    c.kind === "character" ? !!entityById(c.id) : c.kind === "light" ? currentLights().lights.some((l) => l.id === c.id) : !!viewer?.cameras.cameras.some((x) => x.id === c.id);
+  const capturePicks = (picks: Pick[]) => picks.flatMap((p) => { const c = capturePick(p); return c ? [c] : []; });
+
+  /** Takes things out again (the redo of a deletion; undo of an addition). */
+  function removeCaptured(caps: Captured[]) {
+    for (const c of caps) if (c.kind === "character") { const e = entityById(c.id); if (e) removeEntity(e); }
+    for (const c of caps.filter((x) => x.kind === "light").reverse()) lightingUi?.remove(c.id);
+    for (const c of caps) if (c.kind === "camera") ensureViewer().cameras.remove(c.id);
+    renderEntities();
+  }
+
+  /** Puts things back where they were: characters get their model, pose and place again (and the history of their placement). */
+  async function reinstate(caps: Captured[]) {
+    const v = ensureViewer();
+    const chars = caps.filter((c): c is Extract<Captured, { kind: "character" }> => c.kind === "character").sort((a, b) => a.index - b.index);
+    if (chars.length) {
+      const { byId, paints } = await itemLookups();
+      for (const c of chars) {
+        if (entityById(c.id)) continue;
+        const e = buildEntity(c.data, byId, paints, c.id);
+        entities.splice(Math.min(c.index, entities.length), 0, e);
+        nextEntity = Math.max(nextEntity, e.id + 1);
+        renderEntities();
+        await showSaved(e, c.data);
+        if (c.history) v.givePlacementHistory(e.actor, c.history);
+      }
+    }
+    for (const c of caps) if (c.kind === "light") lightingUi?.insert(c.light, c.index);
+    for (const c of caps) if (c.kind === "camera") v.cameras.insert(c.camera, c.index);
+    const picks = caps.filter((c) => stillThere(c)).map((c): Pick => ({ kind: c.kind, id: String(c.id) }));
+    renderEntities();
+    if (picks.length) selectPicks(picks, picks[picks.length - 1]);
+    v.focusAll();
+  }
+
+  /** What the outliner shows of the things in it, that edits of the outliner change (the folders, the order, the names ...). */
+  interface Structure {
+    groups: HierarchyGroup[];
+    order: number[];
+    chars: Map<number, { name?: string; hidden: boolean; group?: string }>;
+    lights: Map<string, { name: string; enabled: boolean; group?: string }>;
+    cameras: Map<string, { name: string; group?: string }>;
+  }
+  function structure(): Structure {
+    return {
+      groups: groups.map((g) => ({ ...g })),
+      order: entities.map((e) => e.id),
+      chars: new Map(entities.map((e) => [e.id, { name: e.name, hidden: !!e.hidden, group: e.group }])),
+      lights: new Map(currentLights().lights.map((l) => [l.id, { name: l.name, enabled: l.enabled !== false, group: l.group }])),
+      cameras: new Map((viewer?.cameras.cameras ?? []).map((c) => [c.id, { name: c.name, group: c.group }])),
+    };
+  }
+  /** Puts what is still in the scene the way a snapshot has it. */
+  function applyStructure(s: Structure) {
+    groups = s.groups.map((g) => ({ ...g }));
+    for (const e of entities) {
+      const was = s.chars.get(e.id);
+      if (was) { e.name = was.name; e.hidden = was.hidden; e.group = was.group; }
+    }
+    const rank = new Map(s.order.map((id, i) => [id, i]));
+    entities.sort((a, b) => (rank.get(a.id) ?? 1e9) - (rank.get(b.id) ?? 1e9));
+    for (const l of currentLights().lights) {
+      const was = s.lights.get(l.id);
+      if (!was) continue;
+      if (l.name !== was.name) lightingUi?.rename(l.id, was.name);
+      if ((l.enabled !== false) !== was.enabled) lightingUi?.setEnabled(l.id, was.enabled);
+      if (l.group !== was.group) lightingUi?.setGroup([l.id], was.group);
+    }
+    const rig = viewer?.cameras;
+    if (rig) {
+      for (const c of rig.cameras) {
+        const was = s.cameras.get(c.id);
+        if (!was) continue;
+        c.name = was.name;
+        if (was.group) c.group = was.group; else delete c.group;
+      }
+      rig.refresh();
+    }
+    renderEntities();
+  }
+
+  /** Records an edit that something else did: its undo puts the snapshot back, its redo puts the snapshot of after back. */
+  function recordStructure(label: string, before: Structure) {
+    const after = structure();
+    editHistory.push({ label, undo: () => applyStructure(before), redo: () => applyStructure(after) });
+  }
+
+  /** Records what was added (the undo takes it out again, the redo puts it back as it was). */
+  function recordAdd(label: string, picks: Pick[]) {
+    if (!picks.length) return;
+    let caps: Captured[] = []; // taken when it is undone: by then the model is loaded
+    editHistory.push({
+      label,
+      undo: () => { caps = capturePicks(picks); removeCaptured(caps); },
+      redo: () => reinstate(caps),
+    });
+  }
+
+  /** The hooks of the outliner, with every edit they make recorded for undo. */
+  function withUndo(raw: HierarchyHooks): HierarchyHooks {
+    const edit = <A extends unknown[]>(label: string | ((...a: A) => string), fn: (...a: A) => void) => (...a: A) => {
+      const before = structure();
+      fn(...a);
+      recordStructure(typeof label === "string" ? label : label(...a), before);
+    };
+    /** A deletion: what goes is captured, the undo puts it back and then the folders as they were; the redo deletes it again. */
+    const deletion = (label: string, picks: Pick[], run: () => void) => {
+      const before = structure();
+      const caps = capturePicks(picks);
+      run();
+      const gone = caps.filter((c) => !stillThere(c));
+      if (!gone.length && JSON.stringify(before.groups) === JSON.stringify(groups)) return;
+      const after = structure();
+      editHistory.push({
+        label,
+        undo: async () => { await reinstate(gone); applyStructure(before); },
+        redo: () => { run(); applyStructure(after); },
+      });
+    };
+    const named = (picks: Pick[]) => (picks.length === 1 ? { character: "model", light: "light", camera: "camera" }[picks[0].kind] : "items");
+    return {
+      ...raw,
+      rename: edit((p) => `Rename ${p.kind}`, raw.rename),
+      setOff: edit((picks, off) => (off ? "Hide" : "Show") + " " + named(picks), raw.setOff),
+      move: edit("Move", raw.move),
+      renameGroup: edit("Rename folder", raw.renameGroup),
+      toggleGroupHidden: edit("Hide folder", raw.toggleGroupHidden),
+      nestGroup: edit("Move folder", raw.nestGroup),
+      newGroup: (parent) => {
+        const before = structure();
+        const id = raw.newGroup(parent);
+        recordStructure("Add folder", before);
+        return id;
+      },
+      remove: (picks) => deletion("Delete " + named(picks), picks, () => raw.remove(picks)),
+      removeGroup: (id, withContents) => {
+        const inside = withDescendants(groups, id);
+        const picks: Pick[] = withContents
+          ? [
+              ...entities.filter((e) => e.group && inside.has(e.group)).map((e): Pick => ({ kind: "character", id: String(e.id) })),
+              ...currentLights().lights.filter((l) => l.group && inside.has(l.group)).map((l): Pick => ({ kind: "light", id: l.id })),
+              ...(viewer?.cameras.cameras ?? []).filter((c) => c.group && inside.has(c.group)).map((c): Pick => ({ kind: "camera", id: c.id })),
+            ]
+          : [];
+        deletion("Delete folder", picks, () => raw.removeGroup(id, withContents));
+      },
+    };
+  }
+
   let hierarchyView: ReturnType<typeof createHierarchy> | null = null;
-  const hierarchy = () => (hierarchyView ??= createHierarchy(els.entities.list, {
+  let outlinerHooks: HierarchyHooks | null = null;
+  const hierarchy = () => (hierarchyView ??= createHierarchy(els.entities.list, (outlinerHooks = withUndo({
     select: selectPicks,
     rename: (pick, name) => {
       if (pick.kind === "character") {
@@ -2230,7 +2413,7 @@ export function createViewTab(els: Els) {
       const e = entityById(id);
       if (!e) return;
       selectEntity(e);
-      viewer?.focusBody();
+      viewer?.focusBody(true);
     },
     move: (picks, group, anchor) => {
       const ids = picks.filter((p) => p.kind === "character").map((p) => Number(p.id));
@@ -2313,7 +2496,20 @@ export function createViewTab(els: Els) {
       groups = rest;
       renderEntities();
     },
-  }));
+  }))));
+
+  // Delete in the viewport takes out what is selected, as it does in the outliner (which handles its own key when it has the focus)
+  window.addEventListener("keydown", (ev) => {
+    if (ev.defaultPrevented || !hotkeyMatches("outliner.delete", ev)) return;
+    const target = ev.target as HTMLElement | null;
+    if (target?.isContentEditable || (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+    if (document.getElementById("view")?.hidden || play?.active || viewer?.cameras.overlayEditing || viewer?.cameras.editing || viewer?.modalActive || selected?.actor.isPosing || nothingSelected) return;
+    const picks = currentPicks();
+    if (!picks.length) return;
+    ev.preventDefault();
+    hierarchy();
+    outlinerHooks?.remove(picks);
+  });
 
   const pickKey = (p: Pick) => `${p.kind}:${p.id}`;
   /** Everything that is selected now. */
@@ -2483,7 +2679,7 @@ export function createViewTab(els: Els) {
   }
 
   /** Adds a character next to the others, of the selected one's class and team, and selects it. */
-  async function addEntity(copy = false) {
+  async function addEntity(copy = false, record = true) {
     const v = ensureViewer();
     const base = selected;
     if (base) saveUi(base);
@@ -2507,6 +2703,7 @@ export function createViewTab(els: Els) {
     v.select(e.actor);
     restoreUi(e);
     renderEntities();
+    if (record) recordAdd(copy ? "Copy model" : "Add model", [{ kind: "character", id: String(e.id) }]);
     await show(e, e.cls, source ? { seq: source.anim.seq, seqName: source.anim.seqName, encoded: source.anim.encoded.slice(), playback: () => source.actor.playback, pose } : undefined);
     v.focusAll(); // fit everyone in view
   }
@@ -3017,7 +3214,7 @@ export function createViewTab(els: Els) {
     const target = ev.target as HTMLElement | null;
     if (!hotkeyMatches("view.focusAll", ev) || ev.repeat || ev.defaultPrevented || target?.isContentEditable || (target && /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(target.tagName))) return;
     if (document.getElementById("view")?.hidden || play?.active || !viewer?.pointerInside) return;
-    viewer.focusAll();
+    viewer.focusAll(true);
     ev.preventDefault();
   });
   window.addEventListener("keydown", (ev) => {
@@ -3513,38 +3710,42 @@ export function createViewTab(els: Els) {
       jiggle: els.jiggle.checked,
       selected: Math.max(0, savable.indexOf(selected)),
       ...(groups.length ? { groups: groups.map((g) => ({ ...g })) } : {}),
-      entities: savable.map((e): SceneEntity => {
-        const pb = e.actor.playback;
-        const reaction=v.reactionSceneState(e.actor);
-        const pose = reaction ? reaction.pose : e.actor.snapshotCustomPose();
-        return {
-          cls: e.cls,
-          team: e.team,
-          ...(e.name ? { name: e.name } : {}),
-          ...(e.group ? { group: e.group } : {}),
-          ...(e.hidden ? { hidden: true } : {}),
-          placement: { x: e.actor.offset.x, y: e.actor.offset.y, z: e.actor.offset.z, yaw: e.actor.yaw, ...(e.actor.pitch !== 0 ? { pitch: e.actor.pitch } : {}), ...(e.actor.roll !== 0 ? { roll: e.actor.roll } : {}), scale: e.actor.scale.toArray() as [number, number, number], placed: v.isPlaced(e.actor) },
-          loadout: e.items.loadout.map((l) => ({ item: l.item.id, paint: l.paint?.id ?? null, style: l.style })),
-          activeItem: e.items.activeId,
-          held: e.held?.id ?? null,
-          ...(isBuildingCls(e.cls) ? { building: { ...e.fx } } : {}),
-          flex: Object.fromEntries(e.flex),
-          anim: { sequence: e.anim.info?.sequences.find((q) => q.index === e.anim.seq)?.name ?? null, encoded: e.anim.encoded },
-          pose: pose ? { bones: e.actor.boneNames, pos: Array.from(pose.pos), quat: Array.from(pose.quat), ...(pose.scale ? { scale: Array.from(pose.scale) } : {}), editing: e.actor.isPosing } : undefined,
-          unusuals: { ...e.unusuals },
-          weaponParticles: v.snapshotWeaponEffects(e.actor),
-          playback: { time: reaction?.time ?? pb.time, speed: pb.speed, loopAll: pb.loopAll, playing: reaction?.playing ?? pb.playing },
-          inspectOnly: e.actor.inspectOnly || undefined,
-          bodygroups: e.bodyManual.size ? Object.fromEntries(e.bodyManual) : undefined,
-          lod: e.lod > 0 ? e.lod : undefined,
-          conditions: anyCondition(e.actor.conditions) ? { ...e.actor.conditions } : undefined,
-          bodyShown: e.actor.partsHidden ? [...e.actor.visibleRegions] : undefined,
-          bodyMaskVersion: 1,
-          bodyTris: e.actor.handMaskState,
-          fogged: e.actor.fogged ? undefined : false,
-        };
-      }),
+      entities: savable.map(serializeEntity),
     };
+  }
+
+  /** A character (or prop, or building) as the scene file keeps it. */
+  function serializeEntity(e: Entity): SceneEntity {
+    const v = ensureViewer();
+      const pb = e.actor.playback;
+      const reaction=v.reactionSceneState(e.actor);
+      const pose = reaction ? reaction.pose : e.actor.snapshotCustomPose();
+      return {
+        cls: e.cls,
+        team: e.team,
+        ...(e.name ? { name: e.name } : {}),
+        ...(e.group ? { group: e.group } : {}),
+        ...(e.hidden ? { hidden: true } : {}),
+        placement: { x: e.actor.offset.x, y: e.actor.offset.y, z: e.actor.offset.z, yaw: e.actor.yaw, ...(e.actor.pitch !== 0 ? { pitch: e.actor.pitch } : {}), ...(e.actor.roll !== 0 ? { roll: e.actor.roll } : {}), scale: e.actor.scale.toArray() as [number, number, number], placed: v.isPlaced(e.actor) },
+        loadout: e.items.loadout.map((l) => ({ item: l.item.id, paint: l.paint?.id ?? null, style: l.style })),
+        activeItem: e.items.activeId,
+        held: e.held?.id ?? null,
+        ...(isBuildingCls(e.cls) ? { building: { ...e.fx } } : {}),
+        flex: Object.fromEntries(e.flex),
+        anim: { sequence: e.anim.info?.sequences.find((q) => q.index === e.anim.seq)?.name ?? null, encoded: e.anim.encoded },
+        pose: pose ? { bones: e.actor.boneNames, pos: Array.from(pose.pos), quat: Array.from(pose.quat), ...(pose.scale ? { scale: Array.from(pose.scale) } : {}), editing: e.actor.isPosing } : undefined,
+        unusuals: { ...e.unusuals },
+        weaponParticles: v.snapshotWeaponEffects(e.actor),
+        playback: { time: reaction?.time ?? pb.time, speed: pb.speed, loopAll: pb.loopAll, playing: reaction?.playing ?? pb.playing },
+        inspectOnly: e.actor.inspectOnly || undefined,
+        bodygroups: e.bodyManual.size ? Object.fromEntries(e.bodyManual) : undefined,
+        lod: e.lod > 0 ? e.lod : undefined,
+        conditions: anyCondition(e.actor.conditions) ? { ...e.actor.conditions } : undefined,
+        bodyShown: e.actor.partsHidden ? [...e.actor.visibleRegions] : undefined,
+        bodyMaskVersion: 1,
+        bodyTris: e.actor.handMaskState,
+        fogged: e.actor.fogged ? undefined : false,
+      };
   }
 
   /** Puts these lights in the scene, in place of the ones it has. */
@@ -3569,40 +3770,18 @@ export function createViewTab(els: Els) {
     }
   }
 
-  /** Replaces the scene with a saved one. */
-  async function applyScene(scene: SceneFile) {
-    const v = ensureViewer();
-    v.cameras.restore(null);
+  /** The items and paints of the game by id: what a saved character is made from. */
+  async function itemLookups() {
     const db = await loadItemDb();
     const byId = new Map<number, ItemInfo>();
     for (const it of [...db.items, ...db.weapons, ...db.taunts]) byId.set(it.id, it);
-    const paints = new Map(db.paints.map((p) => [p.id, p]));
+    return { byId, paints: new Map(db.paints.map((p) => [p.id, p])) };
+  }
 
-    for (const e of [...entities]) v.removeActor(e.actor);
-    entities.length = 0;
-    groups = parseGroups(scene.groups);
-    selected = null;
-    gizmoEntity = null;
-    v.setActorGizmo(null);
-
-    els.entities.spacing.value = String(scene.spacing);
-    els.entities.spacing.oninput?.(new Event("input"));
-    els.fov.value = String(scene.fov);
-    els.fov.oninput?.(new Event("input"));
-    applyLights(scene.light, scene.pointLight);
-    setPostItems(postItemsOf(scene));
-    void setSkyState(scene.sky ?? DEFAULT_SKY).catch(() => {});
-    void setReflectionState(scene.reflection ?? DEFAULT_REFLECTION).catch(() => {});
-    setGroundState(scene.ground ?? DEFAULT_GROUND);
-    setBackgroundColor(scene.background ?? DEFAULT_BACKGROUND);
-    els.wire.checked = scene.wireframe;
-    v.setWireframe(scene.wireframe);
-    syncWireButton();
-    els.jiggle.checked = scene.jiggle;
-    v.setJiggle(scene.jiggle);
-
-    for (const s of scene.entities) {
-      const e = newEntity(v.addActor(), s.cls, s.team);
+  /** A character, prop or building as a saved scene has it (its model is shown by `showSaved`). */
+  function buildEntity(s: SceneEntity, byId: Map<number, ItemInfo>, paints: Map<number, PaintInfo>, id?: number): Entity {
+    const v = ensureViewer();
+    const e = newEntity(v.addActor(), s.cls, s.team, id);
       e.name = s.name;
       e.group = s.group;
       e.hidden = s.hidden === true;
@@ -3629,8 +3808,54 @@ export function createViewTab(els: Els) {
       if (s.placement.placed) v.placeActor(e.actor, s.placement.x, s.placement.y, s.placement.z, s.placement.yaw);
       e.actor.setTilt(s.placement.pitch ?? 0, s.placement.roll ?? 0);
       e.actor.setScale(new THREE.Vector3(...(s.placement.scale ?? [1, 1, 1])));
-      entities.push(e);
-    }
+    return e;
+  }
+
+  /** Shows the model of a character built from a saved one, with the animation, pose and effects it had. */
+  function showSaved(e: Entity, s: SceneEntity): Promise<void> {
+    const v = ensureViewer();
+    const pose = s.pose ? { pos: Float32Array.from(s.pose.pos), quat: Float32Array.from(s.pose.quat), ...(s.pose.scale ? { scale: Float32Array.from(s.pose.scale) } : {}), bones: s.pose.bones, editing: s.pose.editing } : undefined;
+    return show(e, e.cls, {
+      seqName: s.anim.sequence ?? undefined,
+      encoded: s.anim.encoded,
+      playback: () => s.playback,
+      pose,
+    }).then(async () => {
+      if (s.weaponParticles) await v.restoreWeaponEffects(e.actor, s.weaponParticles, loadWeaponShell);
+    });
+  }
+
+  /** Replaces the scene with a saved one. */
+  async function applyScene(scene: SceneFile) {
+    editHistory.clear(); // what was done to the scene that is replaced cannot be undone in the new one
+    const v = ensureViewer();
+    v.cameras.restore(null);
+    const { byId, paints } = await itemLookups();
+
+    for (const e of [...entities]) v.removeActor(e.actor);
+    entities.length = 0;
+    groups = parseGroups(scene.groups);
+    selected = null;
+    gizmoEntity = null;
+    v.setActorGizmo(null);
+
+    els.entities.spacing.value = String(scene.spacing);
+    els.entities.spacing.oninput?.(new Event("input"));
+    els.fov.value = String(scene.fov);
+    els.fov.oninput?.(new Event("input"));
+    applyLights(scene.light, scene.pointLight);
+    setPostItems(postItemsOf(scene));
+    void setSkyState(scene.sky ?? DEFAULT_SKY).catch(() => {});
+    void setReflectionState(scene.reflection ?? DEFAULT_REFLECTION).catch(() => {});
+    setGroundState(scene.ground ?? DEFAULT_GROUND);
+    setBackgroundColor(scene.background ?? DEFAULT_BACKGROUND);
+    els.wire.checked = scene.wireframe;
+    v.setWireframe(scene.wireframe);
+    syncWireButton();
+    els.jiggle.checked = scene.jiggle;
+    v.setJiggle(scene.jiggle);
+
+    for (const s of scene.entities) entities.push(buildEntity(s, byId, paints));
     selected = entities[scene.selected] ?? entities[0];
     v.select(selected.actor);
     restoreUi(selected);
@@ -3638,20 +3863,7 @@ export function createViewTab(els: Els) {
     v.restoreCamera(scene.camera.position, scene.camera.target);
     v.restoreProjection(scene.viewportProjection);
     v.cameras.restore(scene.cameras);
-    await Promise.all(
-      entities.map((e, i) => {
-        const s = scene.entities[i];
-        const pose = s.pose ? { pos: Float32Array.from(s.pose.pos), quat: Float32Array.from(s.pose.quat), ...(s.pose.scale ? { scale: Float32Array.from(s.pose.scale) } : {}), bones: s.pose.bones, editing: s.pose.editing } : undefined;
-        return show(e, e.cls, {
-          seqName: s.anim.sequence ?? undefined,
-          encoded: s.anim.encoded,
-          playback: () => s.playback,
-          pose,
-        }).then(async()=> {
-          if(s.weaponParticles) await v.restoreWeaponEffects(e.actor,s.weaponParticles,loadWeaponShell);
-        });
-      }),
-    );
+    await Promise.all(entities.map((e, i) => showSaved(e, scene.entities[i])));
     renderEntities();
   }
 
@@ -4394,6 +4606,7 @@ export function createViewTab(els: Els) {
     const folder = hierarchy().activeGroup();
     if (folder) made.group = folder;
     renderEntities();
+    recordAdd("Add camera", [{ kind: "camera", id: made.id }]);
   }
 
   /** Adds a light of a type and makes it the selection. */
@@ -4403,7 +4616,10 @@ export function createViewTab(els: Els) {
     const made = currentLights().lights.at(-1);
     const folder = hierarchy().activeGroup();
     if (made && folder) lightingUi?.setGroup([made.id], folder);
-    if (made) selectPicks([{ kind: "light", id: made.id }], { kind: "light", id: made.id });
+    if (made) {
+      selectPicks([{ kind: "light", id: made.id }], { kind: "light", id: made.id });
+      recordAdd("Add light", [{ kind: "light", id: made.id }]);
+    }
   }
 
   /**
@@ -4426,6 +4642,7 @@ export function createViewTab(els: Els) {
     v.select(e.actor);
     restoreUi(e);
     renderEntities();
+    recordAdd("Add prop", [{ kind: "character", id: String(e.id) }]);
     await show(e, e.cls);
     // it stands on the floor, wherever the model keeps its origin
     v.placeActorAt(e.actor, place.x, -e.actor.bindMinY, place.z);
@@ -4442,6 +4659,7 @@ export function createViewTab(els: Els) {
     v.select(e.actor);
     restoreUi(e);
     renderEntities();
+    recordAdd("Add building", [{ kind: "character", id: String(e.id) }]);
     await show(e, e.cls);
     v.focusAll();
   }
@@ -4917,9 +5135,9 @@ export function createViewTab(els: Els) {
     b.onclick = () => { if (selected) void setTeam(selected, i); };
   });
   markTeams();
-  els.focusFace.onclick = () => viewer?.focusFace();
-  els.focusBody.onclick = () => viewer?.focusBody();
-  els.focusAll.onclick = () => viewer?.focusAll();
+  els.focusFace.onclick = () => viewer?.focusFace(true);
+  els.focusBody.onclick = () => viewer?.focusBody(true);
+  els.focusAll.onclick = () => viewer?.focusAll(true);
   els.fov.oninput = () => {
     viewer?.setFov(+els.fov.value);
     syncFov();

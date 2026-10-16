@@ -689,9 +689,22 @@ impl VpkSet {
                 None => Err(VpkError::NotFound(path.to_string())),
             };
         }
+        self.read_archived_inner(path, max, true)
+    }
+
+    /// The file as the game's archives have it: a loose file of the game folder (a texture the user extracted over one of the game's, say)
+    /// does not replace it. For what must look the same on every machine.
+    pub fn read_archived(&self, path: &str) -> Result<Vec<u8>, VpkError> {
+        let out = self.read_archived_inner(path, usize::MAX, false);
+        if out.is_ok() { self.note(path); }
+        out
+    }
+
+    fn read_archived_inner(&self, path: &str, max: usize, custom: bool) -> Result<Vec<u8>, VpkError> {
         let key = Self::norm(path);
         let Some(e) = self.files.get(&key).copied() else {
             // not in the game: a folder the user mounted may have it
+            if !custom { return Err(VpkError::NotFound(path.to_string())); }
             if let Some(p) = self.custom_path(&key) {
                 let mut out = Vec::new();
                 File::open(&p).map_err(io_err(&p))?.take(max as u64).read_to_end(&mut out).map_err(io_err(&p))?;

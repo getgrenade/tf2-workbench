@@ -30,8 +30,11 @@ const SLOTS: [(&str, &[&str]); 11] = [
 /// Most frames kept of an animated base texture.
 const MAX_ANIMATION_FRAMES: usize = 64;
 
-/// hlmv binds this texture as the local cubemap, so it is what `$envmap env_cubemap` reflects there.
+/// hlmv binds this texture as the local cubemap, so it is what `$envmap env_cubemap` reflects there. (It is read from the game's archives
+/// only: a copy that somebody extracted into the game folder must not make the viewer's own cubemap differ from machine to machine.)
 const HLMV_CUBEMAP: &str = "hlmv/cubemap";
+/// What `$envmap env_cubemap` reflects in the viewer: the cubemap of 2fort that comes with the program, the same on every machine.
+const DEFAULT_CUBEMAP: &str = "maps/2fort";
 /// The default cubemap is HDR and large; reflections are blurry, so a 256 pixel face is plenty.
 const DEFAULT_CUBEMAP_FACE: u32 = 256;
 
@@ -89,17 +92,50 @@ fn cubemap_material(vpk: &VpkSet, vmt_path: &str) -> Result<Material> {
     Ok(Material { path: vmt_path.to_string(), shader: "cubemap".to_string(), params: HashMap::new(), proxies: Vec::new(), textures, errors: Vec::new() })
 }
 
+static USER_CUBEMAPS: std::sync::RwLock<Option<std::path::PathBuf>> = std::sync::RwLock::new(None);
+
+/// Sets the folder of the user's cubemaps (`user/<name>` is `<name>.vtf` in it).
+pub fn set_user_cubemaps_dir(dir: std::path::PathBuf) {
+    *USER_CUBEMAPS.write().unwrap() = Some(dir);
+}
+
+/// The names of the cubemaps in that folder (the `.vtf` files, without the extension), in alphabetical order.
+pub fn user_cubemaps() -> Vec<String> {
+    let Some(dir) = USER_CUBEMAPS.read().unwrap().clone() else { return Vec::new() };
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.is_file() && p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("vtf")))
+        .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+        .collect();
+    names.sort_by_key(|n| n.to_ascii_lowercase());
+    names
+}
+
+/// The six faces of a cubemap file, at the smallest size that is at least `max_face`; one that is black all through (a map saved before its
+/// cubemaps were built) lights nothing and is refused.
+fn faces_of(bytes: &[u8], name: &str, max_face: u32) -> Result<Vec<vtf::Image>> {
+    let info = vtf::info(bytes).map_err(|e| ParseError(format!("{name}: {e}")))?;
+    let mut mip = 0;
+    while (info.width >> mip) > max_face && mip + 1 < info.mip_count { mip += 1; }
+    let faces = vtf::decode_faces(bytes, mip).map_err(|e| ParseError(format!("{name}: {e}")))?;
+    if faces.iter().all(|f| f.rgba.chunks_exact(4).all(|p| p[0] | p[1] | p[2] == 0)) { return fail(format!("the cubemap {name} is empty")); }
+    Ok(faces)
+}
+
 fn load_cubemap(vpk: &VpkSet, name: &str, max_face: u32) -> Result<Vec<vtf::Image>> {
-    // the cubemap of a map (`maps/cp_badlands`) is kept in the program, not in the game
+    // a cubemap of the user's folder (`user/2fort`)
+    if let Some(stem) = name.strip_prefix("user/") {
+        let dir = USER_CUBEMAPS.read().unwrap().clone();
+        let file = dir.filter(|_| !stem.is_empty() && !stem.contains(['/', '\\', ':'])).map(|d| d.join(format!("{stem}.vtf")));
+        let Some(bytes) = file.and_then(|f| std::fs::read(f).ok()) else { return fail(format!("no cubemap {stem} in the cubemaps folder")) };
+        return faces_of(&bytes, name, max_face);
+    }
+    // the cubemap of a map (`maps/2fort`) is kept in the program
     if let Some(map) = name.strip_prefix("maps/") {
         let Some(bytes) = crate::map_cubemaps::get(map) else { return fail(format!("no cubemap of the map {map}")) };
-        let info = vtf::info(bytes).map_err(|e| ParseError(format!("{name}: {e}")))?;
-        let mut mip = 0;
-        while (info.width >> mip) > max_face && mip + 1 < info.mip_count { mip += 1; }
-        // a cubemap that is black all through (a map saved before its cubemaps were built) lights nothing: it is refused
-        let faces = vtf::decode_faces(bytes, mip).map_err(|e| ParseError(format!("{name}: {e}")))?;
-        if faces.iter().all(|f| f.rgba.chunks_exact(4).all(|p| p[0] | p[1] | p[2] == 0)) { return fail(format!("the cubemap of {map} is empty")); }
-        return Ok(faces);
+        return faces_of(bytes, name, max_face);
     }
     let mut path = vtf_path(name);
     // some cubemaps exist only in their HDR form (the goggles of Pyroland)
@@ -109,7 +145,7 @@ fn load_cubemap(vpk: &VpkSet, name: &str, max_face: u32) -> Result<Vec<vtf::Imag
     if !vpk.contains(&path) {
         return fail(format!("cubemap not found: {path}"));
     }
-    let bytes = vpk.read(&path).map_err(|e| ParseError(e.to_string()))?;
+    let bytes = if name.eq_ignore_ascii_case(HLMV_CUBEMAP) { vpk.read_archived(&path).or_else(|_| vpk.read(&path)) } else { vpk.read(&path) }.map_err(|e| ParseError(e.to_string()))?;
     // Smallest mip whose faces still fit within `max_face`.
     let info = vtf::info(&bytes).map_err(|e| ParseError(format!("{path}: {e}")))?;
     let mut mip = 0;
@@ -172,9 +208,9 @@ pub fn load(vpk: &VpkSet, vmt_path: &str) -> Result<Material> {
         }
     }
     // Environment cubemap: stored as six faces `env0`..`env5`. `env_cubemap` means "nearest map cubemap",
-    // which the engine resolves per level; there is no level here, so it is hlmv's own local cubemap.
+    // which the engine resolves per level; there is no level here, so it is the cubemap of 2fort that comes with the program.
     if let Some(name) = vmt.get("$envmap") {
-        let (name, max_face) = if name.eq_ignore_ascii_case("env_cubemap") { (HLMV_CUBEMAP, DEFAULT_CUBEMAP_FACE) } else { (name, u32::MAX) };
+        let (name, max_face) = if name.eq_ignore_ascii_case("env_cubemap") { (DEFAULT_CUBEMAP, DEFAULT_CUBEMAP_FACE) } else { (name, u32::MAX) };
         match load_cubemap(vpk, name, max_face) {
             Ok(faces) => textures.extend(faces.into_iter().enumerate().map(|(i, img)| (format!("env{i}"), img))),
             Err(e) => errors.push(format!("envmap: {e}")),

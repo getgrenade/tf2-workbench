@@ -86,6 +86,28 @@ export class CameraRig {
     this.viewZoom = Math.min(10, Math.max(0.1, this.viewZoom / factor));
     this.update();
   }
+  /** True while something else (a gizmo of a character or of the pose rig) has the pointer: the view of a navigated camera must not follow it. */
+  holdOrbit: () => boolean = () => false;
+  /**
+   * Moves the camera being navigated so that a ball (its centre, its radius) is framed: it keeps the way it looks and its field of view,
+   * and only goes along its view axis. False when the view is not of a camera that is navigated.
+   */
+  frameBall(center: THREE.Vector3, radius: number, fit = 1.15): boolean {
+    const data = this.activeCamera;
+    if (!data?.navigateView || this.overlayEditing) return false;
+    const size = cameraSize(data);
+    const half = Math.tan(THREE.MathUtils.degToRad(data.fov) / 2) * Math.min(1, size.w / size.h);
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(new THREE.Quaternion().fromArray(data.quaternion));
+    data.position = center.clone().addScaledVector(forward, -(radius * fit) / half).toArray();
+    const helper = this.visuals.children[this.cameras.indexOf(data)] as THREE.CameraHelper;
+    if (helper) {
+      helper.camera.position.fromArray(data.position);
+      helper.camera.updateMatrixWorld(true); helper.update();
+    }
+    this.update(true);
+    this.onChange();
+    return true;
+  }
   prepareNavigation() { if (!this.overlayEditing && this.active && !this.navigatingView) this.leave(true); }
   editOverlay(id: string) {
     if (this.overlayEditing === id) { this.stopOverlayEditing(); return; }
@@ -234,6 +256,17 @@ export class CameraRig {
     this.cameras.push(copy); this.rebuildVisuals(); this.onChange();
     return copy;
   }
+  /** A copy of a camera and its place in the list, to put it back with `insert` (undo of deleting it). */
+  capture(id: string): { camera: SceneCamera; index: number } | null {
+    const index = this.cameras.findIndex(c => c.id === id);
+    return index < 0 ? null : { camera: structuredClone(this.cameras[index]), index };
+  }
+  /** Puts a camera back at its place in the list (nothing happens when one of that id is there). */
+  insert(camera: SceneCamera, index: number) {
+    if (this.cameras.some(c => c.id === camera.id)) return;
+    this.cameras.splice(Math.max(0, Math.min(index, this.cameras.length)), 0, structuredClone(camera));
+    this.rebuildVisuals(); this.onChange();
+  }
   remove(id: string) {
     if (this.active === id) this.leave();
     if (this.editing === id) this.stopEditing();
@@ -276,7 +309,7 @@ export class CameraRig {
       const direction = this.camera.getWorldDirection(new THREE.Vector3());
       this.orbit.target.copy(this.camera.position).addScaledVector(direction, 100);
     }
-    this.orbit.enabled = !this.overlayEditing && (!!data.navigateView || !!this.navigation);
+    this.orbit.enabled = !this.overlayEditing && !this.holdOrbit() && (!!data.navigateView || !!this.navigation);
     // Apply damping and save the shot before particles and rendering.
     if (data.navigateView && !this.overlayEditing && !resetTarget) { this.orbit.update(); this.applyRoll(); this.camera.updateMatrixWorld(true); }
     this.frame.hidden = false;
@@ -354,7 +387,7 @@ export class CameraRig {
       this.pointer = { x: event.clientX, y: event.clientY };
       if (this.modal) this.updateModal(dom);
     }, { capture: true, signal });
-    const end = () => { this.navigation = null; if (this.active) this.orbit.enabled = !this.overlayEditing && this.navigatingView; };
+    const end = () => { this.navigation = null; if (this.active) this.orbit.enabled = !this.overlayEditing && !this.holdOrbit() && this.navigatingView; };
     dom.addEventListener("pointerup", end, { capture: true, signal });
     dom.addEventListener("pointercancel", end, { capture: true, signal });
     // in a fixed camera the wheel zooms the view; nothing else of the navigation works

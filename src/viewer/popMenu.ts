@@ -17,6 +17,10 @@ export interface MenuItem {
   checked?: boolean;
   /** The menu stays open when the entry is picked (its check mark turns over). */
   keepOpen?: boolean;
+  /** A small × at the end of the entry that deletes what it stands for: it closes the menu and calls this (the entry itself is not picked). */
+  remove?: () => void;
+  /** What the × says when the pointer rests on it. */
+  removeTitle?: string;
 }
 
 const OPEN_DELAY = 140;
@@ -87,6 +91,18 @@ export function openMenu(anchor: HTMLElement | { x: number; y: number }, items: 
         arrow.className = "popArrow";
         arrow.textContent = "▸";
         row.append(arrow);
+      }
+      if (item.remove) {
+        const x = document.createElement("span");
+        x.className = "popRemove";
+        x.setAttribute("role", "button");
+        x.setAttribute("aria-label", item.removeTitle ?? "Delete");
+        x.title = item.removeTitle ?? "Delete";
+        x.textContent = "×";
+        x.onclick = (e) => { e.stopPropagation(); e.preventDefault(); close(); item.remove!(); };
+        row.append(x);
+        // Delete on the entry asks the same
+        row.addEventListener("keydown", (e) => { if (e.key === "Delete") { e.preventDefault(); e.stopPropagation(); close(); item.remove!(); } });
       }
       const openChildren = () => {
         for (const sibling of panel.querySelectorAll(".popItem.open")) sibling.classList.remove("open");

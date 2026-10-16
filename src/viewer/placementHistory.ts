@@ -1,3 +1,5 @@
+import { nextEditSeq } from "./editHistory";
+
 export interface PlacementSnapshot {
   position: [number, number, number];
   yaw: number;
@@ -12,12 +14,16 @@ const copy = (state: PlacementSnapshot): PlacementSnapshot => ({ ...state, posit
 
 /** Only completed edits enter history: canceled/no-op drags preserve the redo branch. */
 /** A snapshot with the id of the group edit it belongs to (one drag of several things at once), when it does. */
-interface Entry { state: PlacementSnapshot; group?: number }
+interface Entry { state: PlacementSnapshot; group?: number; /** Where the step is in the one sequence of all steps (see editHistory.ts). */ seq: number }
 
 export class PlacementHistory {
   private undoStack: Entry[] = [];
   private redoStack: Entry[] = [];
   constructor(private readonly limit = 100) {}
+
+  /** The numbers of the steps undo and redo would take next (undefined: none), to tell which of the histories did its last step later. */
+  undoSeq(): number | undefined { return this.undoStack[this.undoStack.length - 1]?.seq; }
+  redoSeq(): number | undefined { return this.redoStack[this.redoStack.length - 1]?.seq; }
 
   /** The group edit that undo (or redo) would step over next; none for an edit of a single thing. */
   undoGroup(): number | undefined { return this.undoStack[this.undoStack.length - 1]?.group; }
@@ -27,7 +33,7 @@ export class PlacementHistory {
     const values = (state: PlacementSnapshot) => [...state.position, state.yaw, state.pitch ?? 0, state.roll ?? 0, ...state.scale];
     const previous = values(before);
     if (before.placed === after.placed && values(after).every((value, index) => Math.abs(value - previous[index]) < 1e-6)) return;
-    this.undoStack.push({ state: copy(before), group });
+    this.undoStack.push({ state: copy(before), group, seq: nextEditSeq() });
     if (this.undoStack.length > this.limit) this.undoStack.shift();
     this.redoStack.length = 0;
   }
@@ -35,14 +41,14 @@ export class PlacementHistory {
   undo(current: PlacementSnapshot): PlacementSnapshot | null {
     const entry = this.undoStack.pop();
     if (!entry) return null;
-    this.redoStack.push({ state: copy(current), group: entry.group });
+    this.redoStack.push({ state: copy(current), group: entry.group, seq: nextEditSeq() });
     return entry.state;
   }
 
   redo(current: PlacementSnapshot): PlacementSnapshot | null {
     const entry = this.redoStack.pop();
     if (!entry) return null;
-    this.undoStack.push({ state: copy(current), group: entry.group });
+    this.undoStack.push({ state: copy(current), group: entry.group, seq: nextEditSeq() });
     return entry.state;
   }
 }

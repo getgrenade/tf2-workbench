@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
+import { connectOrphanModels } from "./fbxRepair";
 import { computeNormals, windingSign } from "./mesh";
 
 /**
@@ -179,6 +180,11 @@ export interface ImportedModel {
   vertices: number;
   bounds: { min: [number, number, number]; max: [number, number, number] };
   axes: FbxAxes;
+  /**
+   * The empty nodes (an armature object of Blender, which its exporter writes as a Null) that the bones hang on. The item importer takes such a node
+   * for a bone of the item, which the skeleton above does not list: it is one of the few the item may have.
+   */
+  armatures?: string[];
   /** The shape keys of the file (from a .dmx), with the sliders that drive them. */
   flexes?: ImportedFlex[];
   flexControls?: ImportedFlexControl[];
@@ -204,7 +210,17 @@ const BLANK_IMAGE = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABA
 export function importFbx(buffer: ArrayBuffer): ImportedModel {
   const manager = new THREE.LoadingManager();
   manager.setURLModifier(() => BLANK_IMAGE);
-  return importScene(new FBXLoader(manager).parse(buffer, ""), readFbxAxes(buffer));
+  const load = (data: ArrayBuffer) => importScene(new FBXLoader(manager).parse(data, ""), readFbxAxes(data));
+  try {
+    return load(buffer);
+  } catch (error) {
+    // a node that no connection mentions (an armature's empty in some exports) trips the loader: it is put under the scene, and the file read again
+    if (error instanceof TypeError && /parents/.test(error.message)) {
+      const repaired = connectOrphanModels(buffer);
+      if (repaired) return load(repaired);
+    }
+    throw error;
+  }
 }
 
 /** The model of a loaded scene (the part of the import that the file format has no say in). */
@@ -224,6 +240,12 @@ export function importScene(root: THREE.Object3D, axes: FbxAxes): ImportedModel 
     let parent = o.parent;
     while (parent && !((parent as THREE.Bone).isBone && parent.name !== o.name)) parent = parent.parent;
     if (!skeletonOf.has(o.name)) skeletonOf.set(o.name, { parent: parent && parent.name ? parent.name : null, world: new THREE.Matrix4().multiplyMatrices(toGame, o.matrixWorld).toArray() });
+  });
+
+  const armatures: string[] = [];
+  root.traverse((o) => {
+    if (o === root || (o as THREE.Bone).isBone || (o as THREE.Mesh).isMesh || !o.name) return;
+    if (o.children.some((c) => (c as THREE.Bone).isBone) && !armatures.includes(o.name)) armatures.push(o.name);
   });
 
   const accumulate = new Map<string, Builder>();
@@ -301,6 +323,7 @@ export function importScene(root: THREE.Object3D, axes: FbxAxes): ImportedModel 
     vertices,
     bounds: { min: empty ? [0, 0, 0] : bounds.min.toArray(), max: empty ? [0, 0, 0] : bounds.max.toArray() },
     axes,
+    ...(armatures.length ? { armatures } : {}),
     ...(flexes.length ? { flexes, flexControls: flexes.map((f) => ({ name: f.name, raw: [f.name], stereo: false, eyelid: false, wrinkle: [0] })) } : {}),
   };
 }

@@ -16,14 +16,5 @@ macro_rules! maps {
 }
 
 maps!(
-    "cp_dustbowl",
-    "cp_foundry",
-    "cp_gorge",
-    "cp_granary",
-    "cp_gravelpit",
-    "cp_well",
-    "ctf_2fort",
-    "ctf_doublecross",
-    "ctf_foundry",
-    "pl_upward",
+    "2fort",
 );

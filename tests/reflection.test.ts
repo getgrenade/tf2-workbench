@@ -9,6 +9,8 @@ test("a scene without reflections gives none, and bad values are replaced", () =
   assert.equal(parseReflection({ cubemap: 3 }), undefined);
   assert.deepEqual(parseReflection({ cubemap: "cubemaps/cubemap_gold001", brightness: 9 }), { cubemap: "cubemaps/cubemap_gold001", brightness: 4 });
   assert.deepEqual(parseReflection({ cubemap: "", brightness: "x" }), { cubemap: "", brightness: 1 });
+  // the cubemap of 2fort moved from the program to the cubemaps folder
+  assert.equal(parseReflection({ cubemap: "maps/2fort", brightness: 1 })?.cubemap, "user/2fort");
 });
 
 test("the preview material of the compiler carries the six faces of its cubemap", () => {

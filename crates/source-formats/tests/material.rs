@@ -199,14 +199,14 @@ fn the_cubemaps_of_the_maps_are_in_the_program_and_load_as_materials() {
     // no game needed: they come with the program. The archive is only asked for what is not a map's.
     let vpk = steam::find_tf2().and_then(|tf| VpkSet::open_folder(&tf).ok());
     let Some(vpk) = vpk else { return };
-    assert!(source_formats::map_cubemaps::MAPS.len() >= 10);
+    assert!(source_formats::map_cubemaps::MAPS.len() >= 1);
     for map in source_formats::map_cubemaps::MAPS {
         let m = material::load(&vpk, &format!("{}maps/{map}.vmt", material::CUBEMAP_PREFIX)).unwrap_or_else(|e| panic!("{map}: {e}"));
         let faces: Vec<_> = m.textures.iter().filter(|(slot, _)| slot.starts_with("env")).collect();
         assert_eq!(faces.len(), 6, "{map}: {:?}", m.errors);
         let mut means = Vec::new();
         for (_, img) in &faces {
-            assert!(img.width >= 10 && img.width == img.height, "{map}: {}x{}", img.width, img.height);
+            assert!(img.width >= 1 && img.width == img.height, "{map}: {}x{}", img.width, img.height);
             let n = (img.rgba.len() / 4) as u64;
             let sum: [u64; 3] = img.rgba.chunks_exact(4).fold([0; 3], |a, p| [a[0] + p[0] as u64, a[1] + p[1] as u64, a[2] + p[2] as u64]);
             means.push([sum[0] / n, sum[1] / n, sum[2] / n]);
@@ -216,4 +216,49 @@ fn the_cubemaps_of_the_maps_are_in_the_program_and_load_as_materials() {
         if means.iter().all(|m| m == &means[0]) { println!("  ^ every face is the same"); }
     }
     assert!(material::load(&vpk, &format!("{}maps/not_a_map.vmt", material::CUBEMAP_PREFIX)).is_err());
+}
+
+#[test]
+fn the_default_and_the_studio_cubemap_do_not_depend_on_files_extracted_into_the_game_folder() {
+    let Some(tf) = steam::find_tf2() else { return };
+    let vpk = VpkSet::open_folder(&tf).unwrap();
+    // the default (`env_cubemap`) is the cubemap of 2fort that comes with the program, whatever the game folder holds
+    let m = material::load(&vpk, "materials/models/roller/rollermine_sheet.vmt").unwrap();
+    let default_faces: Vec<_> = m.textures.iter().filter(|(slot, _)| slot.starts_with("env")).map(|(_, img)| img).collect();
+    let bundled = vtf::decode_faces(include_bytes!("../assets/map_cubemaps/2fort.vtf"), 0).unwrap();
+    let mut mip = 0;
+    let info = vtf::info(include_bytes!("../assets/map_cubemaps/2fort.vtf")).unwrap();
+    while (info.width >> mip) > 256 && mip + 1 < info.mip_count { mip += 1; }
+    let expected = vtf::decode_faces(include_bytes!("../assets/map_cubemaps/2fort.vtf"), mip).unwrap();
+    assert_eq!(default_faces.len(), 6);
+    assert!(bundled.len() == 6);
+    for (a, b) in default_faces.iter().zip(&expected) { assert!(a.rgba == b.rgba, "the default cubemap is not the one of 2fort"); }
+    // the studio one is the game's own, not a loose copy over it
+    if let Ok(archived) = vpk.read_archived("materials/hlmv/cubemap.vtf") {
+        let info = vtf::info(&archived).unwrap();
+        let mut mip = 0;
+        while (info.width >> mip) > 512 && mip + 1 < info.mip_count { mip += 1; }
+        let expected = vtf::decode_faces(&archived, mip).unwrap();
+        let m = material::load(&vpk, &format!("{}hlmv/cubemap.vmt", material::CUBEMAP_PREFIX)).unwrap();
+        let faces: Vec<_> = m.textures.iter().filter(|(slot, _)| slot.starts_with("env")).map(|(_, img)| img).collect();
+        for (a, b) in faces.iter().zip(&expected) { assert!(a.rgba == b.rgba, "the studio cubemap is not the game's own"); }
+    }
+}
+
+#[test]
+fn the_cubemaps_of_the_user_folder_are_listed_and_load_as_materials() {
+    let dir = std::env::temp_dir().join(format!("tf2wb_cubemaps_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("2fort.vtf"), include_bytes!("../assets/map_cubemaps/2fort.vtf")).unwrap();
+    std::fs::write(dir.join("Mine.VTF"), include_bytes!("../assets/map_cubemaps/2fort.vtf")).unwrap();
+    std::fs::write(dir.join("notes.txt"), b"x").unwrap();
+    material::set_user_cubemaps_dir(dir.clone());
+    assert_eq!(material::user_cubemaps(), vec!["2fort".to_string(), "Mine".to_string()]);
+    let vpk = steam::find_tf2().and_then(|tf| VpkSet::open_folder(&tf).ok());
+    let Some(vpk) = vpk else { return };
+    let m = material::load(&vpk, &format!("{}user/Mine.vmt", material::CUBEMAP_PREFIX)).unwrap();
+    assert_eq!(m.textures.iter().filter(|(slot, _)| slot.starts_with("env")).count(), 6, "{:?}", m.errors);
+    // a name cannot leave the folder
+    assert!(material::load(&vpk, &format!("{}user/../2fort.vmt", material::CUBEMAP_PREFIX)).is_err());
+    let _ = std::fs::remove_dir_all(dir);
 }

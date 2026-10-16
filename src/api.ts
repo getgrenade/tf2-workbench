@@ -72,6 +72,10 @@ export const loadTextureFrames = (path: string, maxFrames = 128) => invoke<Array
 
 /** Original PCF, model attachment/hitbox, and texture sheet data for particle previews. */
 export const loadParticleAsset = (path: string) => invoke<ArrayBuffer>("load_particle_asset", { path });
+/** The names of the cubemaps in the cubemaps folder (the `.vtf` files of it, without the extension). */
+export const listUserCubemaps = () => invoke<string[]>("list_cubemaps");
+/** The path of the cubemaps folder. */
+export const cubemapsDir = () => invoke<string>("cubemaps_dir");
 export const loadOverlayFont = (path: string) => invoke<ArrayBuffer>("load_overlay_font", { path });
 export interface UnusualEffectInfo { id: number; name: string; system: string; kind: "hat" | "taunt"; file: string | null; attachment: string; root_bone: boolean; refire: number;
   /** A custom effect: the zip it came from, and when it was imported (ms). */
@@ -204,6 +208,9 @@ export const writeBinaryFile = (path: string, bytes: Uint8Array) =>
 /** Writes a copy of a model (an `adjusted_*.fbx` or `temp_*.fbx` file) beside the original. */
 export const writeAdjustedModel = (path: string, bytes: Uint8Array) =>
   invoke<void>("write_adjusted_model", bytes, { headers: { path: encodeURIComponent(path) } });
+/** Writes a model file (an existing .fbx) again where it is. */
+export const rewriteModelFile = (path: string, bytes: Uint8Array) =>
+  invoke<void>("rewrite_model_file", bytes, { headers: { path: encodeURIComponent(path) } });
 /** The scene of the last session (JSON text) and its autosave. */
 export const loadSession = () => invoke<string | null>("load_session");
 export const saveSession = (contents: string) => invoke<void>("save_session", { contents });

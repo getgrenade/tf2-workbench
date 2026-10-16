@@ -59,9 +59,13 @@ test("the turned axes of a bone are in the written file, and nothing moves", () 
   assert.deepEqual([...turned.parts[0].positions].map((v) => +v.toFixed(3)).sort((a, b) => a - b), [...model.parts[0].positions].map((v) => +v.toFixed(3)).sort((a, b) => a - b));
 });
 
-test("a model with shape keys is refused", () => {
+test("a model with shape keys is written with them: the same keys come back", () => {
   const model = read();
-  assert.throws(() => writeFbx({ ...model, flexes: [{ name: "f", part: new Uint16Array(), vertex: new Uint32Array(), delta: new Float32Array() }] }), /shape keys/);
+  const flexes = [{ name: "lift", part: Uint16Array.from([0]), vertex: Uint32Array.from([0]), delta: Float32Array.from([0, 1, 0]) }];
+  const back = importFbx(writeFbx({ ...model, flexes }).buffer as ArrayBuffer);
+  assert.deepEqual(back.flexes?.map((f) => f.name), ["lift"]);
+  assert.ok((back.flexes?.[0].part.length ?? 0) >= 1);
+  assert.deepEqual(Array.from(back.flexes![0].delta.slice(0, 3)).map((x) => Math.round(x * 1000) / 1000), [0, 1, 0]);
 });
 
 test("a mesh-only file (a LOD) has the mesh and its materials and no skeleton", () => {
@@ -80,4 +84,25 @@ test("several materials are one mesh with a slot for each", () => {
   assert.deepEqual(back.materials.slice().sort(), ["other", "small"]);
   assert.equal(back.triangles, two.triangles);
   assert.deepEqual(back.parts.map((p) => p.indices.length / 3), [model.triangles, model.triangles]);
+});
+
+test("a node that no connection mentions does not stop the file from being read", async () => {
+  const { FBXLoader } = await import("three/examples/jsm/loaders/FBXLoader.js");
+  const model = read();
+  const bytes = writeFbx(model, {}, { orphanNull: "armature" });
+  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  // the loader alone trips on it (that is what the file of an export with a loose armature node did)
+  assert.throws(() => new FBXLoader().parse(buffer, ""), /parents/);
+  const back = importFbx(buffer);
+  assert.equal(back.triangles, model.triangles);
+  assert.equal(back.skeleton.length, model.skeleton.length);
+  // the file after it (the footer and the nodes behind the connections) still lines up
+  assert.deepEqual(back.materials, model.materials);
+});
+
+test("a file with nothing loose is left as it is", async () => {
+  const { connectOrphanModels } = await import("../src/compiler/fbxRepair.ts");
+  const bytes = writeFbx(read());
+  assert.equal(connectOrphanModels(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer), null);
+  assert.equal(connectOrphanModels(new TextEncoder().encode("not an fbx").buffer as ArrayBuffer), null);
 });

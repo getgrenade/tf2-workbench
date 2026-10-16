@@ -251,8 +251,22 @@ export function evaluateMaterialVars(params: Record<string, string>, proxies: Pr
   return out;
 }
 
+/** Variables every material has without the VMT naming them (the shader's own parameters), so a proxy can read them. */
+const IMPLICIT_VARS = new Set(["$color", "$color2", "$alpha", "$frame", "$detailframe", "$phongtint", "$envmaptint", "$selfillumtint", "$detailblendfactor", "$phongboost", "$envmapcontrast", "$refracttint"]);
+/** The proxies that read other variables to make one. */
+const MATH_PROXIES = new Set(["equals", "add", "subtract", "multiply", "divide", "selectfirstifnonzero"]);
+
 function runProxy(vars: Vars, proxy: ProxyDef, ctx: TintContext, time: number) {
   const p = proxy.params;
+  // A proxy that reads a variable the material does not have is not made by the engine (its Init fails, and it never runs): the paint chain of a
+  // Workshop item that leaves out $half or $tintaddamount ends at the step before.
+  if (MATH_PROXIES.has(proxy.name)) {
+    for (const ref of [p["srcvar1"], p["srcvar2"]]) {
+      if (ref === undefined) continue;
+      const name = splitRef(ref).name;
+      if (name.startsWith("$") && !IMPLICIT_VARS.has(name) && !vars.nums.has(name) && !vars.mats.has(name)) return;
+    }
+  }
   const result = p["resultvar"];
   const src1 = p["srcvar1"];
   const src2 = p["srcvar2"];

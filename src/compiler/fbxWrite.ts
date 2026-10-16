@@ -8,7 +8,7 @@ import { turnedWorld, type BoneTurn } from "./boneAxes";
  * skeleton as limb nodes with a bind pose and the skin of the mesh. For a copy of the artist's model with the changes the compiler makes to it
  * (the turned axes of bones, see boneAxes.ts) already in it, or for a LOD the compiler made.
  *
- * What it does not carry: shape keys (flexes). It refuses a model that has them.
+ * The shape keys (flexes) of the model are written as a blend shape of the mesh, a channel and a shape for each. What it does not carry: animation.
  */
 
 type Prop =
@@ -131,10 +131,13 @@ const materialTemplate = (): Node[] => [
 export interface FbxOptions {
   /** The skeleton, its bind pose and the skin of the mesh (true), or the mesh alone, as a LOD is (false). */
   skeleton?: boolean;
+  /** For the tests: the bones hang on an empty node of this name, as an armature object of Blender is written. */
+  armature?: string;
+  /** For the tests: an empty node of this name that no connection mentions (as some exports have), to see that such a file still reads. */
+  orphanNull?: string;
 }
 
 export function writeFbx(model: ImportedModel, turns: Record<string, BoneTurn> = {}, options: FbxOptions = {}): Uint8Array {
-  if (model.flexes?.length) throw new Error("The model has shape keys, which a copy does not carry.");
   const withSkeleton = options.skeleton !== false;
   let nextId = 100000;
   const id = () => (nextId += 7919);
@@ -146,6 +149,12 @@ export function writeFbx(model: ImportedModel, turns: Record<string, BoneTurn> =
   // --- the skeleton: a limb node per bone, local to its parent ---
   const worlds = new Map<string, THREE.Matrix4>();
   const boneId = new Map<string, number>();
+  const armatureId = withSkeleton && options.armature ? id() : 0;
+  if (armatureId) {
+    objects.push(node("Model", [L(armatureId), S(objectName(options.armature!, "Model")), S("Null")], [node("Version", [I(232)]), node("Properties70")]));
+    counts.Model++;
+    connect(armatureId, 0);
+  }
   if (withSkeleton) {
     for (const b of model.skeleton) { worlds.set(b.name, turnedWorld(new THREE.Matrix4().fromArray(b.world), turns[b.name])); boneId.set(b.name, id()); }
     const p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3(), euler = new THREE.Euler();
@@ -171,7 +180,7 @@ export function writeFbx(model: ImportedModel, turns: Record<string, BoneTurn> =
         node("Culling", [S("CullingOff")]),
       ]));
       counts.Model++;
-      connect(bid, b.parent && boneId.has(b.parent) ? boneId.get(b.parent)! : 0);
+      connect(bid, b.parent && boneId.has(b.parent) ? boneId.get(b.parent)! : armatureId);
     }
   }
 
@@ -189,10 +198,20 @@ export function writeFbx(model: ImportedModel, turns: Record<string, BoneTurn> =
   ]));
   counts.Model++;
   connect(meshId, 0);
+  if (options.orphanNull) {
+    objects.push(node("Model", [L(id()), S(objectName(options.orphanNull, "Model")), S("Null")], [node("Version", [I(232)]), node("Properties70")]));
+    counts.Model++;
+  }
   const merged = mergeParts(parts);
   objects.push(geometryNode(geometryId, merged));
   counts.Geometry++;
   connect(geometryId, meshId);
+  if (model.flexes?.length) {
+    // the flexes name the parts of the model; the ones with no triangles are not in the mesh, so the parts are counted again without them
+    const mergedIndex = new Map<number, number>();
+    model.parts.forEach((part, i) => { if (part.indices.length) mergedIndex.set(i, mergedIndex.size); });
+    blendShapeNodes(model.flexes, mergedIndex, merged, geometryId, objects, connect, id, counts);
+  }
   for (const material of merged.materials) {
     const material_ = id();
     objects.push(node("Material", [L(material_), S(objectName(material, "Material")), S("")], [
@@ -378,6 +397,37 @@ function geometryNode(geometry: number, mesh: Merged): Node {
       node("LayerElement", [], [node("Type", [S("LayerElementMaterial")]), node("TypedIndex", [I(0)])]),
     ]),
   ]);
+}
+
+/** The shape keys of the mesh: a blend shape deformer, and for each key a channel of it with the shape (which vertices move, and by how much). */
+function blendShapeNodes(
+  flexes: NonNullable<ImportedModel["flexes"]>, mergedIndex: Map<number, number>, mesh: Merged, geometry: number, objects: Node[],
+  connect: (child: number, parent: number) => void, id: () => number, counts: Record<string, number>,
+) {
+  const blend = id();
+  objects.push(node("Deformer", [L(blend), S(objectName("Key", "Deformer")), S("BlendShape")], [node("Version", [I(100)])]));
+  counts.Deformer++;
+  connect(blend, geometry);
+  for (const flex of flexes) {
+    const indexes: number[] = [], deltas: number[] = [];
+    for (let k = 0; k < flex.part.length; k++) {
+      const part = mergedIndex.get(flex.part[k]);
+      if (part === undefined) continue;
+      indexes.push(mesh.starts[part] + flex.vertex[k]);
+      deltas.push(flex.delta[k * 3], flex.delta[k * 3 + 1], flex.delta[k * 3 + 2]);
+    }
+    const channel = id(), shape = id();
+    objects.push(node("Deformer", [L(channel), S(objectName(flex.name, "SubDeformer")), S("BlendShapeChannel")], [
+      node("Version", [I(100)]), node("DeformPercent", [D(0)]), node("FullWeights", [{ t: "d", v: [100] }]),
+    ]));
+    counts.Deformer++;
+    connect(channel, blend);
+    objects.push(node("Geometry", [L(shape), S(objectName(flex.name, "Geometry")), S("Shape")], [
+      node("Version", [I(100)]), node("Indexes", [{ t: "i", v: indexes }]), node("Vertices", [{ t: "d", v: deltas }]),
+    ]));
+    counts.Geometry++;
+    connect(shape, channel);
+  }
 }
 
 /** The skin of the mesh: a cluster for each bone it uses (the vertices and weights), with the bone's bind matrix. */

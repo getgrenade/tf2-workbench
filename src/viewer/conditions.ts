@@ -4,14 +4,17 @@ import type { MaterialEffects, Rgb } from "./proxies";
  * The player conditions that change how a character looks (tf_player_shared.cpp, c_tf_player.cpp). Each can be switched on by hand
  * (the Effects toggles) and some happen by themselves in Play mode: a Jarate burst soaks, a flamethrower sets alight.
  */
-export const CONDITION_KEYS = ["uber", "urine", "milk", "burning", "crit", "phase"] as const;
+export const CONDITION_KEYS = ["uber", "urine", "milk", "burning", "crit", "phase", "cig"] as const;
 export type ConditionKey = (typeof CONDITION_KEYS)[number];
 export type Conditions = Record<ConditionKey, boolean>;
 
-export const NO_CONDITIONS: Readonly<Conditions> = { uber: false, urine: false, milk: false, burning: false, crit: false, phase: false };
-export const CONDITION_LABELS: Record<ConditionKey, string> = { uber: "Ubercharge", urine: "Jarate", milk: "Mad Milk", burning: "On fire", crit: "Crit boost", phase: "Bonk" };
+export const NO_CONDITIONS: Readonly<Conditions> = { uber: false, urine: false, milk: false, burning: false, crit: false, phase: false, cig: false };
+export const CONDITION_LABELS: Record<ConditionKey, string> = { uber: "Ubercharge", urine: "Jarate", milk: "Mad Milk", burning: "On fire", crit: "Crit boost", phase: "Bonk", cig: "Cig smoke" };
 
 /** How long the conditions that Play mode applies last: jars add TF_COND_URINE / TF_COND_MAD_MILK for 10 s (JarExplode); fire lasts TF_BURNING_FLAME_LIFE. */
+/** The conditions only one class has: the toggle of another class is not offered (unless it is on, so it can be turned off). */
+export const CONDITION_CLASS: Partial<Record<ConditionKey, string>> = { cig: "spy" };
+
 export const CONDITION_SECONDS: Partial<Record<ConditionKey, number>> = { urine: 10, milk: 10, burning: 10, crit: 8, phase: 8 };
 
 export const anyCondition = (c: Readonly<Conditions>) => CONDITION_KEYS.some((k) => c[k]);
@@ -46,6 +49,8 @@ export const uberMaterialPath = (team: number) => `models/effects/invulnfx_${tea
 export interface ConditionParticle {
   system: string;
   weapon: boolean;
+  /** Starts at this attachment of the character's model, not at its body. */
+  attachment?: string;
 }
 
 /**
@@ -60,5 +65,7 @@ export function conditionParticles(c: Readonly<Conditions>, team: number): Condi
   if (c.crit) systems.push({ system: team === BLUE ? "critgun_weaponmodel_blu" : "critgun_weaponmodel_red", weapon: true });
   // a Bonked Scout (TF_COND_PHASE): the warp haze while he stands still (UpdatePhaseEffects)
   if (c.phase) systems.push({ system: "warp_version", weapon: false });
+  // the Spy's cigarette: the smoke and the glow of the cherry, at the "cig_smoke" attachment of his model
+  if (c.cig) systems.push({ system: "cig_smoke", weapon: false, attachment: "cig_smoke" }, { system: "cig_burn", weapon: false, attachment: "cig_smoke" });
   return systems;
 }

@@ -337,6 +337,45 @@ export class CompilerSession {
     return jobs.map((j) => j.to);
   }
 
+  // --- the armature node of an FBX ------------------------------------------------------------------------------------
+
+  /** The model files of the item that have an armature node (an extra bone for the importer), with the names of the nodes. */
+  armatureFiles(): { path: string; names: string[] }[] {
+    const out: { path: string; names: string[] }[] = [];
+    for (const cls of Object.keys(this.data.classes)) {
+      for (const loaded of this.loaded(cls)) {
+        if (loaded?.model.armatures?.length && /\.fbx$/i.test(loaded.path) && !out.some((o) => o.path === loaded.path)) out.push({ path: loaded.path, names: loaded.model.armatures });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Takes the armature node out of the files that have one: each is written again in place (an FBX written by this program has none), the bones
+   * the same, the shape keys in them. Returns the paths written, and why the others were not.
+   */
+  async removeArmatures(write: (path: string, bytes: Uint8Array) => Promise<void>): Promise<{ written: string[]; skipped: { path: string; reason: string }[] }> {
+    const written: string[] = [], skipped: { path: string; reason: string }[] = [];
+    for (const { path } of this.armatureFiles()) {
+      const found = Object.keys(this.data.classes).flatMap((cls) => this.loaded(cls).flatMap((m, index) => (m?.path === path ? [{ cls, index, model: m.model }] : [])));
+      const model = found[0]?.model;
+      if (!model) continue;
+      try {
+        await write(path, writeFbx(model, {}, { skeleton: model.skeleton.length > 0 }));
+        written.push(path);
+      } catch (error) {
+        skipped.push({ path, reason: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    for (const path of written) {
+      this.failures.delete(path);
+      for (const cls of Object.keys(this.data.classes)) this.lods(cls).forEach((p, index) => { if (p === path) this.loaded(cls)[index] = null; });
+    }
+    for (const path of written) for (const cls of Object.keys(this.data.classes)) { const index = this.lods(cls).indexOf(path); if (index >= 0) await this.loadModel(cls, index); }
+    if (written.length) { this.syncMaterials(); this.onChange(); }
+    return { written, skipped };
+  }
+
   // --- the temporary LODs as files ------------------------------------------------------------------------------------
 
   /** Where the temporary LODs of each class were written (`sniper:1` -> the path), so that the session file names real files. */
@@ -358,7 +397,7 @@ export class CompilerSession {
       for (let i = 1; i < NUM_LODS; i++) {
         if (!this.isTemp(cls, i)) { this.tempFiles.delete(`${cls}:${i}`); continue; }
         const model = this.model(cls, i);
-        if (!model || model.flexes?.length) continue;
+        if (!model || model.flexes?.length) continue; // (a lighter copy of a model with shape keys does not keep them)
         const to = `${from.slice(0, slash + 1)}temp_${base}_lod${i}.fbx`;
         await write(to, writeFbx(model, {}, { skeleton: false }));
         this.tempFiles.set(`${cls}:${i}`, to);
@@ -594,6 +633,9 @@ export class CompilerSession {
       const without = classes.filter((cls) => { const model = this.model(cls, 0); return model && !smdBoneNames(model).includes(bone); });
       if (without.length === classes.length && classes.length) warn(`jiggle:${bone}`, `${bone} has jiggle physics but is not in the model; it has none.`);
       else if (without.length) warn(`jiggle:${bone}`, `${bone} is not in the model of ${without.join(", ")}: it has no jiggle there.`);
+    }
+    for (const { path, names } of this.armatureFiles()) {
+      warn(`armature:${path}`, `${fileName(path)} has an extra bone, ${names.join(", ")}, that is no bone of the rig (an armature object of the exporter): the item importer counts it as one of the item's bones. Take it out of the file with the button below.`);
     }
     if (customBones.length > BONE_BUDGET) error("bones", `The item has ${customBones.length} bones of its own (${customBones.join(", ")}); the limit is ${BONE_BUDGET}.`);
     for (const name of this.materialNames()) {

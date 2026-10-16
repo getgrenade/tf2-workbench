@@ -655,6 +655,7 @@ export class Actor {
     } else {
       geo = this.ctx.geometry.acquire(m);
     }
+    markDetachedParts(geo, m, owner.bones.map((b) => b.name));
     const mesh = new THREE.SkinnedMesh(geo, material);
     if (!flexed) mesh.userData.sharedMesh = m;
     // Detached: skinning stays in bone-world (Source) space and the group matrix converts it to the
@@ -1780,4 +1781,24 @@ export class Actor {
     if (target.isEmpty()) target.copy(this.bindBounds).applyMatrix4(this.rootMatrix(new THREE.Matrix4(), false));
     return target;
   }
+}
+
+/**
+ * Marks the vertices of a mesh that hang on a prop bone (`prp_cig`: the Spy's cigarette, the props some models hold) in a vertex attribute for the
+ * shadow pass. Such a part is a thing of its own that touches the body, not relief of it: its shadows are to start right at what it touches, while
+ * the relief of the body itself (lips, nostrils) is not to shadow the body (see rigLitBy in the lighting shader).
+ */
+function markDetachedParts(geo: THREE.BufferGeometry, m: MeshData, boneNames: string[]) {
+  if (geo.getAttribute("aDetached")) return;
+  const detachedBone = boneNames.map((name) => /^prp_/i.test(name));
+  if (!detachedBone.some(Boolean)) return;
+  const count = m.skinIndices.length / 4;
+  const flag = new Float32Array(count);
+  let any = false;
+  for (let i = 0; i < count; i++) {
+    let weight = 0;
+    for (let k = 0; k < 4; k++) if (detachedBone[m.skinIndices[i * 4 + k]]) weight += m.skinWeights[i * 4 + k];
+    if (weight > 0.5) { flag[i] = 1; any = true; }
+  }
+  if (any) geo.setAttribute("aDetached", new THREE.BufferAttribute(flag, 1));
 }

@@ -411,6 +411,10 @@ export function createDocks(o: DockOptions) {
     togglePanel,
     toggleFold,
     reset,
+    /** The layout as it is now (a copy): where the panels are, the groups, the hidden ones, the sizes. */
+    snapshot: (): DockLayout => structuredClone(layout),
+    /** Puts a layout that was kept (see snapshot) on the docks; panels it does not know are dropped, new ones go where the defaults have them. */
+    apply: (saved: unknown) => set(parseLayout(saved, ids, o.defaults)),
     isVisible: (id: string) => findPanel(layout, id) !== null,
     panels: () => o.panels.map((p) => ({ id: p.id, title: p.title, visible: findPanel(layout, p.id) !== null })),
     /** Called after the layout changed (a tab moved, a panel hidden or shown, a dock folded). */

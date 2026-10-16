@@ -150,6 +150,20 @@ test("animationnowrap stops on the last frame", () => {
 
 import { resolvePhongTint } from "../src/viewer/payload.ts";
 
+test("a proxy that reads a variable the material does not have is not run (the paint chain of Architect of Pain stops after its first step)", () => {
+  const proxies = [
+    { name: "yellowlevel", params: { resultvar: "$yellow" } },
+    { name: "multiply", params: { srcvar1: "$color2", srcvar2: "$yellow", resultvar: "$phongtint" } },
+    { name: "multiply", params: { srcvar1: "$phongtint", srcvar2: "$half", resultvar: "$phongtint" } },
+    { name: "add", params: { srcvar1: "$phongtint", srcvar2: "$tintaddamount", resultvar: "$phongtint" } },
+  ];
+  const vars = evaluateMaterialVars({ "$color2": "{ 110 38 44 }", "$yellow": "0" }, proxies, { paint: null });
+  assert.deepEqual(vars["$phongtint"].map((x) => Math.round(x * 1000) / 1000), [0.431, 0.149, 0.173]);
+  // with the variables there, the whole chain runs
+  const full = evaluateMaterialVars({ "$color2": "{ 110 38 44 }", "$yellow": "0", "$half": "[.5 .5 .5]", "$tintaddamount": "[.1 .1 .1]" }, proxies, { paint: null });
+  assert.deepEqual(full["$phongtint"].map((x) => Math.round(x * 1000) / 1000), [0.316, 0.175, 0.186]);
+});
+
 test("an unset $phongtint with an exponent texture tints phong by the albedo (the Spy smoking jacket)", () => {
   assert.deepEqual(resolvePhongTint({ "$phongalbedotint": "1" }, true), [-1, 0, 0]);
   assert.deepEqual(resolvePhongTint({}, true), [1, 1, 1], "$phongalbedotint is off unless the material sets it");
