@@ -41,8 +41,9 @@ body { background: var(--bg); color: var(--fg); font: var(--ui-fw-body) var(--ui
 .flexPane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .flexList { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); column-gap: var(--ui-6); align-content: start; padding: 0 var(--ui-4) var(--ui-4) 0; }
 .flexList .ui-prop { margin-top: var(--ui-row-gap); }
-.flexFooter { flex: 0 0 auto; padding-top: 6px; }
+.flexFooter { flex: 0 0 auto; padding-top: 6px; display: flex; align-items: center; gap: 12px; }
 .flexFooter button { padding: 3px 7px; font-size: var(--ui-fs-small); }
+.flexEyesFollow { display: flex; align-items: center; gap: 5px; font-size: var(--ui-fs-small); color: var(--dim); cursor: pointer; }
 .teams { display: flex; gap: 4px; margin-top: 6px; }
 .teams .team { flex: 1; font-weight: 600; letter-spacing: .05em; }
 .teams .team.red.on { background: var(--ui-red-bg); border-color: var(--ui-red); color: var(--ui-red-text); }

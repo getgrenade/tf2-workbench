@@ -219,6 +219,9 @@ export class SourceMaterials {
     const siTintVar = vars["$selfillumtint"];
     const siTint = siTintVar ? [siTintVar[0] ?? 1, siTintVar[1] ?? siTintVar[0] ?? 1, siTintVar[2] ?? siTintVar[0] ?? 1] : parseVec(p["$selfillumtint"], [1, 1, 1]);
     const additive = flag("$additive");
+    // CBaseShader::TextureIsTranslucent: the base texture's alpha is opacity only on a $translucent or $alphatest material, and not when it is the
+    // self-illum mask or the envmap mask ($opaquetexture says it never is)
+    const baseAlphaIsOpacity = (translucent || alphaTest) && !selfIllum && !flag("$basealphaenvmapmask") && !flag("$opaquetexture");
     const envTint = parseVec(p["$envmaptint"], [1, 1, 1]);
     const phong = flag("$phong") && !eyes;
     // WantsSkinShader() in vertexlitgeneric_dx9_helper.cpp: phong materials with a lightwarp (or
@@ -236,9 +239,10 @@ export class SourceMaterials {
       wireframe: this.wireframe,
       side: flag("$nocull") ? THREE.DoubleSide : THREE.FrontSide,
       transparent: translucent || additive,
-      // $additive adds the colour to the frame without writing depth. The engine blends it as SRC_ALPHA, ONE when the base
-      // texture has alpha (BT_BLENDADD: the Jarate liquid is added at ~40%), and the shader multiplies the output alpha by the
-      // base alpha (except with self-illum / blend-tint). Textures without alpha have alpha 1, which makes that a plain add.
+      // $additive adds the colour to the frame without writing depth. The engine blends it as SRC_ALPHA, ONE (BT_BLENDADD) only when
+      // the base texture's alpha counts as translucency (see baseAlphaIsOpacity), else as ONE, ONE (BT_ADD): the output alpha is then 1
+      // (uUseBaseAlpha is off), which makes SRC_ALPHA, ONE the same plain add. The Airdog's goggle lens and the Jarate liquid are added
+      // whole although their base alpha is a mask.
       ...(additive ? { ...particleBlending(true), depthWrite: false } : {}),
       ...(decalModulate ? { transparent: true, blending: THREE.CustomBlending, blendEquation: THREE.AddEquation, blendSrc: THREE.DstColorFactor, blendDst: THREE.SrcColorFactor, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 } : {}),
       uniforms: {
@@ -289,7 +293,7 @@ export class SourceMaterials {
         uAlphaTest: { value: alphaTest ? num("$alphatestreference", 0.7) : 0 },
         uOpacity: { value: refract ? 0.3 : num("$alpha", 1) },
         // With self-illum or blend-tint the base alpha is a mask, not opacity.
-        uUseBaseAlpha: { value: (translucent || alphaTest || additive) && !selfIllum && !blendTint },
+        uUseBaseAlpha: { value: baseAlphaIsOpacity && !blendTint },
         tCube: { value: envCube ?? this.emptyCube },
         uHasEnv: { value: !!envCube },
         uEnvWorld: { value: (p["$envmap"] ?? "").toLowerCase() === "env_cubemap" },

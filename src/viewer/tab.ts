@@ -480,6 +480,8 @@ export function createViewTab(els: Els) {
     }
   });
   const flex = createFlexUi(els.flex, (globals) => selected?.actor.setFlexControllers(globals));
+  const eyesFollow = document.getElementById("flexEyesFollow") as HTMLInputElement | null;
+  if (eyesFollow) eyesFollow.onchange = () => { selected?.actor.setEyesFollowCamera(eyesFollow.checked); };
   const gameClassOf = (mdl: string) => CLASSES.find(([, m]) => m === mdl)?.[2] ?? mdl;
   const classLabelOf = (mdl: string) => {
     const building = buildingOf(mdl);
@@ -1877,6 +1879,7 @@ export function createViewTab(els: Els) {
     itemsUi.load(e.items);
     weapons.load(e.held);
     flex.restore(e.flex, models.get(classPath(e.cls)) ?? null);
+    if (eyesFollow) eyesFollow.checked = e.actor.followsCamera;
     renderBuildingPanel();
     anim.show(e.anim, e.actor);
     syncPoseUi();
@@ -3745,6 +3748,7 @@ export function createViewTab(els: Els) {
         bodyMaskVersion: 1,
         bodyTris: e.actor.handMaskState,
         fogged: e.actor.fogged ? undefined : false,
+        eyesFollowCamera: e.actor.followsCamera || undefined,
       };
   }
 
@@ -3789,6 +3793,7 @@ export function createViewTab(els: Els) {
       e.actor.setInspectOnly(s.inspectOnly === true);
       e.actor.setHandMaskState(s.bodyTris);
       e.actor.fogged = s.fogged !== false;
+      e.actor.setEyesFollowCamera(s.eyesFollowCamera === true);
       if (s.bodyShown) e.actor.setVisibleRegions(s.bodyShown, s.bodyMaskVersion !== 1);
       else if (s.inspectOnly) e.actor.setVisibleRegions([]); // scenes saved before the parts picker showed no body
       if (s.conditions) e.actor.setConditions(s.conditions); // the materials follow when the model shows; syncConditions starts the rest

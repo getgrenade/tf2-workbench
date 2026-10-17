@@ -53,6 +53,8 @@ export interface SceneEntity {
   bodyMaskVersion?: 1;
   /** False when the gradient fog does not cover this character. */
   fogged?: boolean;
+  /** The eyes look at the camera. */
+  eyesFollowCamera?: boolean;
   /** Triangles hidden by hand with the view tools: bit-packed base64 per mesh. */
   bodyTris?: Record<string, string>;
   /** Buildings only: what the building is doing (damage, metal, firing ...); see buildingFx.ts. */
@@ -148,6 +150,7 @@ export function parseScene(text: string): SceneFile {
       inspectOnly: e.inspectOnly === true ? true : undefined,
       bodyTris: e.bodyTris && typeof e.bodyTris === "object" ? Object.fromEntries(Object.entries(e.bodyTris).filter(([, v]) => typeof v === "string")) : undefined,
       fogged: e.fogged === false ? false : undefined,
+      eyesFollowCamera: e.eyesFollowCamera === true ? true : undefined,
       building: e.building && typeof e.building === "object" ? readFx(e.building) : undefined,
       bodyShown: Array.isArray(e.bodyShown) ? e.bodyShown.filter((k: unknown) => typeof k === "string") : undefined,
       bodyMaskVersion: e.bodyMaskVersion === 1 ? 1 : undefined,

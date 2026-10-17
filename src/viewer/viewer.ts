@@ -615,6 +615,7 @@ void main() {
       if (this.blenderRig.active) this.blenderRig.update();
       this.mats.updateDynamic(now / 1000);
       if (!this.cameras.active) this.controls.update();
+      this.aimEyesAt(this.camera);
       this.updateLight();
       this.updatePointLight();
       const floor = this.actorList.reduce((y, a) => Math.min(y, a.floorY), Infinity);
@@ -2534,6 +2535,14 @@ void main() {
   /** What is not part of the world for the shadows of the lights: the floor and its shadows, the grid and the gizmos. */
   private lightShadowExclude(): THREE.Object3D[] { return [...this.shadowQuads(), this.floorGrid.mesh, this.facingMarker, ...this.editorObjects]; }
 
+  /** Turns the eyes that follow the camera toward `camera` (the view's, or the one a picture is taken with). */
+  private aimEyesAt(camera: THREE.Camera) {
+    camera.updateMatrixWorld();
+    const position = camera.getWorldPosition(this.tmpEyeCamera);
+    for (const a of this.actorList) a.setEyeCamera(position);
+  }
+  private readonly tmpEyeCamera = new THREE.Vector3();
+
   private renderLightShadows(moved: boolean) {
     this.lightingRenderer.render(this.renderer, this.scene, this.center, this.radius, this.lightShadowExclude(), moved);
   }
@@ -3166,6 +3175,7 @@ void main() {
       return out;
     };
     try {
+      this.aimEyesAt(cam);
       this.renderLightShadows(true);
       this.updateParticleDepth(cam, w, h);
       // the picture behind the scene is the camera's own: it is in a shot of the camera, over the whole of it, and in no other picture

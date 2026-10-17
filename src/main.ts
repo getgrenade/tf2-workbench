@@ -293,7 +293,7 @@ app.innerHTML = `
       </div>
       <div id="flexPane" class="flexPane" hidden>
         <div id="flexList" class="flexList"></div>
-        <div class="flexFooter"><button id="flexReset" title="Every controller back to 0 (double-click a slider to reset just that one)">Reset</button></div>
+        <div class="flexFooter"><button id="flexReset" title="Every controller back to 0 (double-click a slider to reset just that one)">Reset</button><label class="flexEyesFollow" title="The eyes look at the camera, as in the game's loadout and item previews (off: they look straight ahead, as a player's do in the game). The eye controllers still turn them from there"><input type="checkbox" id="flexEyesFollow" /> Eyes follow camera</label></div>
       </div>
     </aside>
   </div>

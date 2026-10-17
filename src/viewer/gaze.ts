@@ -54,3 +54,35 @@ export function gazeAnglesForTarget(x: number, y: number, z: number): { upDown: 
   const deg = 180 / Math.PI;
   return { upDown: pitch * deg, rightLeft: yaw * deg };
 }
+
+/** How far ahead the eyes look when they do not follow anything (C_TFPlayer::UpdateLookAt: 512 units forward). */
+export const LOOK_DISTANCE = 512;
+
+/**
+ * Where the eyes look, as the engine works it out (C_BaseFlex::SetViewTarget): `target` is the point to look at in attachment space (Source:
+ * +x forward, +y left, +z up). It is kept at least 6 units ahead, deflected by the `eyes_updown` / `eyes_rightleft` controllers (degrees; the
+ * deflection is weaker the further the target is off centre), and held inside the model's cone of eye movement (`maxDeflection`, the cosine of
+ * its half angle: 30 degrees when the model does not say). The distance of the target is kept.
+ */
+export function viewTargetLocal(target: [number, number, number], eyesUpDown: number, eyesRightLeft: number, maxDeflection = COS_CONE): [number, number, number] {
+  let [x, y, z] = target;
+  if (x < 6) x = 6;
+  const distance = Math.hypot(x, y, z);
+  [x, y, z] = [x / distance, y / distance, z / distance];
+  // AngleVectors( QAngle( pitch, yaw, 0 ) ) with the forward component dropped
+  const rad = Math.PI / 180, pitch = eyesUpDown * rad, yaw = eyesRightLeft * rad;
+  const scale = x * x;
+  y += Math.cos(pitch) * Math.sin(yaw) * scale;
+  z += -Math.sin(pitch) * scale;
+  let len = Math.hypot(x, y, z);
+  [x, y, z] = [x / len, y / len, z / len];
+  if (x < maxDeflection) {
+    const d = y * y + z * z;
+    if (d > 0) {
+      const k = Math.sqrt((1 - maxDeflection * maxDeflection) / d);
+      [x, y, z] = [maxDeflection, y * k, z * k];
+    } else [x, y, z] = [1, 0, 0];
+  }
+  len = distance;
+  return [x * len, y * len, z * len];
+}

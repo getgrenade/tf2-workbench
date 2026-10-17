@@ -3,7 +3,7 @@ import { Playback, Rig, SOURCE_TO_VIEWER } from "./animator";
 import { eyeFragmentShader } from "./eyeShader";
 import { applyMeshFlexes, runFlexRules, type FlexGlobals } from "./flex";
 import { GeometryCache, buildGeometry } from "./geometryCache";
-import { gazeTargetLocal } from "./gaze";
+import { LOOK_DISTANCE, viewTargetLocal } from "./gaze";
 import { JiggleBone } from "./jiggle";
 import type { ClipData, EyeballData, MaterialData, MeshData, ModelData } from "./payload";
 import { FINGERS, FINGER_AXIS, MAX_CURL, MIN_CURL, SPREAD_AXIS, boneNameOf, curlAngle, curlFromAngle, type Finger } from "./fingers";
@@ -133,6 +133,7 @@ const _eyeOrigin = new THREE.Vector3();
 const _eyeUp = new THREE.Vector3();
 const _eyeFwd = new THREE.Vector3();
 const _eyeLeft = new THREE.Vector3();
+const _eyeToLocal = new THREE.Matrix4();
 const _lockCorrection = new THREE.Matrix4(), _lockInverse = new THREE.Matrix4();
 const _cosLocal = new THREE.Matrix4();
 const _rootRot = new THREE.Matrix4();
@@ -198,6 +199,25 @@ export class Actor {
   private inspectOnlyOn = false;
   /** Whether the gradient fog covers this character (off: it stays clear of it, in front of the fog). */
   fogged = true;
+  /** The eyes look at the camera (as in the game's model panels: the loadout, the item preview), not ahead. */
+  private eyesFollowCamera = false;
+  get followsCamera() { return this.eyesFollowCamera; }
+  /** Where the camera is (viewer space), for eyes that follow it. */
+  private eyeCamera = new THREE.Vector3(NaN, NaN, NaN);
+  /** Makes the eyes follow the camera (from the next time they are told where it is) or look ahead again. */
+  setEyesFollowCamera(on: boolean) {
+    if (this.eyesFollowCamera === on) return;
+    this.eyesFollowCamera = on;
+    this.eyeCamera.set(NaN, NaN, NaN);
+    this.updateEyes();
+    this.changed = true;
+  }
+  /** Tells the eyes where the camera is; they turn to it when they follow it. */
+  setEyeCamera(position: THREE.Vector3) {
+    if (!this.eyesFollowCamera || position.equals(this.eyeCamera)) return;
+    this.eyeCamera.copy(position);
+    this.updateEyes();
+  }
   /** The parts of the character that are shown (see bodyRegions.ts); the class meshes are not drawn at all when none is. */
   private shownRegions = new Set<string>(["*"]);
   private maskClass: BodyClass | null = null;
@@ -1721,9 +1741,10 @@ export class Actor {
   }
 
   /**
-   * Aims every eyeball at the gaze target and rebuilds its iris projection (hlmv `SetViewTarget`): the
-   * target is 32 units in front of the "eyes" attachment, deflected by the eyes_updown / eyes_rightleft
-   * controllers. Each eye looks at that single point, so the pair converges slightly like hlmv's.
+   * Aims every eyeball at the view target and rebuilds its iris projection, as the engine does. The target is the camera when the eyes follow
+   * it (the game's model panels), else a point 512 units straight ahead (C_TFPlayer::UpdateLookAt), worked through C_BaseFlex::SetViewTarget
+   * (see viewTargetLocal). Each eye looks at that point, turned outward by twice its `zoffset` (R_StudioEyeballPosition: forward +=
+   * right * (zoffset + dz), dz = zoffset), which keeps the pair from converging.
    */
   private updateEyes() {
     if (!this.rig || !this.classData || this.eyes.length === 0) return;
@@ -1735,7 +1756,14 @@ export class Actor {
       const l = att.local;
       _eyeLocal.set(l[0], l[1], l[2], l[3], l[4], l[5], l[6], l[7], l[8], l[9], l[10], l[11], 0, 0, 0, 1);
       _eyeAtt.multiplyMatrices(this.rig.boneWorld[att.bone], _eyeLocal);
-      const [x, y, z] = gazeTargetLocal(this.flexGlobals.get("eyes_updown") ?? 0, this.flexGlobals.get("eyes_rightleft") ?? 0);
+      // the target in attachment space: the camera, or straight ahead
+      let local: [number, number, number] = [LOOK_DISTANCE, 0, 0];
+      if (this.eyesFollowCamera && Number.isFinite(this.eyeCamera.x)) {
+        _eyeToLocal.multiplyMatrices(root, _eyeAtt).invert();
+        const p = _eyeTarget.copy(this.eyeCamera).applyMatrix4(_eyeToLocal);
+        local = [p.x, p.y, p.z];
+      }
+      const [x, y, z] = viewTargetLocal(local, this.flexGlobals.get("eyes_updown") ?? 0, this.flexGlobals.get("eyes_rightleft") ?? 0);
       _eyeTarget.set(x, y, z).applyMatrix4(_eyeAtt).applyMatrix4(root);
       haveTarget = true;
     }
@@ -1746,9 +1774,8 @@ export class Actor {
       _eyeUp.set(...data.boneUp).transformDirection(bone).transformDirection(root);
       _eyeFwd.subVectors(_eyeTarget, _eyeOrigin).normalize();
       _eyeLeft.crossVectors(_eyeUp, _eyeFwd).normalize();
-      // The QC yaw offset (zoffset) turns each eye outward from the gaze direction, which cancels most of the
-      // convergence on the 32 unit target. Applied the other way round the eyes come out cross-eyed.
-      _eyeFwd.addScaledVector(_eyeLeft, -data.zoffset).normalize();
+      // the QC yaw offset (zoffset) turns each eye outward, twice over (right = -left)
+      _eyeFwd.addScaledVector(_eyeLeft, -2 * data.zoffset).normalize();
       _eyeLeft.crossVectors(_eyeUp, _eyeFwd).normalize();
       _eyeUp.crossVectors(_eyeFwd, _eyeLeft); // re-orthogonalised up
       const u = _eyeLeft.multiplyScalar(data.irisScale);
