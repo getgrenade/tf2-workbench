@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
-import { connectOrphanModels } from "./fbxRepair";
+import { connectOrphanModels, dropAnimationCurves } from "./fbxRepair";
 import { importerMaterialNames } from "./fbxStrip";
 import { computeNormals, windingSign } from "./mesh";
 
@@ -214,15 +214,19 @@ export function importFbx(buffer: ArrayBuffer): ImportedModel {
   const manager = new THREE.LoadingManager();
   manager.setURLModifier(() => BLANK_IMAGE);
   const load = (data: ArrayBuffer) => importScene(new FBXLoader(manager).parse(data, ""), readFbxAxes(data), importerMaterialNames(buffer));
-  try {
-    return load(buffer);
-  } catch (error) {
-    // a node that no connection mentions (an armature's empty in some exports) trips the loader: it is put under the scene, and the file read again
-    if (error instanceof TypeError && /parents/.test(error.message)) {
-      const repaired = connectOrphanModels(buffer);
-      if (repaired) return load(repaired);
+  // what the loader trips on is mended (one thing at a time, as it fails on them one at a time), and the file read again
+  let data = buffer;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return load(data);
+    } catch (error) {
+      if (attempt >= 3 || !(error instanceof TypeError)) throw error;
+      // a node that no connection mentions (an armature's empty in some exports): it is put under the scene
+      // animation curves on a property the loader does not know (a custom property): they are dropped, as the compiler has no use for animation
+      const mended = /parents/.test(error.message) ? connectOrphanModels(data) : /curves/.test(error.message) ? dropAnimationCurves(data) : null;
+      if (!mended) throw error;
+      data = mended;
     }
-    throw error;
   }
 }
 

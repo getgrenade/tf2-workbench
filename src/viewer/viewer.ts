@@ -2531,10 +2531,11 @@ void main() {
   legacyPointPosition(): [number, number, number] { return this.shared.uPointPos.value.toArray(); }
   get sceneRadius(): number { return this.radius; }
 
-  private renderLightShadows(moved: boolean, camera: THREE.Camera = this.camera, width = this.sceneTarget.width, height = this.sceneTarget.height) {
-    const exclude = [...this.shadowQuads(),this.floorGrid.mesh,this.facingMarker,...this.editorObjects];
-    this.lightingRenderer.render(this.renderer,this.scene,this.center,this.radius,exclude,moved);
-    this.lightingRenderer.renderContact(this.renderer,this.scene,camera,width,height,exclude);
+  /** What is not part of the world for the shadows of the lights: the floor and its shadows, the grid and the gizmos. */
+  private lightShadowExclude(): THREE.Object3D[] { return [...this.shadowQuads(), this.floorGrid.mesh, this.facingMarker, ...this.editorObjects]; }
+
+  private renderLightShadows(moved: boolean) {
+    this.lightingRenderer.render(this.renderer, this.scene, this.center, this.radius, this.lightShadowExclude(), moved);
   }
 
   private fixedVerticalFov: number | null = null;
@@ -3165,7 +3166,7 @@ void main() {
       return out;
     };
     try {
-      this.renderLightShadows(true, cam, w, h);
+      this.renderLightShadows(true);
       this.updateParticleDepth(cam, w, h);
       // the picture behind the scene is the camera's own: it is in a shot of the camera, over the whole of it, and in no other picture
       this.cameras.backdrop.beginCapture(!!shot, w / h);
@@ -3177,10 +3178,21 @@ void main() {
       const drawPicture = (withMask: boolean): THREE.Texture => {
         r.setRenderTarget(sceneRT);
         let tex: THREE.Texture = sceneRT.texture;
+        // The shadows' filter is turned differently in each picture that is drawn and the pictures are averaged, as Source Filmmaker does for its
+        // final renders (its shadow jitter): the grain of the soft edges goes. With motion blur each of its moments gets a turn of its own.
+        const turns = this.lightingRenderer.casting ? (this.offline ? 4 : 8) : 1;
+        let turn = 0;
+        const renderTurned = () => { this.lightingRenderer.jitter(turn++ / Math.max(turns, 1)); r.setRenderTarget(sceneRT); this.renderScene(r, cam); };
         if (withLook && mb?.enabled && mb.shutter > 0 && mb.samples > 1) {
           captureMotion ??= new MotionAccumulator();
-          tex = this.renderSubframes(() => { r.setRenderTarget(sceneRT); this.renderScene(r, cam); }, sceneRT.texture, mb.samples, mb.shutter, w, h, captureMotion);
+          tex = this.renderSubframes(renderTurned, sceneRT.texture, mb.samples, mb.shutter, w, h, captureMotion);
+        } else if (turns > 1) {
+          captureMotion ??= new MotionAccumulator();
+          captureMotion.begin(r, w, h);
+          for (let i = 0; i < turns; i++) { renderTurned(); captureMotion.add(sceneRT.texture, 1 / turns); }
+          tex = captureMotion.texture;
         } else this.renderScene(r, cam);
+        this.lightingRenderer.jitter(0);
         if (withMask && maskRT) this.renderFogMask(maskRT, cam);
         if (withLook && this.look.dof?.enabled && sceneRT.depthTexture) {
           captureDof ??= new DofPass();

@@ -106,3 +106,16 @@ test("a file with nothing loose is left as it is", async () => {
   assert.equal(connectOrphanModels(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer), null);
   assert.equal(connectOrphanModels(new TextEncoder().encode("not an fbx").buffer as ArrayBuffer), null);
 });
+
+test("animation curves on a property the loader does not know are dropped, not fatal", async (t) => {
+  const { dropAnimationCurves } = await import("../src/compiler/fbxRepair.ts");
+  const bytes = writeFbx(read());
+  assert.equal(dropAnimationCurves(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer), null);
+  assert.equal(dropAnimationCurves(new TextEncoder().encode("not an fbx").buffer as ArrayBuffer), null);
+  // (an export of a hat with a custom property that is animated: only where the file is on this machine)
+  const path = "C:/Users/getgr/Downloads/bars_medichat_lod0.fbx";
+  const fs = await import("node:fs");
+  if (!fs.existsSync(path)) return t.skip("the file is not here");
+  const file = fs.readFileSync(path);
+  assert.equal(importFbx(file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength) as ArrayBuffer).parts.length, 2);
+});

@@ -118,3 +118,29 @@ function shiftAfter(b: Uint8Array, dv: DataView, at: number, by: number) {
 
 const le32 = (v: number) => [v & 255, (v >> 8) & 255, (v >> 16) & 255, (v >>> 24) & 255];
 const le64 = (v: number) => [...le32(v), 0, 0, 0, 0];
+
+/**
+ * A file can have animation curves on a property that three's FBXLoader does not know (a custom property named "Y", say): it fails on them
+ * ("Cannot read properties of undefined (reading 'curves')"). The compiler has no use for animation, so the curves are renamed in place (the
+ * loader no longer sees them; nothing moves). Null when there are none, or the file is not one this knows.
+ */
+export function dropAnimationCurves(buffer: ArrayBuffer): ArrayBuffer | null {
+  const b = new Uint8Array(buffer);
+  if (b.length < 40 || new TextDecoder("latin1").decode(b.subarray(0, MAGIC.length)) !== MAGIC) return null;
+  const dv = new DataView(buffer);
+  if (dv.getUint32(23, true) >= 7500) return null;
+  let objects: Rec | null = null;
+  try {
+    for (let at = 27; at + 13 <= b.length;) {
+      const rec = parseNode(b, dv, at, new Set(["Objects"]));
+      if (!rec) break;
+      if (rec.name === "Objects") { objects = rec; break; }
+      at = rec.end;
+    }
+  } catch { return null; }
+  const curves = objects?.kids.filter((o) => o.name === "AnimationCurve") ?? [];
+  if (!curves.length) return null;
+  const out = new Uint8Array(b);
+  for (const curve of curves) out[curve.start + 13 + "AnimationCurve".length - 1] = "X".charCodeAt(0);
+  return out.buffer;
+}

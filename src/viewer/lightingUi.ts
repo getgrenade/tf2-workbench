@@ -23,13 +23,10 @@ export function createLightingUi(pane: HTMLElement, host: LightingHost) {
 <section class="lightCol worldGround"></section>
 <section class="lightCol lightingAmbient"><h3>Ambient &amp; shadows</h3><div class="lightAmbientFields"><span>Ambient</span><input type="color" data-control="ambientColor" aria-label="Ambient colour" /><input type="range" data-control="ambient" aria-label="Ambient intensity" min="0" max="1" step=".01" /><input class="lightValue" type="number" data-value="ambient" aria-label="Ambient value" min="0" max="1" step="any" /></div>
 <div class="lightShadowQuality"><label class="lightShadowRes" title="The size of the picture each light's shadows are drawn into (a bigger one is sharper and takes more memory)">Real shadows <select data-control="shadowRes"><option value="512">Low · 512</option><option value="1024">Medium · 1024</option><option value="2048">High · 2048</option><option value="4096">Ultra · 4096</option></select></label>
-<label class="slider" title="How soft the edges of the shadows are">Softness <output></output><input type="range" data-control="shadowSoft" min="0" max="1" step=".01" /></label>
-<label class="slider" title="Raise it when surfaces speckle or stripe, lower it when the shadows of cosmetics (and of the Spy's cigarette) come loose from what casts them">Bias <output></output><input type="range" data-control="shadowBias" min="0" max=".01" step=".0001" /></label>
-<label class="slider" title="How much relief a character may have (lips, nostrils, folds) before it shades itself, in units: raise it for a cleaner face, lower it for more depth in the shadows (a nose is some 3 units)">Detail <output></output><input type="range" data-control="shadowDetail" min="0" max="4" step=".1" /></label>
-<label class="slider" title="Small shadows where things touch (a cigarette on a lip, a hat on a head), found by following a short ray from every pixel toward the light through the picture: it costs a second drawing of the scene. 0 is off">Contact shadows <output></output><input type="range" data-control="shadowContact" min="0" max="1" step=".01" /></label>
-<label class="slider" title="How far a contact shadow reaches from what casts it, in units">Contact length <output></output><input type="range" data-control="shadowContactLength" min=".5" max="10" step=".1" /></label>
-<label class="colorRow" title="The colour of what is in shadow: black is a plain dark shadow, a colour lets that colour of the light through, as if the shadow were lit from elsewhere">Shadow colour <input type="color" data-control="shadowTint" /></label>
-<label class="slider" title="Where a smooth-shaded low-poly surface turns from the light its faces shade themselves in steps: this lets go of what is only a little above a face that turns from the light, in units (0 is off)">Terminator fix <output></output><input type="range" data-control="shadowTerminator" min="0" max="4" step=".05" /></label></div>
+<label class="slider" title="How soft the shadows are: the size of the filter, in texels of the shadow map (Source Filmmaker's default is 3)">Softness <output></output><input type="range" data-control="shadowFilter" min="0" max="12" step=".1" /></label>
+<label class="slider" title="The constant depth bias (Source Filmmaker's default is 0.0005): raise it when surfaces speckle, lower it when shadows come loose from what casts them">Depth bias <output></output><input type="range" data-control="shadowDepthBias" min="0" max=".005" step=".00005" /></label>
+<label class="slider" title="The slope-scaled depth bias (Source Filmmaker's default is 16): how far surfaces that slant from the light are pushed back, so they do not shade themselves">Slope bias <output></output><input type="range" data-control="shadowSlopeBias" min="0" max="64" step=".5" /></label>
+<label class="colorRow" title="The colour of what is in shadow: black is a plain dark shadow, a colour lets that colour of the light through, as if the shadow were lit from elsewhere">Shadow colour <input type="color" data-control="shadowTint" /></label></div>
 </section>
 <section class="lightCol lightingControls"><div class="lightDirectionRow"><div class="lightBall"></div><div class="lightDirectionFields"></div></div><div class="lightFields"></div><button class="lightReset" data-action="reset">Reset light</button></section>`;
   pane.prepend(root);
@@ -86,7 +83,11 @@ export function createLightingUi(pane: HTMLElement, host: LightingHost) {
   addField(fields, "range", "Radius", 1, 1000, 1);
   addField(fields, "falloff", "Falloff", .2, 6, .1);
   addField(fields, "cone", "Cone", 5, 85, 1);
+  // the settings of a light's shadows: shown while it casts them, 1 when it has not got its own
+  const shadowFields = new Set(["shadowStrength", "shadowSoftness", "curve"]);
   addField(fields, "shadowStrength", "Shadow strength", 0, 1, .01);
+  addField(fields, "shadowSoftness", "Shadow softness", 0, 4, .05);
+  addField(fields, "curve", "Falloff curve", .25, 4, .05);
   const position = query(".lightPosition");
   position.innerHTML = '<span>Location</span>';
   const coordinates: Array<HTMLInputElement> = [];
@@ -118,11 +119,12 @@ export function createLightingUi(pane: HTMLElement, host: LightingHost) {
   }
   query<HTMLButtonElement>('[data-action="reset"]').onclick = () => edit(l => { const { name, group } = l; Object.assign(l, newRigLight(l.id, l.type, host.spawn()), { name }); if (group) l.group = group; else delete l.group; delete l.followCamera; delete l.pivot; delete l.rotation; });
   // how the real shadows are made (it is the same for every light)
-  const shadowRes = query<HTMLSelectElement>('[data-control="shadowRes"]'), shadowSoft = query<HTMLInputElement>('[data-control="shadowSoft"]'), shadowBias = query<HTMLInputElement>('[data-control="shadowBias"]');
-  const shadowDetail = query<HTMLInputElement>('[data-control="shadowDetail"]'), shadowContact = query<HTMLInputElement>('[data-control="shadowContact"]');
-  const shadowContactLength = query<HTMLInputElement>('[data-control="shadowContactLength"]'), shadowTerminator = query<HTMLInputElement>('[data-control="shadowTerminator"]'), shadowTint = query<HTMLInputElement>('[data-control="shadowTint"]');
-  const setQuality = () => commit(value => { value.rig!.shadow = parseShadowQuality({ resolution: +shadowRes.value, softness: +shadowSoft.value, bias: +shadowBias.value, detail: +shadowDetail.value, contact: +shadowContact.value, contactLength: +shadowContactLength.value, terminator: +shadowTerminator.value, tint: shadowTint.value }); });
-  shadowRes.onchange = shadowSoft.oninput = shadowBias.oninput = shadowDetail.oninput = shadowContact.oninput = shadowContactLength.oninput = shadowTerminator.oninput = shadowTint.oninput = setQuality;
+  const shadowRes = query<HTMLSelectElement>('[data-control="shadowRes"]'), shadowFilter = query<HTMLInputElement>('[data-control="shadowFilter"]');
+  const shadowDepthBias = query<HTMLInputElement>('[data-control="shadowDepthBias"]'), shadowSlopeBias = query<HTMLInputElement>('[data-control="shadowSlopeBias"]');
+  const shadowTint = query<HTMLInputElement>('[data-control="shadowTint"]');
+  const setQuality = () => commit(value => { value.rig!.shadow = parseShadowQuality({ resolution: +shadowRes.value, filter: +shadowFilter.value, depthBias: +shadowDepthBias.value, slopeBias: +shadowSlopeBias.value, tint: shadowTint.value }); });
+  shadowRes.onchange = setQuality;
+  shadowFilter.oninput = shadowDepthBias.oninput = shadowSlopeBias.oninput = shadowTint.oninput = setQuality;
   /** Adds a light of this type (a copy of the selected one when asked). */
   const addLight = (type: RigLight["type"], duplicate = false) => commit(value => {
     const rig = value.rig!;
@@ -144,19 +146,13 @@ export function createLightingUi(pane: HTMLElement, host: LightingHost) {
     query<HTMLInputElement>('[data-control="ambientColor"]').value = value.ambientColor;
     const quality = rig.shadow ?? DEFAULT_SHADOW_QUALITY;
     shadowRes.value = String(quality.resolution);
-    shadowSoft.value = String(quality.softness);
-    shadowBias.value = String(quality.bias);
-    shadowDetail.value = String(quality.detail);
-    shadowContact.value = String(quality.contact);
-    shadowContactLength.value = String(quality.contactLength);
-    shadowTerminator.value = String(quality.terminator);
+    shadowFilter.value = String(quality.filter);
+    shadowDepthBias.value = String(quality.depthBias);
+    shadowSlopeBias.value = String(quality.slopeBias);
+    shadowFilter.parentElement!.querySelector("output")!.textContent = quality.filter.toFixed(1);
+    shadowDepthBias.parentElement!.querySelector("output")!.textContent = quality.depthBias.toFixed(5);
+    shadowSlopeBias.parentElement!.querySelector("output")!.textContent = quality.slopeBias.toFixed(1);
     shadowTint.value = quality.tint;
-    shadowDetail.parentElement!.querySelector("output")!.textContent = quality.detail.toFixed(1);
-    shadowContact.parentElement!.querySelector("output")!.textContent = quality.contact === 0 ? "off" : quality.contact.toFixed(2);
-    shadowContactLength.parentElement!.querySelector("output")!.textContent = quality.contactLength.toFixed(1);
-    shadowTerminator.parentElement!.querySelector("output")!.textContent = quality.terminator === 0 ? "off" : quality.terminator.toFixed(2);
-    shadowSoft.parentElement!.querySelector("output")!.textContent = quality.softness.toFixed(2);
-    shadowBias.parentElement!.querySelector("output")!.textContent = (quality.bias * 1000).toFixed(1);
     query(".lightingControls").hidden = !light;
     query(".lightBall").title = "Drag to rotate the light";
     if (!light)
@@ -168,11 +164,11 @@ export function createLightingUi(pane: HTMLElement, host: LightingHost) {
     query<HTMLInputElement>('[data-control="followCamera"]').checked = light.followCamera === true;
     query<HTMLInputElement>('[data-control="color"]').value = light.color;
     for (const [key, input] of inputs) {
-      const value = (light as unknown as Record<string, number | undefined>)[key] ?? (key === "shadowStrength" ? 1 : 0);
+      const value = (light as unknown as Record<string, number | undefined>)[key] ?? (shadowFields.has(key) ? 1 : 0);
       input.value = String(value);
       const number = numbers.get(key)!;
-      if (document.activeElement !== number) number.value = key === "intensity" || key === "falloff" || key === "shadowStrength" ? value.toFixed(2) : String(Math.round(value * 100) / 100);
-      input.parentElement!.hidden = (key === "range" || key === "falloff") ? light.type === "directional" : key === "cone" ? light.type !== "spot" : key === "shadowStrength" ? !light.shadows : key === "azimuth" || key === "elevation" ? point : false;
+      if (document.activeElement !== number) number.value = key === "intensity" || key === "falloff" || shadowFields.has(key) ? value.toFixed(2) : String(Math.round(value * 100) / 100);
+      input.parentElement!.hidden = (key === "range" || key === "falloff") ? light.type === "directional" : key === "cone" ? light.type !== "spot" : shadowFields.has(key) ? !light.shadows : key === "azimuth" || key === "elevation" ? point : false;
     }
     position.hidden = light.type === "directional";
     coordinates.forEach((input, i) => { if (document.activeElement !== input)

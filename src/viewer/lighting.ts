@@ -28,33 +28,33 @@ export interface RigLight {
   shadows: boolean;
   /** How dark its shadows are, 0..1 (absent: 1). */
   shadowStrength?: number;
+  /** How soft its shadows are, times the rig's softness (absent: 1). */
+  shadowSoftness?: number;
+  /** How it falls off toward the side that turns from it: a power of its Lambert term (absent: 1; higher falls off sooner). */
+  curve?: number;
 }
 /**
- * How the real shadows of the lights are made: the size of each shadow map, how soft the edges are, how far a part that is put on a model (or hangs
- * on it) must be behind what it touches to be shadowed (bias), how much relief a model may have before it shades itself (detail), how dark the
- * contact shadows are (a short ray march in the picture; 0 is off) and how far they reach in units, and how much a face of a smooth-shaded low-poly
- * mesh may shade itself where it turns from the light (terminator; 0 is off), and the colour of what is in shadow (tint: black is the plain dark
- * shadow; the light that the shadow lets through is that colour, so a blue tint is a shadow lit by a blue sky).
+ * How the shadows of the lights are made, as Source Filmmaker makes them (the engine's flashlight: see rigShadow in lightingShader.ts): the size of
+ * each light's shadow map, the size of the filter in texels (softness), and the engine's depth bias, a constant and a slope-scaled one (its defaults
+ * are 3, 0.0005 and 16), the colour of what is in shadow (tint: black is the plain dark shadow; the light that the shadow lets through is that
+ * colour, so a blue tint is a shadow lit by a blue sky).
  */
 export interface ShadowQuality {
   resolution: number;
-  softness: number;
-  bias: number;
-  detail: number;
-  contact: number;
-  contactLength: number;
-  terminator: number;
+  filter: number;
+  depthBias: number;
+  slopeBias: number;
   tint: string;
 }
 export const SHADOW_RESOLUTIONS = [512, 1024, 2048, 4096];
-export const DEFAULT_SHADOW_QUALITY: ShadowQuality = { resolution: 2048, softness: .1, bias: .001, detail: 4, contact: 0, contactLength: 4, terminator: 1, tint: "#000000" };
+export const DEFAULT_SHADOW_QUALITY: ShadowQuality = { resolution: 2048, filter: 3, depthBias: .0005, slopeBias: 16, tint: "#000000" };
 export function parseShadowQuality(raw: unknown): ShadowQuality {
   const v = raw as Partial<ShadowQuality> | null;
   const d = DEFAULT_SHADOW_QUALITY;
   const n = (x: unknown, fallback: number, lo: number, hi: number) => typeof x === "number" && Number.isFinite(x) ? Math.min(hi, Math.max(lo, x)) : fallback;
   const wanted = typeof v?.resolution === "number" ? v.resolution : d.resolution;
   const resolution = SHADOW_RESOLUTIONS.reduce((best, r) => Math.abs(r - wanted) < Math.abs(best - wanted) ? r : best, d.resolution);
-  return { resolution, softness: n(v?.softness, d.softness, 0, 1), bias: n(v?.bias, d.bias, 0, .01), detail: n(v?.detail, d.detail, 0, 4), contact: n(v?.contact, d.contact, 0, 1), contactLength: n(v?.contactLength, d.contactLength, .5, 10), terminator: n(v?.terminator, d.terminator, 0, 4), tint: typeof v?.tint === "string" && /^#[\da-f]{6}$/i.test(v.tint) ? v.tint.toLowerCase() : d.tint };
+  return { resolution, filter: n(v?.filter, d.filter, 0, 12), depthBias: n(v?.depthBias, d.depthBias, 0, .01), slopeBias: n(v?.slopeBias, d.slopeBias, 0, 64), tint: typeof v?.tint === "string" && /^#[\da-f]{6}$/i.test(v.tint) ? v.tint.toLowerCase() : d.tint };
 }
 export interface LightingRig {
   shadow: ShadowQuality;
@@ -109,6 +109,8 @@ export function parseLightingRig(value: unknown, primary?: Parameters<typeof def
     };
     if (typeof value.group === "string" && value.group) parsed.group = value.group.slice(0, 64);
     if (typeof value.shadowStrength === "number" && value.shadowStrength < 1) parsed.shadowStrength = number(value.shadowStrength, 1, 0, 1);
+    if (typeof value.shadowSoftness === "number" && value.shadowSoftness !== 1) parsed.shadowSoftness = number(value.shadowSoftness, 1, 0, 4);
+    if (typeof value.curve === "number" && value.curve !== 1) parsed.curve = number(value.curve, 1, .25, 4);
     if (parsed.type === "directional" && Array.isArray(value.pivot) && value.pivot.length === 3 && value.pivot.every(n => typeof n === "number" && Number.isFinite(n))) parsed.pivot = value.pivot.map(n => Math.min(10000, Math.max(-10000, n))) as [number, number, number];
     if (parsed.type === "spot" && Array.isArray(value.rotation) && value.rotation.length === 4 && value.rotation.every(n => typeof n === "number" && Number.isFinite(n))) {
       const q = new THREE.Quaternion().fromArray(value.rotation);

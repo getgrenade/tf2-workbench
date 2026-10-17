@@ -209,11 +209,14 @@ ${bodyMaskDiscard}
   float pointWin = clamp(1.0 - (pointDist * pointDist) / (uPointRange * uPointRange), 0.0, 1.0);
   vec3 pointLight = uPointColor * safePow(pointWin, uPointFalloff);
   diffuseLighting += pointLight * diffuseTerm(N, Lp);
-  rigNormal = Nv; // the vertex normal: a bump map must not roughen the shadow's offset
   for (int i = 0; i < 8; i++) {
     if (i >= uRigCount) break;
     vec3 direction, color; rigLight(i, vWorldPos, direction, color);
-    diffuseLighting += color * diffuseTerm(N, direction);
+    if (uRigShadow[i] > 0.5) {
+      // a light that casts shadows is as Source Filmmaker's lights (the engine's flashlight): Lambert, darkened by the shadow (see rigShadow)
+      rigShadowLit[i] = rigShadow(i, vWorldPos);
+      diffuseLighting += rigShadowedLight(i, color, dot(N, direction), rigShadowLit[i]);
+    } else diffuseLighting += color * diffuseTerm(N, direction);
   }
 
   // $detail layers that change the base colour (TextureCombine in common_ps_fxc.h): 0 base * detail * 2, 1 base + detail, 8 base * detail
@@ -314,6 +317,7 @@ ${bodyMaskDiscard}
     for (int i = 0; i < 8; i++) {
       if (i >= uRigCount) break;
       vec3 direction, color; rigLight(i, vWorldPos, direction, color);
+      if (uRigShadow[i] > 0.5) color *= rigShadowLit[i];
       float facing = clamp(dot(N, direction), 0.0, 1.0);
       float reflected = clamp(dot(R, direction), 0.0, 1.0);
       vec3 highlight = vec3(safePow(reflected, exponent)) * facing * color;

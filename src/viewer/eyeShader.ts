@@ -197,13 +197,17 @@ void main() {
   // Glint specular from the local light
   vec3 glint = pow(clamp(dot(corneaReflect, L), 0.0, 1.0), 128.0) * uLightColor;
 
-  rigNormal = N;
   for (int i = 0; i < 8; i++) {
     if (i >= uRigCount) break;
     vec3 direction, color; rigLight(i, vWorldPos, direction, color);
     float cosine = dot(N, direction);
-    cosine = uHalfLambert ? pow(cosine * 0.5 + 0.5, 2.0) : max(cosine, 0.0);
-    vertexLight += color * (uHasWarp ? 2.0 * texture2D(tWarp, vec2(cosine, 0.5)).rgb : vec3(cosine)) * mix(uAmbientOcclColor, vec3(1.0), aoTex);
+    if (uRigShadow[i] > 0.5) {
+      // a light that casts shadows is as Source Filmmaker's lights (see rigShadow): Lambert, darkened by the shadow
+      vertexLight += rigShadowedLight(i, color, cosine, rigShadow(i, vWorldPos)) * mix(uAmbientOcclColor, vec3(1.0), aoTex);
+    } else {
+      cosine = uHalfLambert ? pow(cosine * 0.5 + 0.5, 2.0) : max(cosine, 0.0);
+      vertexLight += color * (uHasWarp ? 2.0 * texture2D(tWarp, vec2(cosine, 0.5)).rgb : vec3(cosine)) * mix(uAmbientOcclColor, vec3(1.0), aoTex);
+    }
     vec3 tangentLightExtra = vec3(dot(direction, T), dot(direction, B), dot(direction, N));
     vec3 irisVector = -tangentLightExtra; irisVector.xy *= -0.5; irisVector.z = max(irisVector.z, 0.5);
     float irisFacingExtra = pow(abs(dot(irisTN, normalize(irisVector))), 6.0) * 0.5;
