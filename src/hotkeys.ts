@@ -35,9 +35,9 @@ export const HOTKEYS = [
   { id: "outliner.rename", label: "Rename", group: "Outliner", hint: "Renames the selected row of the outliner.", default: "F2", kind: "key" },
   { id: "outliner.delete", label: "Delete", group: "Outliner", hint: "Removes the selected rows of the outliner.", default: "Delete", kind: "key" },
   { id: "outliner.toggle", label: "Show / hide", group: "Outliner", hint: "Turns the selected rows of the outliner on or off.", default: "Space", kind: "key" },
-  { id: "nav.orbit", label: "Orbit", group: "Mouse navigation", hint: "Turns the view about what it looks at. (Ctrl or Shift with the left button pans.)", default: "Mouse0", kind: "mouse" },
-  { id: "nav.zoom", label: "Zoom (drag)", group: "Mouse navigation", hint: "Dragging moves the view in and out. The wheel always zooms.", default: "Mouse1", kind: "mouse" },
-  { id: "nav.pan", label: "Pan", group: "Mouse navigation", hint: "Slides the view sideways and up and down.", default: "Mouse2", kind: "mouse" },
+  { id: "nav.orbit", label: "Orbit", group: "Mouse navigation", hint: "Turns the view about what it looks at. Shift with the left button pans; Ctrl with it turns the directional light, as in hlmv.", default: "Mouse0", kind: "mouse" },
+  { id: "nav.zoom", label: "Zoom (drag)", group: "Mouse navigation", hint: "Dragging moves the view in and out (the right button, as in hlmv). The wheel always zooms.", default: "Mouse2", kind: "mouse" },
+  { id: "nav.pan", label: "Pan", group: "Mouse navigation", hint: "Slides the view sideways and up and down (the middle button; Shift with the left button too).", default: "Mouse1", kind: "mouse" },
 ] as const satisfies readonly HotkeyDef[];
 
 export type HotkeyId = (typeof HOTKEYS)[number]["id"];

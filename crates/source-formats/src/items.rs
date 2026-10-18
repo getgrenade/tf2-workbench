@@ -27,6 +27,15 @@ pub struct ItemStyle {
     pub bodygroups: BTreeMap<String, i32>,
 }
 
+/// A particle effect an item always shows: the `attach particle effect` (`static`) attribute, an id in the game's table of attached
+/// particles, or a `visuals/attached_particlesystems` entry, a system by name at an attachment of the item's model.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ItemParticle {
+    pub effect: Option<u32>,
+    pub system: Option<String>,
+    pub attachment: Option<String>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Item {
     /// Stock loadout item (`baseitem`), including its retained upgradeable equivalent.
@@ -55,6 +64,8 @@ pub struct Item {
     /// The item has the `player_skin_override` attribute (the Voodoo-Cursed souls): its wearer is drawn in the zombie skin of the
     /// class model, a skin family the model has for exactly this.
     pub skin_override: bool,
+    /// The particle effects the item always shows (a pipe's smoke, the Earbuds' notes).
+    pub particles: Vec<ItemParticle>,
     /// `anim_slot`: which animation set the item uses (`PRIMARY`, `MELEE_ALLCLASS`, ...), uppercase. Empty when unset.
     pub anim_slot: String,
     /// `visuals/player_poseparam`: pose parameters the item sets on the player while it is held (lowercase name -> value in
@@ -76,6 +87,8 @@ pub struct Item {
     pub taunt_scenes: BTreeMap<String, String>,
     /// Taunts only: class -> the prop's own scene file name (the prop plays a sequence of that name on its model).
     pub taunt_prop_scenes: BTreeMap<String, String>,
+    /// Taunts only: class -> the player's scene path (`scenes/player/heavy/low/taunt_x.vcd`, lower case, forward slashes): its face.
+    pub taunt_scene_paths: BTreeMap<String, String>,
     /// A cosmetic from the workshop importer's zips (`tf/workshop/import_source`), not from the game's own schema.
     pub workshop: bool,
 }
@@ -251,9 +264,9 @@ fn parse_styles(nodes: &[Node], names: &HashMap<String, String>) -> Vec<ItemStyl
                 }
             }
             ItemStyle {
+                // a localization token of the game's (`#TF_..._Style0`), or, in the workshop schema file, the name itself
                 name: get_str(s, "name")
-                    .and_then(|t| names.get(&t.trim_start_matches('#').to_ascii_lowercase()))
-                    .cloned()
+                    .map(|t| names.get(&t.trim_start_matches('#').to_ascii_lowercase()).cloned().unwrap_or_else(|| if t.starts_with('#') { String::new() } else { t.trim().to_string() }))
                     .unwrap_or_default(),
                 model: get_str(s, "model_player").filter(|m| !m.is_empty()).map(|m| m.replace('\\', "/")),
                 per_class,
@@ -289,6 +302,7 @@ fn taunt_item(item: &mut Item, nodes: &[Node]) -> bool {
         return false;
     }
     item.taunt_scenes = scenes;
+    item.taunt_scene_paths = class_map(get_block(taunt, "custom_taunt_scene_per_class"), |p| p.replace('\\', "/").to_ascii_lowercase());
     item.taunt_prop_scenes = class_map(get_block(taunt, "custom_taunt_prop_scene_per_class"), scene_name);
     if item.classes.is_empty() {
         item.classes = item.taunt_scenes.keys().chain(props.keys()).cloned().collect();
@@ -358,6 +372,7 @@ fn build_item(id: u32, nodes: &[Node], names: &HashMap<String, String>) -> Item 
         prefabs: Vec::new(),
         taunt_scenes: BTreeMap::new(),
         taunt_prop_scenes: BTreeMap::new(),
+        taunt_scene_paths: BTreeMap::new(),
         workshop: false,
         extra_models: extra_models(nodes),
         pose_params: get_block(nodes, "visuals")
@@ -369,8 +384,27 @@ fn build_item(id: u32, nodes: &[Node], names: &HashMap<String, String>) -> Item 
         styles: parse_styles(nodes, names),
         quality: get_str(nodes, "item_quality").map(str::to_ascii_lowercase).unwrap_or_else(|| "unique".to_string()),
         skin_override: has_attribute_class(nodes, "player_skin_override"),
+        particles: item_particles(nodes),
         paintable: get_block(nodes, "capabilities").and_then(|c| get_str(c, "paintable")).is_some_and(|v| v.trim() != "0"),
     }
+}
+
+/// The particle effects an item always shows (see [`ItemParticle`]).
+fn item_particles(nodes: &[Node]) -> Vec<ItemParticle> {
+    let mut out = Vec::new();
+    for attribute in ["attach particle effect static", "attach particle effect"] {
+        if let Some(id) = attribute_number(nodes, attribute).map(|v| v as u32).filter(|v| *v > 0) {
+            out.push(ItemParticle { effect: Some(id), system: None, attachment: None });
+        }
+    }
+    if let Some(systems) = get_block(nodes, "visuals").and_then(|v| get_block(v, "attached_particlesystems")) {
+        for n in systems {
+            let Some(b) = n.block() else { continue };
+            let Some(system) = get_str(b, "system").map(|s| s.trim()).filter(|s| !s.is_empty()) else { continue };
+            out.push(ItemParticle { effect: None, system: Some(system.to_string()), attachment: get_str(b, "attachment").map(|a| a.trim().to_string()).filter(|a| !a.is_empty()) });
+        }
+    }
+    out
 }
 
 /// Whether an item's `attributes` / `static_attrs` block has an attribute of this class that is not zero.
@@ -381,8 +415,8 @@ fn has_attribute_class(nodes: &[Node], class: &str) -> bool {
     })
 }
 
-/// Reads the packed RGB of a tint attribute from an item's `attributes` / `static_attrs` block.
-fn tint_value(nodes: &[Node], attribute: &str) -> Option<u32> {
+/// Reads a numeric attribute from an item's `attributes` / `static_attrs` block (written as a value, or a block with a `value`).
+fn attribute_number(nodes: &[Node], attribute: &str) -> Option<f64> {
     for block in ["attributes", "static_attrs"] {
         let Some(node) = get_block(nodes, block).and_then(|b| find(b, attribute)) else { continue };
         let text = match &node.value {
@@ -390,10 +424,15 @@ fn tint_value(nodes: &[Node], attribute: &str) -> Option<u32> {
             Value::Block(b) => get_str(b, "value"),
         };
         if let Some(v) = text.and_then(|t| t.trim().parse::<f64>().ok()) {
-            return Some(v as u32 & 0x00ff_ffff);
+            return Some(v);
         }
     }
     None
+}
+
+/// Reads the packed RGB of a tint attribute from an item's `attributes` / `static_attrs` block.
+fn tint_value(nodes: &[Node], attribute: &str) -> Option<u32> {
+    attribute_number(nodes, attribute).map(|v| v as u32 & 0x00ff_ffff)
 }
 
 fn build_paint(id: u32, nodes: &[Node], names: &HashMap<String, String>) -> Option<Paint> {
@@ -550,6 +589,45 @@ fn workshop_item(zip_name: &str, manifest: &str, prefabs: &HashMap<String, Vec<N
     Some(item)
 }
 
+/// Lays a block of the workshop schema file over a workshop item: each part the block has (the regions, the styles, the particles,
+/// the bodygroups, the classes, the models, the title, ...) takes the place of what the zip gave, written as items_game writes it.
+fn overlay_item(item: &mut Item, own: &[Node], prefabs: &HashMap<String, Vec<Node>>, names: &HashMap<String, String>) {
+    let resolved = resolve(own, prefabs, 0);
+    let o = build_item(item.id, &resolved, names);
+    let has = |key: &str| find(&resolved, key).is_some();
+    let visuals = get_block(&resolved, "visuals");
+    if let Some(t) = get_str(&resolved, "item_name") {
+        // a localization token of the game's, or the title itself
+        let key = t.trim_start_matches('#');
+        item.display_name = names.get(&key.to_ascii_lowercase()).cloned().unwrap_or_else(|| key.to_string());
+    }
+    if has("item_slot") { item.slot = o.slot; }
+    if has("used_by_classes") { item.classes = o.classes; item.class_slots = o.class_slots; }
+    if has("model_player") { item.model = o.model; }
+    if has("model_player_per_class") { item.per_class = o.per_class; }
+    if has("equip_region") || has("equip_regions") { item.equip_regions = o.equip_regions; }
+    if has("image_inventory") { item.image = o.image; }
+    if get_block(&resolved, "capabilities").is_some_and(|c| get_str(c, "paintable").is_some()) { item.paintable = o.paintable; }
+    if visuals.is_some_and(|v| get_block(v, "player_bodygroups").is_some() || get_block(v, "additional_hidden_bodygroups").is_some()) { item.bodygroups = o.bodygroups; }
+    if visuals.is_some_and(|v| get_block(v, "styles").is_some()) { item.styles = o.styles; }
+    if !o.particles.is_empty() { item.particles = o.particles; }
+    if has("attributes") || has("static_attrs") { item.skin_override = o.skin_override; }
+    if !o.extra_models.is_empty() { item.extra_models = o.extra_models; }
+    if !o.pose_params.is_empty() { item.pose_params = o.pose_params; }
+}
+
+/// The item blocks of a workshop schema file, by import name: at the top, or under `items`, or under `items_game` / `items` as the
+/// game's own file has them.
+fn schema_blocks(nodes: &[Node]) -> Vec<(String, Vec<Node>)> {
+    let mut out = Vec::new();
+    for n in nodes {
+        let Some(b) = n.block() else { continue };
+        if n.key.eq_ignore_ascii_case("items") || n.key.eq_ignore_ascii_case("items_game") { out.extend(schema_blocks(b)); }
+        else if !n.key.eq_ignore_ascii_case("prefabs") { out.push((n.key.to_ascii_lowercase(), b.to_vec())); }
+    }
+    out
+}
+
 /// Parses `items_game.txt` text. Only wearable cosmetics (head/misc slot with a player model) are kept.
 pub fn parse(text: &str, names: &HashMap<String, String>) -> Result<ItemDb> {
     parse_with(text, names, &[])
@@ -557,6 +635,12 @@ pub fn parse(text: &str, names: &HashMap<String, String>) -> Result<ItemDb> {
 
 /// [`parse`], plus the cosmetics of workshop import manifests (`(zip name, manifest text)`).
 pub fn parse_with(text: &str, names: &HashMap<String, String>, workshop: &[(String, String)]) -> Result<ItemDb> {
+    parse_with_schema(text, names, workshop, None)
+}
+
+/// [`parse_with`], plus the workshop schema file (`items_game.txt` beside the zips): what the zips cannot say about their items, in
+/// items_game's own words, laid over them by import name (see [`overlay_item`]). Its own `prefabs` block adds to the game's.
+pub fn parse_with_schema(text: &str, names: &HashMap<String, String>, workshop: &[(String, String)], schema: Option<&str>) -> Result<ItemDb> {
     let root = kv::parse(text)?;
     let Some(game) = root.iter().find(|n| n.key.eq_ignore_ascii_case("items_game")).and_then(Node::block) else {
         return fail("items_game.txt has no items_game block");
@@ -594,12 +678,27 @@ pub fn parse_with(text: &str, names: &HashMap<String, String>, workshop: &[(Stri
     }
 
     let mut seen = std::collections::HashSet::new();
+    let mut from_zips: Vec<Item> = Vec::new();
     for (zip_name, manifest) in workshop {
         if let Some(item) = workshop_item(zip_name, manifest, &prefabs, names) {
-            if seen.insert(item.id) {
-                if item.slot == "taunt" { taunts.push(item); } else { items.push(item); }
+            if seen.insert(item.id) { from_zips.push(item); }
+        }
+    }
+    if let Some(schema) = schema.and_then(|t| kv::parse(t).ok()) {
+        let mut prefabs = prefabs.clone();
+        for n in &schema {
+            if n.key.eq_ignore_ascii_case("prefabs") {
+                if let Some(b) = n.block() { prefabs.extend(b.iter().filter_map(|p| p.block().map(|v| (p.key.to_ascii_lowercase(), v.to_vec())))); }
             }
         }
+        for (name, block) in schema_blocks(&schema) {
+            for item in from_zips.iter_mut().filter(|i| i.name.eq_ignore_ascii_case(&name)) {
+                overlay_item(item, &block, &prefabs, names);
+            }
+        }
+    }
+    for item in from_zips {
+        if item.slot == "taunt" { taunts.push(item); } else { items.push(item); }
     }
 
     drop_duplicate_weapons(&mut weapons);
@@ -618,5 +717,5 @@ pub fn parse_with(text: &str, names: &HashMap<String, String>, workshop: &[(Stri
 /// Loads the cosmetics database from the TF2 install (loose files, falling back to VPK contents).
 pub fn load(vpk: &VpkSet) -> Result<ItemDb> {
     let bytes = vpk.read("scripts/items/items_game.txt").map_err(|e| ParseError(e.to_string()))?;
-    parse_with(&decode_text(&bytes), &load_english(vpk), &vpk.workshop_manifests())
+    parse_with_schema(&decode_text(&bytes), &load_english(vpk), &vpk.workshop_manifests(), vpk.workshop_schema().as_deref())
 }

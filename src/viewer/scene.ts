@@ -27,7 +27,7 @@ export interface SceneEntity {
   /** Hidden by its eye in the hierarchy. */
   hidden?: boolean;
   placement: { x: number; y: number; z: number; yaw: number; /** Tip of a character that is not upright (radians). */ pitch?: number; roll?: number; scale?: [number, number, number]; /** Placed by hand (the spacing slider leaves it alone). */ placed: boolean };
-  loadout: { item: number; paint: number | null; style: number }[];
+  loadout: { item: number; paint: number | null; style: number; /** Hidden with its eye: in the loadout, not worn. */ hidden?: boolean }[];
   /** The cosmetic the paint palette edits. */
   activeItem: number | null;
   /** The held weapon or taunt. */

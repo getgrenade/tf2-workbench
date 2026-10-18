@@ -123,6 +123,15 @@ pub fn call(state: &AppState, command: &str, args: &Value) -> Result<Reply, Stri
         )?),
         "player_gibs" => Reply::Json(game::gib_definitions(&*vpk()?, text(args, "path")?)?),
         "model_physics" => Reply::Json(game::model_physics(&*vpk()?, text(args, "path")?)?),
+        "load_scene" => Reply::Json(crate::voice::scene(state, text(args, "path")?)?),
+        "scene_playing" => {
+            let paths: Vec<String> = serde_json::from_value(args.get("paths").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?;
+            Reply::Json(crate::voice::scene_playing(state, &paths, text(args, "sequence")?)?.map_or(Value::Null, Value::String))
+        }
+        "voice_lines" => Reply::Json(crate::voice::voice_lines(state, text(args, "class")?)?),
+        "phoneme_classes" => Reply::Json(crate::voice::phoneme_classes(state, text(args, "class")?)?),
+        "lip_sync" => Reply::Json(crate::voice::lip_sync(state, text(args, "wave")?)?),
+        "read_sound" => Reply::Bytes(crate::voice::read_sound(state, text(args, "wave")?)?),
         "list_items" => Reply::Bytes(state.items_payload()?.as_ref().clone()),
         "list_unusual_effects" => Reply::Json(serde_json::to_value(game::unusual_effects(&*vpk()?)?).map_err(|e| e.to_string())?),
         "particle_system_file" => {

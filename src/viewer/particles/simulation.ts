@@ -17,11 +17,12 @@ export function sourceOscillationWave(phase: number): number {
 }
 const supported = new Set([
   "emit_continuously", "emit_instantaneously", "Lifetime Random", "Radius Random", "Color Random", "Alpha Random",
-  "Position Within Box Random", "Position on Model Random", "Position From Parent Particles", "Position Modify Offset Random",
+  "Position Within Box Random", "Position Within Sphere Random", "Position on Model Random", "Position From Parent Particles", "Position Modify Offset Random",
+  "Velocity Noise", "Remap Noise to Scalar",
   "Sequence Random", "Rotation Random", "Rotation Speed Random", "Velocity Random", "Lifespan Decay", "Movement Basic",
   "Movement Lock to Control Point", "Movement Lock to Bone", "Movement Rotate Particle Around Axis", "Oscillate Vector",
   "Oscillate Scalar", "Alpha Fade In Random", "Alpha Fade Out Random", "Alpha Fade and Decay", "Color Fade", "Radius Scale",
-  "Rotation Spin Roll", "Rotation Basic", "twist around axis", "render_animated_sprites", "render_rope",
+  "Rotation Spin Roll", "Rotation Basic", "twist around axis", "Pull towards control point", "render_animated_sprites", "render_rope",
 ]);
 export function validateDefinitions(definitions: Map<string, ParticleDefinition>, root: string) {
   const visited = new Set<string>();
@@ -153,6 +154,39 @@ export class ParticleSimulation {
         case "Sequence Random": p.sequence = Math.floor(this.range(a, "sequence_min", "sequence_max") + 0.5); break;
         case "Rotation Random": p.rotation = (number(a, "rotation_initial") + this.range(a, "rotation_offset_min", "rotation_offset_max", 0, "rotation_random_exponent")) * radians; break;
         case "Rotation Speed Random": p.rotationSpeed = (number(a, "rotation_speed_constant") + this.range(a, "rotation_speed_random_min", "rotation_speed_random_max", 0, "rotation_speed_random_exponent")) * radians * (a.randomly_flip_direction && this.random() < 0.5 ? -1 : 1); break;
+        case "Position Within Sphere Random": {
+          // a point at a random distance from the control point in a random direction (biased by axis), moving away at a random speed, plus a
+          // speed in the control point's own frame
+          const dir = scratch.set(this.random() * 2 - 1, this.random() * 2 - 1, this.random() * 2 - 1);
+          const bias = vector(a, "distance_bias", [1, 1, 1]);
+          dir.multiply(new THREE.Vector3(...bias as [number, number, number]));
+          if (dir.lengthSq() < 1e-12) dir.set(0, 0, 1); else dir.normalize();
+          if (a["bias in local system"]) dir.applyMatrix3(new THREE.Matrix3().setFromMatrix4(this.cp)).normalize();
+          const distance = this.range(a, "distance_min", "distance_max");
+          p.position.setFromMatrixPosition(this.cp).addScaledVector(dir, distance);
+          p.velocity.addScaledVector(dir, this.range(a, "speed_min", "speed_max", 0, "speed_random_exponent"));
+          p.velocity.add(this.randomVector(a, "speed_in_local_coordinate_system_min", "speed_in_local_coordinate_system_max").applyMatrix3(new THREE.Matrix3().setFromMatrix4(this.cp)));
+          break;
+        }
+        case "Velocity Noise": {
+          // (the noise field is stood in for by a draw per particle: what it gives a particle, not how it varies over space and time)
+          const v = this.randomVector(a, "output minimum", "output maximum");
+          if (a["Apply Velocity in Local Space (0/1)"]) v.applyMatrix3(new THREE.Matrix3().setFromMatrix4(this.cp));
+          p.velocity.add(v);
+          break;
+        }
+        case "Remap Noise to Scalar": {
+          const value = this.range(a, "output minimum", "output maximum");
+          switch (number(a, "output field")) {
+            case 1: p.life = Math.max(1e-3, value); break;
+            case 3: p.radius = value; break;
+            case 4: p.rotation = value * radians; break;
+            case 5: p.rotationSpeed = value * radians; break;
+            case 7: p.alpha = value; break;
+            case 12: p.yaw = value; break;
+          }
+          break;
+        }
         case "Velocity Random": {
           p.velocity.add(this.randomVector(a, "speed_in_local_coordinate_system_min", "speed_in_local_coordinate_system_max").applyMatrix3(new THREE.Matrix3().setFromMatrix4(this.cp)));
           const speed = this.range(a, "random_speed_min", "random_speed_max");
@@ -163,6 +197,10 @@ export class ParticleSimulation {
     }
     p.initialAlpha = p.alpha; p.initialRadius = p.radius; p.color = p.initialColor.slice();
     this.id++; this.particles.push(p);
+  }
+  /** Runs the simulation `seconds` ahead in its own steps (a picture taken at a set moment of the effect). */
+  advance(seconds: number) {
+    for (let i = 0, n = Math.round(seconds * 60); i < n; i++) this.step(1 / 60);
   }
   step(dt: number) {
     const before = this.time;
@@ -220,6 +258,12 @@ export class ParticleSimulation {
             axis.fromArray(vector(f, "twist axis", [0, 0, 1])).normalize();
             scratch.copy(p.position).sub(center).crossVectors(axis, scratch).normalize();
             acceleration.addScaledVector(scratch, number(f, "amount of force"));
+          } else if (f.functionName === "Pull towards control point") {
+            // Valve's AttractToControlPoint: a force toward the control point, its strength the distance to a power (0: the same everywhere)
+            center.setFromMatrixPosition(this.cp);
+            scratch.copy(center).sub(p.position);
+            const distance = scratch.length();
+            if (distance > 1e-6) acceleration.addScaledVector(scratch, (number(f, "amount of force") * Math.pow(distance, number(f, "falloff power", -2))) / distance);
           }
         }
         // Valve BasicMovement: damp the previous displacement at a 30 Hz reference

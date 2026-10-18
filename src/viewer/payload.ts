@@ -299,6 +299,11 @@ export interface ItemInfo {
   paintable: boolean;
   /** Wearing the item puts the character in the zombie skin of the class model (the Voodoo-Cursed souls). */
   skinOverride: boolean;
+  /**
+   * The particle effects the item always shows (a pipe's smoke, the Earbuds' notes): by the game's effect id (as the unusual effects are
+   * numbered), or a particle system by name, at an attachment of the item's model.
+   */
+  particles?: { effect?: number; system?: string; attachment?: string }[];
   /** Medals and badges (thousands of tournament / community medals); hidden by default in the browser. */
   medal: boolean;
   /** Definition quality (`unique`, `vintage`, `selfmade`, ...), lowercase. */
@@ -307,6 +312,8 @@ export interface ItemInfo {
   tauntScenes: Record<string, string>;
   /** Taunts only: class -> the prop's own scene name. */
   tauntPropScenes: Record<string, string>;
+  /** Taunts only: class -> the player's scene path (`scenes/player/heavy/low/taunt_x.vcd`): the face it makes. */
+  tauntScenePaths?: Record<string, string>;
   /** A cosmetic from the workshop importer's zips (tf/workshop/import_source), not from the game's own items. */
   workshop: boolean;
 }

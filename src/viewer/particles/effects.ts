@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type { Actor } from "../actor";
-import { loadDefinitions, loadUnusualCatalog, loadParticleMaterial, loadParticleModel, particleSystemForTeam, UNUSUALS, type ParticleModelInfo, type UnusualSettings } from "./assets";
+import { loadDefinitions, loadUnusualCatalog, loadParticleMaterial, loadParticleModel, particleSystemForTeam, UNUSUALS, type ParticleModelInfo, type UnusualId, type UnusualSettings } from "./assets";
 import { ParticleDraw } from "./render";
 import { ParticleRopeDraw } from "./rope";
 import { ParticleSimulation, validateDefinitions, type ModelSample, type ParticleQueries } from "./simulation";
@@ -47,24 +47,41 @@ export class ActorEffects {
   private disposed = false;
   private constructor(readonly actor: Actor) { this.group.matrixAutoUpdate = false; this.group.name = "Unusual effects"; }
 
-  static async create(actor: Actor, settings: UnusualSettings, onError: (error: unknown) => void = console.error, floor: () => number | null = () => null): Promise<ActorEffects> {
+  /** Held: the effect does not run with the clock (a picture is being taken of it as it is), though it is still drawn. */
+  hold = false;
+
+  /**
+   * `seed` tells the particles' chances apart: two effects made with the same seed and run the same time look the same (the fallback
+   * simulator's; the native one has chances of its own).
+   */
+  static async create(actor: Actor, settings: UnusualSettings, onError: (error: unknown) => void = console.error, floor: () => number | null = () => null, seed = 0): Promise<ActorEffects> {
     const effect = new ActorEffects(actor);
     try {
       const data = actor.particleModel;
       if (!data) throw new Error("Character is still loading");
       const model = await loadParticleModel(data.path);
-      const hat = actor.particleCosmetic(settings.hatItem);
-      const hatModel = (settings.silver || settings.hatEffect) && hat ? await loadParticleModel(hat.path) : null;
-      const catalog = settings.hatEffect || settings.tauntEffect ? await loadUnusualCatalog() : [];
+      const own = settings.items ?? [];
+      const catalog = settings.hatEffect || settings.tauntEffect || own.length ? await loadUnusualCatalog() : [];
       effect.world = !(settings.arctic && !settings.tauntEffect);
       effect.updateFrame();
-      for (const kind of ["hat", "taunt"] as const) {
-        const id = kind === "hat" ? "silver" : "arctic";
-        const selected = kind === "hat" ? settings.hatEffect : settings.tauntEffect;
-        if (!settings[id] && !selected) continue;
-        const config = selected ? catalog.find((e) => e.kind === kind && e.id === selected) : UNUSUALS[id];
-        if (!config?.file) throw new Error(`Particle definition not installed for ${kind} effect #${selected}`);
-        const attachmentName = "attachment" in config ? config.attachment : "unusual";
+      // what plays: the hat effect (on the hat picked), the taunt effect, and the effect each worn item always shows (on that item)
+      const lanes: { kind: "hat" | "taunt"; item: number | null; selected: number | undefined; system?: string; attachment?: string; preset: UnusualId | null; chosen: boolean }[] = [
+        { kind: "hat", item: settings.hatItem, selected: settings.hatEffect, preset: settings.silver ? "silver" : null, chosen: true },
+        { kind: "taunt", item: null, selected: settings.tauntEffect, preset: settings.arctic ? "arctic" : null, chosen: true },
+        ...own.map((x) => ({ kind: "hat" as const, item: x.item, selected: x.effect, system: x.system, attachment: x.attachment, preset: null, chosen: false })),
+      ];
+      for (const lane of lanes) {
+        const { kind, selected } = lane;
+        const id = lane.preset;
+        if (!id && !selected && !lane.system) continue;
+        const hat = kind === "hat" ? actor.particleCosmetic(lane.item) : null;
+        const hatModel = hat ? await loadParticleModel(hat.path) : null;
+        // a chosen effect is of its kind's list; an item's own effect is found by its id alone (some are filed among the taunt effects),
+        // or by the name of its system
+        const config = selected ? catalog.find((e) => e.id === selected && (!lane.chosen || e.kind === kind))
+          : lane.system ? catalog.find((e) => e.system === lane.system) : UNUSUALS[id!];
+        if (!config?.file) throw new Error(`Particle definition not installed for ${kind} effect ${selected !== undefined ? `#${selected}` : lane.system ?? id}`);
+        const attachmentName = lane.attachment ?? ("attachment" in config ? config.attachment : "unusual");
         const rootBoneFallback = "root_bone" in config ? config.root_bone : true;
         const root = particleSystemForTeam(config.system, actor.particleTeam);
         const file = catalog.find((e) => e.system === root)?.file ?? config.file;
@@ -74,7 +91,10 @@ export class ActorEffects {
         const queries: ParticleQueries = {
           controlPoint: () => {
             cp.identity();
-            if (kind === "hat") hatControlPoint(actor, settings.hatItem, hat, hatModel, attachmentName, rootBoneFallback, cp);
+            if (kind === "hat") {
+              if (lane.item === null && lane.attachment) bodyControlPoint(actor, model, lane.attachment, cp);
+              else hatControlPoint(actor, lane.item, hat, hatModel, attachmentName, rootBoneFallback, cp);
+            }
             return effect.world ? effect.inWorld(cp) : cp;
           },
           bone: (index) => actor.particleBoneFrame(index),
@@ -82,10 +102,10 @@ export class ActorEffects {
         };
         // Keep the visually confirmed Arctic backend; new effects use Valve's complete operator set.
         const native = !(settings.arctic && !selected && kind === "taunt")
-          ? await NativeSimulation.create(definitions, queries.controlPoint, onError, file, root, () => nativeHitboxes(actor, model, effect.world ? effect.toWorld : undefined), "refire" in config ? config.refire : 0, [], [], 1, () => [], () => [], () => (effect.world ? floor() : null)) : null;
-        if (native && settings.silver && kind === "hat") effect.nativeSilver = true;
+          ? await NativeSimulation.create(definitions, queries.controlPoint, onError, file, root, () => nativeHitboxes(actor, model, effect.world ? effect.toWorld : undefined), "refire" in config ? config.refire : 0, [], [], 1, () => [], () => [], () => (effect.world ? floor() : null), (273 + seed) >>> 0) : null;
+        if (native && id === "silver") effect.nativeSilver = true;
         if (!native) validateDefinitions(definitions, root);
-        const sim = native ?? new ParticleSimulation(definitions.get(root)!, definitions, queries, selected ?? (id === "silver" ? 273 : 3141));
+        const sim = native ?? new ParticleSimulation(definitions.get(root)!, definitions, queries, ((selected ?? ("id" in config ? config.id : id === "silver" ? 273 : 3141)) + seed) >>> 0);
         effect.simulations.push(sim);
         await effect.addDraws(sim);
       }
@@ -109,13 +129,26 @@ export class ActorEffects {
   private readonly worldFrame = new THREE.Matrix4();
   private updateFrame() { this.toWorld.multiplyMatrices(TO_SOURCE, this.actor.particleRootFrame()); }
   private attach() { if (this.world) this.actor.attachWorldParticles(this.group); else this.actor.attachParticles(this.group); }
+  /** Runs the effect `seconds` ahead at once (every simulation of it), as if that much time had passed. */
+  async advance(seconds: number): Promise<void> {
+    if (this.disposed || seconds <= 0) return;
+    this.updateFrame();
+    this.attach();
+    this.clock += seconds;
+    for (const sim of this.simulations) {
+      if (sim instanceof NativeSimulation) await sim.advance(seconds);
+      else sim.advance(seconds);
+    }
+  }
   step(dt: number, camera: THREE.Camera) {
     if (this.disposed) return;
     this.updateFrame();
     this.attach();
-    this.accumulated += Math.min(dt, 0.1);
-    this.clock += Math.min(dt, 0.1);
-    while (this.accumulated >= 1 / 60) { for (const sim of this.simulations) sim.step(1 / 60); this.accumulated -= 1 / 60; }
+    if (!this.hold) {
+      this.accumulated += Math.min(dt, 0.1);
+      this.clock += Math.min(dt, 0.1);
+      while (this.accumulated >= 1 / 60) { for (const sim of this.simulations) sim.step(1 / 60); this.accumulated -= 1 / 60; }
+    }
     // the state of a simulation is behind the clock by the ticks that are on their way: the draws go on by that much (but not by more than three ticks)
     for (const sim of this.simulations) if (sim instanceof NativeSimulation) {
       const lead = THREE.MathUtils.clamp(this.clock - sim.simClock, 0, 3 / 60);
@@ -143,6 +176,17 @@ export class ActorEffects {
  * places effects at the pelvis on modern hats retaining a complete parent chain.
  * Head fallback uses the bone order supported by TF's particle_effect_use_head_origin override.
  */
+/** An attachment of the character's own model (the Spy's `cig_smoke`), else the head. */
+export function bodyControlPoint(actor: Actor, model: ParticleModelInfo, attachmentName: string, out = new THREE.Matrix4()): THREE.Matrix4 {
+  out.identity();
+  const named = model.attachments.find((a) => a.name.toLowerCase() === attachmentName.toLowerCase());
+  const bone = named ? actor.particleBoneFrame(named.bone) : null;
+  if (named && bone) return out.copy(bone).multiply(named.local);
+  const headIndex = actor.boneNames.findIndex((name) => /^(bip_head|head)$/i.test(name));
+  const head = actor.particleBoneFrame(headIndex);
+  return head ? out.copy(head) : out;
+}
+
 export function hatControlPoint(actor: Actor, itemId: number | null, hat: Actor["particleModel"], model: ParticleModelInfo | null,
   attachmentName: string, rootBoneFallback: boolean, out = new THREE.Matrix4()): THREE.Matrix4 {
   out.identity();

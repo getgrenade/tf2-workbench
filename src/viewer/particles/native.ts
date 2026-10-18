@@ -91,11 +91,13 @@ export class NativeSimulation {
     onError: (error: unknown) => void, file = "particles/smissmas2022_unusuals.pcf", system = "unusual_sheetmusic_silver_parent",
     boxes: () => number[][] = () => [], refire = 0, flame: number[] = [], colors: number[] = [], slots = 1, instances: () => number[][] = () => [],target:()=>number[]=()=>[],
     /** The height of the floor in the space of the control points: what the world traces of the effect (Collision via traces) hit. */
-    floor: () => number | null = () => null): Promise<NativeSimulation | null> {
+    floor: () => number | null = () => null,
+    /** The random seed of the collections: the same seed, control points and ticks give the same particles every time. */
+    seed = 273): Promise<NativeSimulation | null> {
     // A webview reload has no reliable async unload callback. Reap its helpers before starting new ones.
     documentGeneration ??= resetNativeParticles().catch((error) => { documentGeneration = null; throw error; });
     const generation = await documentGeneration;
-    const start = await startNativeParticles(nativeControlPoint(cp()), generation, file, system, boxes(), refire, slots);
+    const start = await startNativeParticles(nativeControlPoint(cp()), generation, file, system, boxes(), refire, slots, seed);
     if (!start) return null;
     try {
       const nodes = start.nodes.map((frame) => {
@@ -129,6 +131,31 @@ export class NativeSimulation {
       this.onError(error);
       void stopNativeParticles(this.handle).catch(console.error);
     }).finally(() => { this.inFlight = false; if (this.commands.length || this.ticks) this.step(0); }); // the ticks that came while it ran go at once
+  }
+  /** Runs the simulation `seconds` ahead, in the helper's own steps, and waits for it (a picture taken at a set moment of the effect). */
+  async advance(seconds: number): Promise<void> {
+    let ticks = Math.round(seconds * 60);
+    while (ticks > 0 && !this.disposed && !this.failed) {
+      while (this.inFlight) await new Promise((r) => setTimeout(r, 4));
+      const n = Math.min(6, ticks);
+      ticks -= n;
+      this.inFlight = true;
+      try {
+        const frames = decodeNativeFrame(await stepNativeParticles(this.handle, n, nativeControlPoint(this.cp()), this.boxes(), 0, this.flame, this.colors, this.instances(), this.target(), this.floor()));
+        if (this.disposed) return;
+        if (frames.length !== this.nodes.length) throw new Error("Native particle graph changed unexpectedly");
+        for (let i = 0; i < frames.length; ++i) this.nodes[i].applyBinary(frames[i]);
+        this.appliedTicks += n;
+      } catch (error) {
+        if (this.disposed) return;
+        this.failed = true;
+        for (const node of this.nodes) node.particles.length = 0;
+        this.onError(error);
+        void stopNativeParticles(this.handle).catch(console.error);
+      } finally {
+        this.inFlight = false;
+      }
+    }
   }
   dispose() {
     if (this.disposed) return;

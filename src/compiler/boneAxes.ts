@@ -32,10 +32,21 @@ export function aimTurn(world: THREE.Matrix4, target: THREE.Vector3): BoneTurn {
   const direction = target.clone().sub(position);
   if (direction.lengthSq() < 1e-12) return [0, 0, 0];
   const quaternion = new THREE.Quaternion().setFromRotationMatrix(world);
-  // the wanted direction in the bone's own frame, and the rotation taking Z there
-  const local = direction.applyQuaternion(quaternion.clone().invert()).normalize();
-  const turn = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), local);
-  const e = new THREE.Euler().setFromQuaternion(turn, "XYZ");
+  // the wanted direction in the bone's own frame
+  return turnTowards(direction.applyQuaternion(quaternion.clone().invert()));
+}
+
+const _towardsQ = new THREE.Quaternion();
+const _towardsE = new THREE.Euler();
+const _towardsD = new THREE.Vector3();
+const _Z = new THREE.Vector3(0, 0, 1);
+
+/** The turn (degrees, to 0.01, no roll) that points a bone's +Z along `local`, a direction in the bone's own frame. */
+export function turnTowards(local: THREE.Vector3): BoneTurn {
+  const d = _towardsD.copy(local);
+  if (d.lengthSq() < 1e-12) return [0, 0, 0];
+  _towardsQ.setFromUnitVectors(_Z, d.normalize());
+  _towardsE.setFromQuaternion(_towardsQ, "XYZ");
   const round = (v: number) => Math.round(((v * 180) / Math.PI) * 100) / 100;
-  return [round(e.x), round(e.y), round(e.z)];
+  return [round(_towardsE.x), round(_towardsE.y), round(_towardsE.z)];
 }

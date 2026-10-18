@@ -26,6 +26,32 @@ import { GizmoSet, createGizmo, gizmoKey } from "./gizmos";
 import { turnMatrix, type BoneTurn } from "../compiler/boneAxes";
 import { cameraProjection } from "./cameraData";
 import { buildJiggleHelper, disposeHelper } from "./jiggleHelper";
+import { layoutChart } from "./chartLayout";
+
+/**
+ * Layout of the paint chart. Gaps and margin are in pixels of the saved picture (`width` × `height`); a smaller picture of it (the
+ * editor's preview) is the same layout scaled down. `background` is a packed 0xRRGGBB colour, or null for a transparent picture.
+ */
+export interface PaintChartOpts {
+  cols: number;
+  gapX: number;
+  gapY: number;
+  padding: number;
+  align: "center" | "left";
+  background: number | null;
+  width: number;
+  height: number;
+  /** Width / height of one cell. */
+  cellAspect: number;
+  /** Only the cosmetic is drawn, not the parts of the character the Inspect view shows with it (the head, say). */
+  cosmeticOnly: boolean;
+}
+
+/** One cell of the paint chart: the paint (null = unpainted) and the skin family it is shown in (0 RED, 1 BLU). */
+export interface PaintChartCell {
+  paint: [number, number, number] | null;
+  skin: number;
+}
 import type { JiggleSetup } from "../compiler/jiggleBones";
 import type { ClipData, MaterialData, ModelData } from "./payload";
 import { DEFAULT_SHADOW, type ShadowParams } from "./shadowMath";
@@ -133,7 +159,7 @@ export class Viewer {
   readonly cameras: CameraRig;
   readonly cameraOverlay: CameraOverlay;
   onUnusualError: (actor: Actor, error: unknown) => void = () => {};
-  private readonly unusualEffects = new Map<Actor, { key: string; effect: ActorEffects | null; pending: Promise<void> }>();
+  private readonly unusualEffects = new Map<Actor, { key: string; settings: UnusualSettings; effect: ActorEffects | null; pending: Promise<void> }>();
   /** The particles of the conditions a character is in (drips, flames), and the seconds left of the conditions Play mode applied. */
   private readonly conditionParticles = new ConditionParticles();
   /** Characters that are buildings: their particles are the building's (setBuildingFx), not those of player conditions. */
@@ -235,12 +261,13 @@ export class Viewer {
     this.boneRotate = { set, pivot };
   }
 
-  /** Puts the bone's rotation gizmo on the bone's goal pose, each frame (and leaves it where it is while it is being dragged). */
+  /** Puts the bone's rotation gizmo on the bone's aimed pose, each frame (and leaves it where it is while it is being dragged). */
   private updateBoneGizmo() {
     const g = this.boneRotate;
     if (!g) return;
     const spec = this.boneRotateSpec;
-    const goal = spec?.actor.cosmeticBoneGoal(spec.bone);
+    // the handle follows the aim (not the fixed goal), so it stays where you left it even when the goal is the anchored limit reference
+    const goal = spec?.actor.cosmeticBoneGoal(spec.bone, undefined, true);
     const parent = spec?.actor.helpers;
     if (!spec || !goal || !parent) { g.set.show("rotate", false); return; }
     if (g.pivot.parent !== parent) parent.add(g.pivot);
@@ -253,11 +280,11 @@ export class Viewer {
   }
 
   private boneHelper: { bone: string; setup: JiggleSetup | null; actor: Actor; group: THREE.Group } | null = null;
-  /** Draws the axes, length and constraints of a bone of an item being built on a character (null: nothing). */
-  setBoneHelper(spec: { bone: string; setup: JiggleSetup | null } | null, actor: Actor | null) {
+  /** Draws the axes, length and constraints of a bone of an item being built on a character (null: nothing). `hideTip` leaves out the rest spring+tip when a draggable aim handle stands in for it. */
+  setBoneHelper(spec: { bone: string; setup: JiggleSetup | null; hideTip?: boolean } | null, actor: Actor | null) {
     if (this.boneHelper) { this.boneHelper.group.removeFromParent(); disposeHelper(this.boneHelper.group); this.boneHelper = null; }
     if (!spec || !actor) return;
-    const group = buildJiggleHelper(spec.setup, 6);
+    const group = buildJiggleHelper(spec.setup, 6, spec.hideTip);
     group.matrixAutoUpdate = false;
     this.boneHelper = { ...spec, actor, group };
   }
@@ -274,6 +301,185 @@ export class Viewer {
     h.group.matrix.copy(turning ? this.boneRotate!.pivot.matrix : goal);
     h.group.matrixWorldNeedsUpdate = true;
     h.group.visible = true;
+  }
+
+  private boneAimHandle: { bone: string; actor: Actor; length: number; onAim: (localDir: THREE.Vector3) => void } | null = null;
+  private boneAimMesh: THREE.Mesh | null = null;
+  private boneAimDragging = false;
+  private readonly _aimBaseW = new THREE.Vector3();
+  private readonly _aimTipW = new THREE.Vector3();
+  private readonly _aimRestQ = new THREE.Quaternion();
+  private _aimRadius = 1;
+  private readonly _aimM = new THREE.Matrix4();
+
+  /**
+   * A draggable white sphere at a jiggle bone's tip, for posing it by hand. It is placed each frame at the tip of the bone's (clamped) aim,
+   * so it cannot be dragged past the bone's limits: it stops at the cone, and there is nothing to snap back on release. `onAim` gets the
+   * dragged direction in the bone's rest frame; the owner clamps and stores it. Null takes the handle away.
+   */
+  setBoneAimHandle(spec: { bone: string; actor: Actor; length: number; onAim: (localDir: THREE.Vector3) => void } | null) {
+    this.boneAimHandle = spec;
+    if (!spec) this.boneAimDragging = false;
+  }
+
+  /** Puts the aim handle on the tip of the bone's aimed pose each frame (and remembers the base and rest frame for the drag). */
+  private updateBoneAimHandle() {
+    if (!this.boneAimMesh) {
+      this.boneAimMesh = new THREE.Mesh(new THREE.SphereGeometry(1, 14, 10), new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true, opacity: 0.95 }));
+      this.boneAimMesh.renderOrder = 1001;
+      this.boneAimMesh.visible = false;
+      this.scene.add(this.boneAimMesh);
+    }
+    const h = this.boneAimHandle;
+    const aimed = h ? h.actor.cosmeticBoneGoal(h.bone, this._aimM, true) : null;
+    const parent = h?.actor.helpers;
+    if (!h || !aimed || !parent) { this.boneAimMesh.visible = false; return; }
+    parent.updateWorldMatrix(true, false);
+    this._aimBaseW.setFromMatrixPosition(aimed).applyMatrix4(parent.matrixWorld);
+    this._aimTipW.set(0, 0, h.length).applyMatrix4(aimed).applyMatrix4(parent.matrixWorld);
+    this._aimRadius = Math.max(1e-3, this._aimBaseW.distanceTo(this._aimTipW)); // the spring length in world: the sphere the aim rides on
+    const scale = h.length > 1e-6 ? this._aimRadius / h.length : 1;
+    // the dragged direction is measured against the rest goal (the fixed reference the limits use), not the aim
+    const rest = h.actor.cosmeticBoneGoal(h.bone, this._aimM, false);
+    if (rest) this._aimRestQ.setFromRotationMatrix(this._aimM.premultiply(parent.matrixWorld));
+    this.boneAimMesh.position.copy(this._aimTipW);
+    this.boneAimMesh.scale.setScalar(Math.max(0.4, h.length * 0.06) * scale);
+    this.boneAimMesh.visible = true;
+  }
+
+  /** The drag of the aim handle: a sphere the tip rides on (centre the bone base, radius the spring length), the result handed back in the rest frame. */
+  private installBoneAimDrag() {
+    const el = this.renderer.domElement;
+    const ray = new THREE.Raycaster();
+    const ndc = new THREE.Vector2();
+    const sphere = new THREE.Sphere();
+    const hit = new THREE.Vector3();
+    const toNdc = (e: PointerEvent) => {
+      const r = el.getBoundingClientRect();
+      ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    };
+    el.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || !this.boneAimHandle || !this.boneAimMesh?.visible) return;
+      toNdc(e); ray.setFromCamera(ndc, this.camera);
+      if (ray.intersectObject(this.boneAimMesh, false).length === 0) return;
+      e.stopImmediatePropagation(); // keep OrbitControls and picking out of it
+      this.boneAimDragging = true;
+      el.setPointerCapture(e.pointerId);
+    }, true);
+    el.addEventListener("pointermove", (e) => {
+      const h = this.boneAimHandle;
+      if (!this.boneAimDragging || !h) return;
+      toNdc(e); ray.setFromCamera(ndc, this.camera);
+      sphere.set(this._aimBaseW, this._aimRadius);
+      if (!ray.ray.intersectSphere(sphere, hit)) ray.ray.closestPointToPoint(this._aimBaseW, hit).sub(this._aimBaseW).normalize().multiplyScalar(this._aimRadius).add(this._aimBaseW);
+      const localDir = hit.sub(this._aimBaseW).normalize().applyQuaternion(this._aimRestQ.clone().invert());
+      h.onAim(localDir);
+    });
+    const end = (e: PointerEvent) => { if (this.boneAimDragging) { this.boneAimDragging = false; try { el.releasePointerCapture(e.pointerId); } catch { /* not captured */ } } };
+    el.addEventListener("pointerup", end);
+    el.addEventListener("pointercancel", end);
+  }
+
+  // --- paint chart: the inspected item drawn once per paint into an offscreen picture, every cell from the view's own camera -------------
+
+  private chartTarget: THREE.WebGLRenderTarget | null = null;
+  private readonly chartResolve = new THREE.Scene();
+
+  /**
+   * Something that changes whenever the view's camera does (its place, its turn, its lens and its shape), so the paint chart can be
+   * drawn again only when there is something new to show.
+   */
+  cameraStamp(): string {
+    const c = this.camera;
+    c.updateMatrixWorld();
+    return `${c.matrixWorld.elements.map((n) => n.toFixed(5)).join(",")}|${c.fov}|${c.zoom}|${c.isOrthographicCamera ? c.halfHeight : 0}`;
+  }
+
+  /**
+   * Draws the paint chart (`opts` laid out at its own size, scaled to `w` × `h`) and returns the picture, top row first. Every cell is
+   * the item as the view's camera sees it, re-skinned and re-painted per cell; nothing else of the scene is drawn. A null background
+   * is transparent.
+   */
+  renderPaintChart(actor: Actor, cells: PaintChartCell[], opts: PaintChartOpts, w: number, h: number, itemId?: number): ImageData {
+    const r = this.renderer;
+    w = Math.max(1, Math.round(w));
+    h = Math.max(1, Math.round(h));
+    if (!this.chartTarget || this.chartTarget.width !== w || this.chartTarget.height !== h) {
+      this.chartTarget?.dispose();
+      this.chartTarget = new THREE.WebGLRenderTarget(w, h, { type: THREE.UnsignedByteType, colorSpace: THREE.SRGBColorSpace, samples: 4 });
+    }
+    const target = this.chartTarget;
+    const layout = layoutChart(cells.length, opts.cellAspect, { width: opts.width, height: opts.height, gapX: opts.gapX, gapY: opts.gapY, padding: opts.padding, cols: opts.cols, align: opts.align });
+    const k = w / opts.width;
+    // the item's meshes are read each time so a hat switch is picked up at once; the per-paint materials are cached, so this is cheap
+    const meshes = actor.cosmeticMeshes(itemId);
+    const originals = meshes.map((m) => m.mesh.material);
+    // only the charted item is in the cells: hide every other mesh in the scene (ground, the shadow decal, the floor reflection, the
+    // backdrop, the grid, editor overlays, other characters), and with `cosmeticOnly` the parts of the character shown with it too
+    const shown = new Set<THREE.Object3D>(opts.cosmeticOnly ? meshes.map((m) => m.mesh) : actor.meshes());
+    const hidden: THREE.Object3D[] = [];
+    this.scene.traverse((o) => { if ((o as THREE.Mesh).isMesh && !shown.has(o) && o.visible) hidden.push(o); });
+    const was = hidden.map((o) => o.visible);
+    hidden.forEach((o) => (o.visible = false));
+    const bg = this.scene.background;
+    this.scene.background = null;
+    const prevTarget = r.getRenderTarget();
+    const prevClear = r.getClearColor(new THREE.Color()), prevAlpha = r.getClearAlpha();
+    const prevViewport = r.getViewport(new THREE.Vector4()), prevScissor = r.getScissor(new THREE.Vector4()), prevScissorTest = r.getScissorTest();
+    const aspect = this.camera.aspect, autoClear = r.autoClear;
+    // three.js multiplies viewports and scissors by the pixel ratio; the cells are worked out in real pixels
+    const pr = r.getPixelRatio();
+    const pixels = new Uint8Array(w * h * 4);
+    try {
+      r.setRenderTarget(target);
+      r.setScissorTest(false);
+      r.setClearColor(opts.background ?? 0x000000, opts.background === null ? 0 : 1);
+      r.clear();
+      // the background is drawn once behind the cells; a cell only clears its depth, so the background shows through it
+      r.autoClear = false;
+      r.setScissorTest(true);
+      this.camera.aspect = layout.cellW / Math.max(1e-3, layout.cellH);
+      this.camera.updateProjectionMatrix();
+      for (let i = 0; i < cells.length; i++) {
+        const rect = layout.rects[i];
+        const cell = cells[i];
+        for (const m of meshes) m.mesh.material = this.mats.material(m.skins[cell.skin] ?? m.data, undefined, cell.paint);
+        const x = Math.round(rect.x * k), cw = Math.round(rect.w * k), ch = Math.round(rect.h * k);
+        const y = Math.round(h - (rect.y + rect.h) * k); // GL's origin is bottom-left; the layout counts from the top
+        r.setViewport(x / pr, y / pr, cw / pr, ch / pr);
+        r.setScissor(x / pr, y / pr, cw / pr, ch / pr);
+        r.clearDepth();
+        r.render(this.scene, this.camera);
+      }
+      // three.js resolves the antialiased picture after each render, but only inside the scissor: an empty render over the whole
+      // picture resolves the background between the cells too
+      r.setScissorTest(false);
+      r.setViewport(0, 0, w / pr, h / pr);
+      r.render(this.chartResolve, this.camera);
+      r.readRenderTargetPixels(target, 0, 0, w, h, pixels);
+    } finally {
+      meshes.forEach((m, i) => (m.mesh.material = originals[i])); // put the item's own materials back
+      r.autoClear = autoClear;
+      r.setRenderTarget(prevTarget);
+      r.setViewport(prevViewport);
+      r.setScissor(prevScissor);
+      r.setScissorTest(prevScissorTest);
+      r.setClearColor(prevClear, prevAlpha);
+      this.camera.aspect = aspect;
+      this.camera.updateProjectionMatrix();
+      this.scene.background = bg;
+      was.forEach((v, i) => (hidden[i].visible = v));
+    }
+    // WebGL rows run bottom to top
+    const out = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y++) out.set(pixels.subarray((h - 1 - y) * w * 4, (h - y) * w * 4), y * w * 4);
+    return new ImageData(out, w, h);
+  }
+
+  /** Lets go of the paint chart's offscreen picture (when the chart is closed). */
+  releasePaintChart() {
+    this.chartTarget?.dispose();
+    this.chartTarget = null;
   }
 
   private lightIndicatorsOn = true;
@@ -574,6 +780,7 @@ void main() {
     this.lightGizmos.reach = () => this.radius * 1.4;
     this.installLightDrag();
     this.installPicking();
+    this.installBoneAimDrag();
 
     new ResizeObserver(() => this.resize()).observe(container);
     this.resize();
@@ -583,6 +790,7 @@ void main() {
       this.lightGizmos.poll();
       this.updateBoneGizmo();
       this.updateBoneHelper();
+      this.updateBoneAimHandle();
       this.cameraOverlay.update();
       let moved = false;
       if (!__WEB__) this.propSim?.step(dt);
@@ -828,6 +1036,37 @@ void main() {
     this.frame(false);
   }
 
+  /**
+   * Takes a character out of the scene without disposing it (a scene tab in the background keeps it, to put it back with
+   * {@link attachActor} instead of building it again). Its effects (unusuals, weapon particles, conditions) are let go; the one who puts
+   * it back puts them back.
+   */
+  detachActor(actor: Actor) {
+    const i = this.actorList.indexOf(actor);
+    if (i < 0) return;
+    this.reactions?.remove(actor);
+    this.actorList.splice(i, 1);
+    this.clearUnusuals(actor);
+    this.conditionParticles.forget(actor);
+    this.conditionTokens.delete(actor);
+    this.conditionTimers.delete(actor);
+    this.clearWeaponEffects(actor);
+    this.slots.delete(actor);
+    if (this.gizmoActor === actor) this.setActorGizmo(null);
+    if (this.selectedActor === actor) this.select(this.actorList[Math.min(i, this.actorList.length - 1)] ?? null);
+    // its meshes stay in the scene graph: hidden, or it would still be drawn (and a capture only hides the actors of the list)
+    actor.setListHidden(true);
+  }
+
+  /** Puts a detached character back into the scene, where it stood (shown; the list's own hiding is applied again by its owner). */
+  attachActor(actor: Actor) {
+    if (this.actorList.includes(actor)) return;
+    this.slots.set(actor, freeSlot(this.slots.values()));
+    this.actorList.push(actor);
+    actor.setListHidden(false);
+    actor.changed = true;
+  }
+
   select(actor: Actor | null) {
     this.selectedActor = actor;
     this.selectionTouched = true;
@@ -970,17 +1209,17 @@ void main() {
     this.unusualEffects.delete(actor);
   }
 
-  async setUnusuals(actor: Actor, settings: UnusualSettings, restart = false): Promise<void> {
-    if (!settings.silver && !settings.arctic && !settings.hatEffect && !settings.tauntEffect) { this.clearUnusuals(actor); return; }
+  async setUnusuals(actor: Actor, settings: UnusualSettings, restart = false, seed = 0): Promise<void> {
+    if (!settings.silver && !settings.arctic && !settings.hatEffect && !settings.tauntEffect && !settings.items?.length) { this.clearUnusuals(actor); return; }
     const key = JSON.stringify([actor.particleModel?.path, actor.particleTeam, actor.particleCosmetic(settings.hatItem)?.path, settings]);
     const previous = this.unusualEffects.get(actor);
     if (previous?.key === key && !restart) return previous.pending;
     this.clearUnusuals(actor);
-    const entry = { key, effect: null as ActorEffects | null, pending: Promise.resolve() };
+    const entry = { key, settings: { ...settings }, effect: null as ActorEffects | null, pending: Promise.resolve() };
     this.unusualEffects.set(actor, entry);
     entry.pending = ActorEffects.create(actor, { ...settings }, (error) => {
       if (this.unusualEffects.get(actor) === entry) this.onUnusualError(actor, error);
-    }, () => this.floorLevel()).then((effect) => {
+    }, () => this.floorLevel(), seed).then((effect) => {
       if (this.unusualEffects.get(actor) !== entry) effect.dispose();
       else entry.effect = effect;
     }).catch((err) => {
@@ -988,6 +1227,25 @@ void main() {
       throw err;
     });
     return entry.pending;
+  }
+
+  /**
+   * Starts a character's effects again from a seed and runs them `seconds` ahead, then holds them still: a picture of them comes out the
+   * same every time it is taken. `holdEffects(actor, false)` lets them run on. Nothing happens for a character without effects.
+   */
+  async restartEffects(actor: Actor, seed: number, seconds: number): Promise<void> {
+    const entry = this.unusualEffects.get(actor);
+    if (!entry) return;
+    await this.setUnusuals(actor, entry.settings, true, seed);
+    const effect = this.unusualEffects.get(actor)?.effect;
+    if (!effect) return;
+    effect.hold = true;
+    await effect.advance(seconds);
+  }
+
+  holdEffects(actor: Actor, on: boolean) {
+    const effect = this.unusualEffects.get(actor)?.effect;
+    if (effect) effect.hold = on;
   }
 
   /** The floor of the scene (the lowest of the characters'), which is also z in Source space. */
@@ -1732,7 +1990,7 @@ void main() {
 
   /** Everything drawn over the scene that is not part of it (gizmos, markers, camera and light symbols): left out of captures and of the shadow and lighting passes. */
   private get editorObjects(): THREE.Object3D[] {
-    return [this.gizmo, this.pointGizmo, this.pointMove.getHelper(), ...this.lightGizmos.objects, ...this.entityGizmos.objects, ...this.rig.objects, ...this.blenderRig.objects, ...this.cameras.objects, ...(this.boneHelper ? [this.boneHelper.group] : []), ...(this.boneRotate ? this.boneRotate.set.objects : [])];
+    return [this.gizmo, this.pointGizmo, this.pointMove.getHelper(), ...this.lightGizmos.objects, ...this.entityGizmos.objects, ...this.rig.objects, ...this.blenderRig.objects, ...this.cameras.objects, ...(this.boneHelper ? [this.boneHelper.group] : []), ...(this.boneRotate ? this.boneRotate.set.objects : []), ...(this.boneAimMesh ? [this.boneAimMesh] : [])];
   }
 
   private buildGizmo() {
@@ -1998,8 +2256,6 @@ void main() {
     return actor ? { actor, item: pixel[1] > 0 ? actor.cosmeticItemAt(pixel[1]) : null } : null;
   }
 
-  /** Whether Ctrl + left-drag turns a light: set by the panel while a light is the thing selected in the outliner. */
-  lightDragEnabled = false;
 
   /** Puts orbit, zoom and pan on the mouse buttons the user chose (Settings, Hotkeys); a button with none of them does nothing in the view. */
   setNavButtons() {
@@ -2012,17 +2268,25 @@ void main() {
     this.controls.mouseButtons = buttons as unknown as typeof this.controls.mouseButtons;
   }
 
-  /** Ctrl + left-drag turns the selected light, but only a directional one (the others have their gizmo for it). */
+  /**
+   * Ctrl + left-drag turns a directional light, as hlmv does, whatever is selected: the selected light when it is a directional one, else
+   * the first directional light of the scene (point and spot lights have their gizmo for it).
+   */
   private installLightDrag() {
     const el = this.renderer.domElement;
     let last: { x: number; y: number } | null = null;
+    /** The rig light being turned (null: the one light of a scene without a rig). */
+    let target: { azimuth: number; elevation: number } | null = null;
     el.addEventListener(
       "pointerdown",
       (e) => {
-        if (e.button !== 0 || !e.ctrlKey || this.lightGizmos.hot || !this.lightDragEnabled) return;
+        if (e.button !== 0 || !e.ctrlKey || this.lightGizmos.hot) return;
         const rig = this.light.rig;
-        const selected = rig ? rig.lights.find(l => l.id === rig.selected) : null;
-        if (rig && selected?.type !== "directional") return;
+        if (rig) {
+          const selected = rig.lights.find(l => l.id === rig.selected);
+          target = (selected?.type === "directional" ? selected : rig.lights.find(l => l.type === "directional")) ?? null;
+          if (!target) return;
+        } else target = null;
         e.stopImmediatePropagation(); // keep OrbitControls out of it
         last = { x: e.clientX, y: e.clientY };
         el.setPointerCapture(e.pointerId);
@@ -2035,10 +2299,8 @@ void main() {
       const dy = e.clientY - last.y;
       last = { x: e.clientX, y: e.clientY };
       if (this.light.rig) {
-        const rig = this.light.rig;
-        const light = rig.lights.find(l => l.id === rig.selected);
-        if (light) {
-          [light.azimuth, light.elevation] = rotateLightDirection(light.azimuth, light.elevation, -dx * .5, dy * .5);
+        if (target) {
+          [target.azimuth, target.elevation] = rotateLightDirection(target.azimuth, target.elevation, -dx * .5, dy * .5);
           this.updateLight(); this.onLightChange(this.getLight());
         }
         return;
@@ -2244,7 +2506,9 @@ void main() {
     while (this.groundShadows.length < this.shadowParams.length) this.groundShadows.push(new GroundShadow(this.renderer, this.scene));
     const off = { ...DEFAULT_SHADOW, enabled: false };
     const quads = this.shadowQuads();
-    this.groundShadows.forEach((s, i) => s.update(this.shadowParams[i] ?? off, this.center.x, this.center.z, this.radius, floorY, [this.floorGrid.mesh, this.facingMarker, ...this.editorObjects, ...quads], moved));
+    // a lone inspected item (just a head, say) has no body down to the floor, so its cast shadow reads as a stray blob: it casts none
+    const inspectMeshes = this.actorList.filter((a) => a.inspectOnly).flatMap((a) => a.meshes());
+    this.groundShadows.forEach((s, i) => s.update(this.shadowParams[i] ?? off, this.center.x, this.center.z, this.radius, floorY, [this.floorGrid.mesh, this.facingMarker, ...this.editorObjects, ...quads, ...inspectMeshes], moved));
   }
 
   /** Draws the characters flat into `target`: red for the ones the fog leaves alone, black for the others, nearest in front. */
@@ -2990,6 +3254,125 @@ void main() {
     this.frame(true, true, undefined, true);
   }
 
+  /**
+   * The shape of a character on screen as it is posed now: the height over the width of its bounds as the view's camera looks at it
+   * (2 is a figure twice as tall as it is wide). Null without a model.
+   */
+  screenShape(actor: Actor): number | null {
+    if (!actor.hasModel) return null;
+    const box = actor.computeBounds(this.tmpBox);
+    if (box.isEmpty()) return null;
+    this.camera.updateMatrixWorld();
+    // the corners in the camera's frame: the shape does not depend on how far away the camera is or on the view's own shape
+    const view = this.camera.matrixWorldInverse;
+    const p = new THREE.Vector3();
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (let i = 0; i < 8; i++) {
+      p.set(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z).applyMatrix4(view);
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+    }
+    return (maxY - minY) / Math.max(1e-6, maxX - minX);
+  }
+
+  /**
+   * A camera for a picture of `aspect` (width over height) that frames these characters as they are posed: looking at their bounds from
+   * `direction`, as close as it can while every corner of the bounds stays inside `fill` of the picture. `userData.target` is the point
+   * it looks at.
+   */
+  framingCamera(actors: Actor[], direction: THREE.Vector3, aspect: number, fill = 0.9, fovDegrees = 30, distance?: number, bounds?: THREE.Box3): THREE.PerspectiveCamera {
+    // (`bounds`: what to frame instead of the characters, such as one item of theirs: the camera turns about its middle)
+    const box = bounds ?? this.posedBounds(actors);
+    const cam = new THREE.PerspectiveCamera(fovDegrees, aspect, 0.1, 5000);
+    if (box.isEmpty()) return cam;
+    const center = box.getCenter(new THREE.Vector3());
+    const dir = direction.clone().normalize();
+    const far = box.getSize(new THREE.Vector3()).length() * 10 + 100;
+    cam.position.copy(center).addScaledVector(dir, far);
+    cam.lookAt(center);
+    cam.updateMatrixWorld(true);
+    const tanV = Math.tan((fovDegrees * Math.PI) / 360) * fill, tanH = tanV * aspect;
+    // how much nearer the camera can come, along its view, before a corner leaves the frame
+    const view = cam.matrixWorldInverse, p = new THREE.Vector3();
+    let closer = Infinity;
+    for (let i = 0; i < 8; i++) {
+      p.set(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z).applyMatrix4(view);
+      const needed = Math.max(Math.abs(p.x) / tanH, Math.abs(p.y) / tanV);
+      closer = Math.min(closer, -p.z - needed);
+    }
+    // a distance given keeps the scale of other shots (the same characters at the same size); else as near as the frame allows
+    distance ??= far - closer;
+    cam.userData.distance = far - closer;
+    cam.position.copy(center).addScaledVector(dir, distance);
+    cam.lookAt(center);
+    cam.near = Math.max(0.1, distance / 100);
+    cam.far = distance * 20;
+    cam.updateProjectionMatrix();
+    cam.updateMatrixWorld(true);
+    cam.userData.target = center;
+    return cam;
+  }
+
+  /** The bounds of one item a character wears, as it is posed (empty when it wears none of it). */
+  itemBounds(actor: Actor, itemId: number): THREE.Box3 {
+    const box = new THREE.Box3(), part = new THREE.Box3();
+    for (const { mesh: m } of actor.cosmeticMeshes(itemId)) {
+      m.updateMatrixWorld(true);
+      const skinned = m as THREE.SkinnedMesh;
+      if (skinned.isSkinnedMesh) {
+        skinned.skeleton.update();
+        skinned.computeBoundingBox();
+        if (skinned.boundingBox) box.union(part.copy(skinned.boundingBox).applyMatrix4(m.matrixWorld));
+      } else {
+        m.geometry.computeBoundingBox();
+        if (m.geometry.boundingBox) box.union(part.copy(m.geometry.boundingBox).applyMatrix4(m.matrixWorld));
+      }
+    }
+    return box;
+  }
+
+  /**
+   * The bounds of characters as they are posed, with everything they wear (the class's own bounds leave the cosmetics out: a tall hat
+   * would be cut off a picture framed on them). A held weapon is left out unless `withHeld`: framed with it, a long one would make the
+   * character small; it may reach past the frame instead.
+   */
+  posedBounds(actors: Actor[], withHeld = false): THREE.Box3 {
+    const box = new THREE.Box3(), part = new THREE.Box3();
+    for (const a of actors) {
+      if (!a.hasModel) continue;
+      // the class's body (an item shown alone: the item), then the models worn on it; not the particle effects that hang off the
+      // character (a flame, a glow: their bounds can be the size of the scene)
+      const body = a.computeBounds(new THREE.Box3());
+      box.union(body);
+      // what is worn widens the bounds only near the body (a hat above it, a backpack behind it): a part flung away (a jiggle bone not
+      // settled yet, a model not on the skeleton) would make the character small in its picture. An item shown alone is its own body.
+      const size = body.getSize(new THREE.Vector3());
+      const reach = Math.max(size.x, size.y, size.z);
+      const near = a.inspectOnly || body.isEmpty() ? null : body.clone().expandByVector(new THREE.Vector3(reach * 0.35, 0, reach * 0.35));
+      if (near) { near.max.y += size.y * 0.35; near.min.y -= size.y * 0.05; }
+      const widen = (b: THREE.Box3) => {
+        if (near) b.intersect(near);
+        if (!b.isEmpty()) box.union(b);
+      };
+      for (const m of a.wornMeshes()) {
+        let visible = true;
+        m.traverseAncestors((o) => { if (!o.visible) visible = false; });
+        if (!m.visible || !visible || m.userData.preview || (!withHeld && a.isHeldMesh(m))) continue;
+        m.updateMatrixWorld(true);
+        const skinned = m as THREE.SkinnedMesh;
+        if (skinned.isSkinnedMesh) {
+          skinned.skeleton.update();
+          skinned.computeBoundingBox(); // posed: the bones' transforms applied
+          if (skinned.boundingBox) widen(part.copy(skinned.boundingBox).applyMatrix4(m.matrixWorld));
+        } else {
+          m.geometry.computeBoundingBox();
+          if (m.geometry.boundingBox) widen(part.copy(m.geometry.boundingBox).applyMatrix4(m.matrixWorld));
+        }
+      }
+    }
+    return box;
+  }
+
   /** Starts a selection (box, lasso or brush) over a character's body, as the view looks now. */
   beginSelect(actor: Actor): ViewSelection | null {
     const rect = this.renderer.domElement.getBoundingClientRect();
@@ -3063,7 +3446,11 @@ void main() {
       /** Makes both sizes even (what video codecs ask for). */
       even?: boolean;
       /** Scales the size of a camera's picture (a camera has a size of its own, which `scale` does not touch). */
-      scaleSize?: number },
+      scaleSize?: number;
+      /** With `only`: the character's own ground shadow is in the picture (as the scene's shadow settings have it, or as given). */
+      groundShadow?: boolean | ShadowParams;
+      /** With `camera` or `only`: the look's effects are in the picture too (the grade, bloom, depth of field, AO and so on). */
+      look?: boolean },
   ): Promise<{ blob: Blob; width: number; height: number; layers?: ExportLayer[]; merged?: Uint8ClampedArray; canvas?: HTMLCanvasElement }> {
     const r = this.renderer;
     const shot = !opts?.camera && !opts?.only ? this.cameras.captureCamera() : null;
@@ -3095,9 +3482,15 @@ void main() {
     const hidden: THREE.Object3D[] = [this.floorGrid.mesh, this.facingMarker, ...this.editorObjects, ...(transparent ? [this.ground.mesh] : [])];
     const reflectionWas = this.reflection.mesh.visible;
     // a single character (a pose thumbnail): the others and the ground shadow stay out of the picture
-    if (opts?.only) hidden.push(...this.shadowQuads(), ...this.actorList.filter((a) => a !== opts.only).flatMap((a) => a.meshes()));
+    // (its own ground shadow can be asked for: the decals stay, drawn again with the others out of the way)
+    const ownShadow = !!opts?.only && !!opts.groundShadow;
+    const decals = new Set<THREE.Object3D>(this.groundShadows.map((s) => s.quad));
+    if (opts?.only) hidden.push(...this.shadowQuads().filter((o) => !ownShadow || !decals.has(o)), ...this.actorList.filter((a) => a !== opts.only).flatMap((a) => a.meshes()));
     const wasVisible = hidden.map((o) => o.visible);
     hidden.forEach((o) => (o.visible = false));
+    const shadowsWere = this.shadowParams;
+    if (ownShadow && typeof opts!.groundShadow === "object") this.shadowParams = [{ ...opts!.groundShadow, enabled: true }];
+    if (ownShadow) this.updateShadows(opts!.only!.floorY, true);
     const background = this.scene.background;
     const prevClear = r.getClearColor(new THREE.Color());
     const prevAlpha = r.getClearAlpha();
@@ -3107,7 +3500,9 @@ void main() {
     }
     let aoTexture: THREE.Texture | null = null;
     // the look effects are part of a picture of the scene (not of a thumbnail of one character, or of a backpack icon)
-    const withLook = (!opts?.camera || opts.fullScene) && !opts?.only;
+    const sceneLook = (!opts?.camera || opts.fullScene) && !opts?.only;
+    // (a promo shot of one character can ask for the look too; the reflection in the floor stays a picture-of-the-scene thing)
+    const withLook = sceneLook || opts?.look === true;
     let captureBloom: BloomPass | null = null;
     let captureDof: DofPass | null = null;
     let captureMotion: MotionAccumulator | null = null;
@@ -3170,7 +3565,7 @@ void main() {
       // the picture behind the scene is the camera's own: it is in a shot of the camera, over the whole of it, and in no other picture
       this.cameras.backdrop.beginCapture(!!shot, w / h);
       // the reflection in the floor is part of a picture of the scene (not of a thumbnail or an icon), seen from the camera of the picture
-      if (withLook && reflectionWas) this.reflection.render(r, this.scene, cam, w, h, this.reflectionHidden());
+      if (sceneLook && reflectionWas) this.reflection.render(r, this.scene, cam, w, h, this.reflectionHidden());
       else this.reflection.mesh.visible = false;
       // the picture the final pass reads: the scene, or the average of its moments (motion blur), blurred by the depth of field
       const mb = this.look.motionBlur;
@@ -3194,7 +3589,7 @@ void main() {
         captureBloom = new BloomPass();
         material.uniforms.tBloom.value = captureBloom.render(r, sceneTex, w, h, this.look.bloom);
       }
-      if (this.ao.enabled && (!opts?.camera || opts.fullScene) && sceneRT.depthTexture) {
+      if (this.ao.enabled && (!opts?.camera || opts.fullScene || opts.look) && sceneRT.depthTexture) {
         capturePass = new AoPass();
         aoTexture = capturePass.render(r, sceneRT.depthTexture, cam as THREE.PerspectiveCamera, w, h, this.ao, this.charHeight);
         material.uniforms.tAo.value = aoTexture;
@@ -3317,6 +3712,12 @@ void main() {
       r.setClearColor(prevClear, prevAlpha);
       this.scene.background = background;
       hidden.forEach((o, i) => (o.visible = wasVisible[i]));
+      // the shadows of the whole scene again
+      if (ownShadow) {
+        this.shadowParams = shadowsWere;
+        const floor = this.actorList.reduce((y, a) => Math.min(y, a.floorY), Infinity);
+        this.updateShadows(Number.isFinite(floor) ? floor : 0, true);
+      }
       this.lightingRenderer.invalidate();
       capturePass?.dispose();
       this.reflection.mesh.visible = reflectionWas;
@@ -3424,6 +3825,23 @@ void main() {
     g.drawImage(bitmap, 0, 0, width, height);
     bitmap.close();
     return canvas.toDataURL("image/webp", 0.72);
+  }
+
+  /**
+   * The view as it is on screen now, scaled down to `maxSide` pixels on its longest side, as a WebP data URL (the preview of a scene
+   * tab). It is a copy of the last picture drawn (the drawing buffer is kept), so it costs no render; null when the view has no size.
+   */
+  viewSnapshot(maxSide = 280): string | null {
+    const src = this.renderer.domElement;
+    if (!src.width || !src.height) return null;
+    const k = Math.min(1, maxSide / Math.max(src.width, src.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(src.width * k));
+    canvas.height = Math.max(1, Math.round(src.height * k));
+    const g = canvas.getContext("2d")!;
+    g.imageSmoothingQuality = "high";
+    g.drawImage(src, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/webp", 0.8);
   }
 
   dispose() {

@@ -4,7 +4,11 @@ export interface TabInfo {
   id: number;
   name: string;
   dirty: boolean;
+  /** A picture of the scene's view, shown when the pointer rests on a tab that is not in front. */
+  preview?: string;
 }
+
+const PREVIEW_DELAY = 350;
 
 export interface TabHandlers {
   select(id: number): void;
@@ -17,13 +21,45 @@ export function createSceneTabs(root: HTMLElement, h: TabHandlers): { render: (t
   let editing = -1;
   let last: { tabs: TabInfo[]; active: number } = { tabs: [], active: -1 };
 
+  // the preview card: one for the strip, placed under the tab the pointer rests on
+  const card = document.createElement("div");
+  card.className = "sceneTabPreview";
+  card.hidden = true;
+  const cardImg = document.createElement("img");
+  cardImg.alt = "";
+  const cardName = document.createElement("div");
+  cardName.className = "sceneTabPreviewName";
+  card.append(cardImg, cardName);
+  document.body.append(card);
+  let timer = 0;
+  const hidePreview = () => { window.clearTimeout(timer); card.hidden = true; };
+  function showPreview(tab: HTMLElement, t: TabInfo) {
+    cardImg.src = t.preview!;
+    cardName.textContent = t.name + (t.dirty ? " (modified)" : "");
+    card.hidden = false;
+    const a = tab.getBoundingClientRect();
+    const w = card.offsetWidth;
+    card.style.left = `${Math.max(8, Math.min(a.left, window.innerWidth - w - 8))}px`;
+    card.style.top = `${a.bottom + 4}px`;
+  }
+
   function render(tabs: TabInfo[], active: number) {
     last = { tabs, active };
+    hidePreview();
     root.replaceChildren();
     for (const t of tabs) {
       const b = document.createElement("div");
       b.className = "sceneTab" + (t.id === active ? " on" : "");
-      b.title = `${t.name}${t.dirty ? " (modified)" : ""}: click to open, double-click to rename, middle-click to close`;
+      const hint = `${t.name}${t.dirty ? " (modified)" : ""}: click to open, double-click to rename, middle-click to close`;
+      // a tab with a picture shows it instead of the plain tooltip (the two would cover each other)
+      if (t.preview && t.id !== active) {
+        b.setAttribute("aria-label", hint);
+        b.onpointerenter = () => { window.clearTimeout(timer); timer = window.setTimeout(() => { if (b.isConnected && editing < 0) showPreview(b, t); }, PREVIEW_DELAY); };
+        b.onpointerleave = hidePreview;
+        b.addEventListener("pointerdown", hidePreview);
+      } else {
+        b.title = hint;
+      }
       if (editing === t.id) {
         const input = document.createElement("input");
         input.value = t.name;
@@ -67,12 +103,16 @@ export function createSceneTabs(root: HTMLElement, h: TabHandlers): { render: (t
         editing = t.id;
         render(last.tabs, last.active);
       };
-      b.onauxclick = (ev) => {
-        if (ev.button === 1) {
-          ev.preventDefault();
-          h.close(t.id);
-        }
+      // middle-click closes the tab: the press is taken (or the browser starts its autoscroll on it) and the release closes
+      b.onpointerdown = (ev) => {
+        if (ev.button === 1) ev.preventDefault();
       };
+      b.onpointerup = (ev) => {
+        if (ev.button !== 1 || editing === t.id) return;
+        ev.preventDefault();
+        h.close(t.id);
+      };
+      b.onauxclick = (ev) => ev.preventDefault();
       root.appendChild(b);
     }
     const add = document.createElement("button");

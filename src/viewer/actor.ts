@@ -4,7 +4,9 @@ import { eyeFragmentShader } from "./eyeShader";
 import { applyMeshFlexes, runFlexRules, type FlexGlobals } from "./flex";
 import { GeometryCache, buildGeometry } from "./geometryCache";
 import { gazeTargetLocal } from "./gaze";
-import { JiggleBone } from "./jiggle";
+import { JiggleBone, type JiggleParams } from "./jiggle";
+import { turnedWorld, isIdentityTurn, type BoneTurn } from "../compiler/boneAxes";
+import { clampAimToLimits } from "../compiler/jiggleBones";
 import type { ClipData, EyeballData, MaterialData, MeshData, ModelData } from "./payload";
 import { FINGERS, FINGER_AXIS, MAX_CURL, MIN_CURL, SPREAD_AXIS, boneNameOf, curlAngle, curlFromAngle, type Finger } from "./fingers";
 import type { ScreenShape } from "./screenShapes";
@@ -185,6 +187,10 @@ export class Actor {
   private flexClass: FlexMesh[] = [];
   private flexCosmetic: FlexMesh[] = [];
   private cosmetics: { rig: Rig; bones: THREE.Bone[]; bindLocal: THREE.Matrix4[]; map: number[]; jiggles: (JiggleBone | null)[]; own: Playback | null }[] = [];
+  /** A manual aim (a turn about the bone's own axes, clamped to the bone's limits) on an overridden jiggle bone, keyed by lowercase name. */
+  private boneAims = new Map<string, BoneTurn>();
+  /** Jiggle bones whose rotation is overridden by hand (posed, held, not simulated), keyed by lowercase name; the jiggle inspector sets this. */
+  private boneOverride = new Set<string>();
   private weaponBarrelAngle: number | null = null;
   /** A taunt prop with its own skeleton and animation (not bonemerged); it follows the class animation's clock. */
   private prop: { rig: Rig; bones: THREE.Bone[]; group: THREE.Group; playback: Playback } | null = null;
@@ -850,6 +856,8 @@ export class Actor {
     this.cosmetics = [];
     this.flexCosmetic = [];
     this.cosmeticList = list;
+    this.boneAims.clear(); // the worn items changed; any hand-aim/override no longer refers to a bone that is on
+    this.boneOverride.clear();
     const classIndex = new Map(this.classData.bones.map((b, i) => [b.name.toLowerCase(), i]));
     for (const [index, { data, paint, skin, clip }] of list.entries()) {
       const rig = new Rig(data.bones);
@@ -881,7 +889,7 @@ export class Actor {
           if (m.indices.length === 0) continue;
           const material = this.ctx.mats.material(this.materials.get(m.materials[skin] ?? m.material) ?? null, undefined, paint);
           const mesh = this.makeSkinnedMesh(m, material, skeleton, data, this.flexCosmetic);
-          mesh.userData.source = { data: this.materials.get(m.materials[skin] ?? m.material) ?? null, paint };
+          mesh.userData.source = { data: this.materials.get(m.materials[skin] ?? m.material) ?? null, paint, skins: m.materials, base: m.material };
           mesh.userData.cosmeticSlot = index + 1; // 1.. in the order of the list; 0 / unset is the class's own mesh
           this.cosmeticGroup.add(mesh);
         }
@@ -1010,6 +1018,57 @@ export class Actor {
   /** Whether the character holds an editable pose (and not an animation). */
   get isPosing(): boolean {
     return this.poseClip !== null && this.playback.clip === this.poseClip;
+  }
+
+  /**
+   * How upright the character stands as posed: the cosine of the angle between its pelvis-to-head line and straight up (1 upright, 0
+   * lying down; null without those bones). A frame of an animation that holds the skeleton's raw reference pose lies the character down.
+   */
+  uprightness(): number | null {
+    if (!this.rig || !this.modelGroup) return null;
+    const names = this.boneNames.map((n) => n.toLowerCase());
+    const head = names.indexOf("bip_head"), pelvis = names.indexOf("bip_pelvis");
+    if (head < 0 || pelvis < 0 || !this.rig.boneWorld[head] || !this.rig.boneWorld[pelvis]) return null;
+    // (the root's matrix is set by poseBones, by hand: Source's Z up turned to the view's Y up)
+    const root = this.modelGroup.matrix;
+    const a = new THREE.Vector3().setFromMatrixPosition(this.rig.boneWorld[pelvis]).applyMatrix4(root);
+    const b = new THREE.Vector3().setFromMatrixPosition(this.rig.boneWorld[head]).applyMatrix4(root);
+    const d = b.sub(a);
+    return d.lengthSq() > 1e-9 ? d.normalize().y : null;
+  }
+
+  /**
+   * How far the frame playing is from the model's reference (bind) pose: the mean angle, in degrees, its limbs and spine are turned from
+   * it (null without an animation). Near 0, it is the raw reference pose, or a blend still mostly in it, not a pose of the animation.
+   */
+  distanceFromBind(): number | null {
+    const clip = this.playback.clip;
+    if (!clip || !this.rig || clip.numBones !== this.rig.boneWorld.length) return null;
+    const frame = sampleClip(clip, this.playback.frame()), bind = this.bindPose();
+    if (!bind) return null;
+    const key = /^bip_(pelvis|spine_\d|neck|head|upperarm_[lr]|lowerarm_[lr]|hip_[lr]|knee_[lr]|foot_[lr])$/i;
+    let sum = 0, n = 0;
+    this.boneNames.forEach((name, i) => {
+      if (!key.test(name)) return;
+      const d = Math.abs(frame.quat[i * 4] * bind.quat[i * 4] + frame.quat[i * 4 + 1] * bind.quat[i * 4 + 1] + frame.quat[i * 4 + 2] * bind.quat[i * 4 + 2] + frame.quat[i * 4 + 3] * bind.quat[i * 4 + 3]);
+      sum += (2 * Math.acos(Math.min(1, d)) * 180) / Math.PI;
+      n++;
+    });
+    return n ? sum / n : null;
+  }
+
+  /**
+   * How far the weapon's bone is from the nearer hand, in model units, as posed (null without those bones). A weapon is held near 0; far
+   * from both hands, the animation has let go of it (a stun drops it by the feet).
+   */
+  weaponReach(): number | null {
+    if (!this.rig) return null;
+    const names = this.boneNames.map((n) => n.toLowerCase());
+    const w = names.indexOf("weapon_bone"), hands = [names.indexOf("bip_hand_r"), names.indexOf("bip_hand_l")].filter((i) => i >= 0);
+    const world = this.rig.boneWorld;
+    if (w < 0 || !hands.length || !world[w]) return null;
+    const at = new THREE.Vector3().setFromMatrixPosition(world[w]), hand = new THREE.Vector3();
+    return Math.min(...hands.map((h) => at.distanceTo(hand.setFromMatrixPosition(world[h]))));
   }
 
   /** Names of the class skeleton's bones, in order. */
@@ -1604,15 +1663,107 @@ export class Actor {
    * Where an extra bone of a cosmetic (one the class lacks) is meant to be: its parent's current pose with its bind offset, the pose a jiggle
    * bone's physics is driven from. In the character's own space; null when there is no such bone.
    */
-  cosmeticBoneGoal(name: string, out = new THREE.Matrix4()): THREE.Matrix4 | null {
+  cosmeticBoneGoal(name: string, out = new THREE.Matrix4(), aimHandle = false): THREE.Matrix4 | null {
     const lower = name.toLowerCase();
     for (const c of this.cosmetics) {
       const i = c.bones.findIndex((b, k) => b.name.toLowerCase() === lower && c.map[k] < 0);
       if (i < 0) continue;
       const parent = c.rig.parents[i];
-      return parent >= 0 ? out.multiplyMatrices(c.rig.boneWorld[parent], c.bindLocal[i]) : out.copy(c.rig.bindWorld[i]);
+      if (parent >= 0) out.multiplyMatrices(c.rig.boneWorld[parent], c.bindLocal[i]);
+      else out.copy(c.rig.bindWorld[i]);
+      // `aimHandle` (the gizmo) follows the override pose, so the handle stays on the bone you posed. The helper (aimHandle false) stays on
+      // the animated goal so the constraint cone is the fixed reference the posed bone sits within.
+      const aim = this.boneAims.get(lower);
+      if (aimHandle && this.boneOverride.has(lower) && aim && !isIdentityTurn(aim)) turnedWorld(out, aim, out);
+      return out;
     }
     return null;
+  }
+
+  /** The JiggleParams of a worn cosmetic's simulated jiggle bone, for clamping an aim to its limits; null when the bone has none. */
+  private jiggleParamsOf(lower: string): JiggleParams | null {
+    for (const [slot, c] of this.cosmetics.entries()) {
+      const data = this.cosmeticList[slot]?.data;
+      if (!data) continue;
+      const i = c.bones.findIndex((b, k) => b.name.toLowerCase() === lower && c.map[k] < 0);
+      if (i >= 0 && data.bones[i]?.jiggle) return data.bones[i].jiggle!;
+    }
+    return null;
+  }
+
+  /** Whether a jiggle bone's rotation is overridden by hand (posed, held). */
+  boneOverridden(name: string): boolean {
+    return this.boneOverride.has(name.toLowerCase());
+  }
+
+  /** Takes a jiggle bone's pose over (or hands it back to the animation). Off also drops its aim. */
+  setBoneOverride(name: string, on: boolean) {
+    const lower = name.toLowerCase();
+    if (on) this.boneOverride.add(lower);
+    else { this.boneOverride.delete(lower); this.boneAims.delete(lower); }
+    this.updateCosmetics();
+    this.changed = true;
+  }
+
+  /** The manual aim held on an overridden jiggle bone (a turn about its own axes, degrees), or no turn. */
+  boneAim(name: string): BoneTurn {
+    return this.boneAims.get(name.toLowerCase()) ?? [0, 0, 0];
+  }
+
+  /** Aims an overridden jiggle bone by hand; the aim is clamped to the bone's limits. Re-poses the cosmetics so the change shows at once. */
+  setBoneAim(name: string, turn: BoneTurn | null) {
+    const lower = name.toLowerCase();
+    if (turn && !isIdentityTurn(turn)) {
+      const params = this.jiggleParamsOf(lower);
+      this.boneAims.set(lower, params ? clampAimToLimits(params, turn) : turn);
+    } else this.boneAims.delete(lower);
+    this.updateCosmetics();
+    this.changed = true;
+  }
+
+  /**
+   * The cosmetic meshes that carry a source material, for the live paint chart to re-skin per paint. `skins` is each mesh's material
+   * per skin family (null where that skin's material is not loaded: the mesh's own is used then).
+   */
+  /** The models it wears, without what else hangs off the character (particle effects, helpers): what a picture is framed on. */
+  wornMeshes(): THREE.Mesh[] {
+    const out: THREE.Mesh[] = [];
+    this.cosmeticGroup?.traverse((o) => { if ((o as THREE.Mesh).isMesh) out.push(o as THREE.Mesh); });
+    return out;
+  }
+
+  /** Whether a mesh is of the weapon the character holds (a cosmetic slot that is the held weapon). */
+  isHeldMesh(mesh: THREE.Object3D): boolean {
+    const slot = mesh.userData?.cosmeticSlot as number | undefined;
+    return !!slot && this.cosmeticList[slot - 1]?.weapon === true;
+  }
+
+  cosmeticMeshes(itemId?: number): { mesh: THREE.Mesh; data: MaterialData | null; skins: (MaterialData | null)[] }[] {
+    const out: { mesh: THREE.Mesh; data: MaterialData | null; skins: (MaterialData | null)[] }[] = [];
+    this.cosmeticGroup?.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      const src = mesh.userData?.source as { data: MaterialData | null; skins?: string[]; base?: string } | undefined;
+      if (!mesh.isMesh || !src) return;
+      // with an item named, only that item's models (its slot in the worn list)
+      if (itemId !== undefined && this.cosmeticList[(mesh.userData.cosmeticSlot ?? 0) - 1]?.itemId !== itemId) return;
+      const skins = (src.skins ?? []).map((path) => this.materials.get(path) ?? null);
+      out.push({ mesh, data: src.data, skins });
+    });
+    return out;
+  }
+
+  /**
+   * The simulated jiggle bones of the worn cosmetics (those not merged into the class skeleton), with the parameters the simulation runs.
+   * Read-only; for the inspector. `cosmetics` and `cosmeticList` share their index, and `c.jiggles[i]` lines up with `data.bones[i]`.
+   */
+  simulatedJiggleBones(): { name: string; params: JiggleParams }[] {
+    const out: { name: string; params: JiggleParams }[] = [];
+    this.cosmetics.forEach((c, slot) => {
+      const data = this.cosmeticList[slot]?.data;
+      if (!data) return;
+      c.jiggles.forEach((j, i) => { if (j && data.bones[i]?.jiggle) out.push({ name: data.bones[i].name, params: data.bones[i].jiggle! }); });
+    });
+    return out;
   }
 
   /** Writes each cosmetic's bone transforms from the class skeleton (bonemerge). */
@@ -1656,11 +1807,15 @@ export class Actor {
           if (c.rig.parents[i] >= 0) world[i].multiplyMatrices(world[c.rig.parents[i]], local);
           else world[i].copy(local);
         } else if (c.rig.parents[i] >= 0) {
-          world[i].multiplyMatrices(world[c.rig.parents[i]], c.bindLocal[i]); // extra bone: follow the parent
-          const jiggle = jiggleOn ? c.jiggles[i] : null;
-          if (jiggle) {
-            // The animated matrix is the goal; the spring simulation decides where the bone actually is.
-            world[i].copy(jiggle.update(now, world[i], this.playback.clip ? this.gravitySource : this.gravityBind));
+          world[i].multiplyMatrices(world[c.rig.parents[i]], c.bindLocal[i]); // extra bone: follow the parent (the goal)
+          const lower = c.bones[i].name.toLowerCase();
+          if (this.boneOverride.has(lower)) {
+            // overridden: the bone is posed by hand (its aim is already clamped to the limits) and held: the simulation does not run
+            const aim = this.boneAims.get(lower);
+            if (aim && !isIdentityTurn(aim)) turnedWorld(world[i], aim, world[i]);
+          } else {
+            const jiggle = jiggleOn ? c.jiggles[i] : null;
+            if (jiggle) world[i].copy(jiggle.update(now, world[i], this.playback.clip ? this.gravitySource : this.gravityBind));
           }
         } else {
           world[i].copy(c.rig.bindWorld[i]);
@@ -1677,6 +1832,23 @@ export class Actor {
     this.posedTime = NaN;
     this.poseBones();
     this.changed = true;
+    this.onClip?.(clip);
+  }
+
+  /** Called when the clip changes (the face of the scene that goes with the new animation is looked up). */
+  onClip: ((clip: ClipData | null) => void) | null = null;
+  /**
+   * Drives the face every frame while set (a scene's expressions, a voice line's mouth): given the playback, it returns the controller
+   * values to show, or null when they did not change.
+   */
+  faceDriver: ((playback: Playback) => FlexGlobals | null) | null = null;
+
+  /** Runs the face driver; whether the face changed. */
+  private stepFace(): boolean {
+    const globals = this.faceDriver?.(this.playback);
+    if (!globals) return false;
+    this.setFlexControllers(globals);
+    return true;
   }
 
   /**
@@ -1687,15 +1859,17 @@ export class Actor {
     if (!this.rig || !this.modelGroup) return false;
     const pb = this.playback;
     if (!pb.clip) {
+      const faced = this.stepFace();
       // Jiggle bones keep settling in the bind pose too.
       if (this.hasJiggle) {
         this.updateCosmetics();
         return true;
       }
-      return false;
+      return faced;
     }
     pb.advance(dt);
-    if (pb.time === this.posedTime && pb.clip === this.posedClip && !this.hasJiggle) return false;
+    const faced = this.stepFace();
+    if (pb.time === this.posedTime && pb.clip === this.posedClip && !this.hasJiggle) return faced;
     this.poseBones();
     return true;
   }

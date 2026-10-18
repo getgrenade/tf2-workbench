@@ -17,6 +17,8 @@ export interface ItemsEls {
   selectAll: HTMLButtonElement;
   /** Reloads the workshop cosmetics (the importer's zips). */
   refresh: HTMLButtonElement;
+  /** Opens the Workshop styles window. */
+  workshopStyles: HTMLButtonElement;
   list: HTMLElement;
   equipped: HTMLElement;
   count: HTMLElement;
@@ -31,6 +33,8 @@ export interface Equipped {
   paint: PaintInfo | null;
   /** Index into `item.styles` (0 for items without styles). */
   style: number;
+  /** Not worn for the moment (the eye on its card): it stays in the loadout, to be shown again. */
+  hidden?: boolean;
 }
 
 export interface ItemsHooks {
@@ -41,7 +45,7 @@ export interface ItemsHooks {
   /** An item was put on (or taken off) the displayed character: the other selected characters get the same. */
   toggled?: (item: ItemInfo, equip: boolean) => void;
   /** The paint or the style of equipped items was changed on the displayed character: the other selected characters that wear them get the same. */
-  restyled?: (changes: { item: number; paint?: PaintInfo | null; style?: number }[]) => void;
+  restyled?: (changes: { item: number; paint?: PaintInfo | null; style?: number; hidden?: boolean }[]) => void;
   /** Everything was taken off the displayed character: the other selected characters lose theirs too. */
   cleared?: () => void;
   /** Called with the full loadout whenever it changes (items or paints). */
@@ -54,6 +58,12 @@ export interface ItemsHooks {
   removeTemporary?: () => void;
   /** Opens just this item, alone, in a scene of its own. */
   inspect: (item: ItemInfo) => void;
+  /** Opens the Workshop styles window on a workshop item (its styles, and the zips linked to it as styles). */
+  workshopStyles?: (item: ItemInfo) => void;
+  /** Items that must stay on (a promo shot's promoted items): they are not taken off, nor replaced by an item of their region. */
+  locked?: () => number[];
+  /** An item was not put on (or taken off) because of a locked one (`because`: the locked item it would have replaced). */
+  refused?: (item: ItemInfo, because: ItemInfo | null) => void;
 }
 
 const MAX_ROWS = 600;
@@ -149,15 +159,23 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
     void hooks.apply(visible());
   }
 
+  /** The right-click menu of an item: inspect it; a workshop item's styles too. */
+  const itemMenu = (item: ItemInfo) => [
+    { label: "Inspect", run: () => hooks.inspect(item) },
+    ...(item.workshop && hooks.workshopStyles ? [{ label: "Workshop styles…", run: () => hooks.workshopStyles!(item) }] : []),
+  ];
+
   function renderEquipped() {
     els.equipped.innerHTML = "";
     const shown = visible();
     closeStyleMenu();
     for (const e of shown) {
       const card = document.createElement("div");
-      card.className = "equip" + (selection.has(e.item.id) ? " active" : "");
+      card.className = "equip" + (selection.has(e.item.id) ? " active" : "") + (e.hidden ? " off" : "");
       const dot = e.paint ? `<i class="dot" style="background:${paintFill(e.paint)}" title="${escapeHtml(e.paint.displayName)}"></i>` : "";
-      card.innerHTML = `<div class="equipIcon">${dot}<b class="x" title="Remove">✕</b></div><div class="equipName">${escapeHtml(e.item.displayName)}</div>`;
+      // the eye: the item is taken off for the moment and stays in the loadout (the ✕ takes it out)
+      const eye = `<b class="eye" title="${e.hidden ? "Show it again" : "Hide it (it stays in the loadout)"}">${e.hidden ? "◌" : "●"}</b>`;
+      card.innerHTML = `<div class="equipIcon">${dot}${eye}<b class="x" title="Remove">✕</b></div><div class="equipName">${escapeHtml(e.item.displayName)}</div>`;
       card.title = e.item.paintable ? "Click to pick a paint (Shift + click selects several)" : "Cannot be painted";
       const image = itemImageFor(e.item, e.style);
       if (image) {
@@ -179,7 +197,7 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
       }
       card.oncontextmenu = (ev) => {
         ev.preventDefault();
-        showContextMenu(ev.clientX, ev.clientY, [{ label: "Inspect", run: () => hooks.inspect(e.item) }]);
+        showContextMenu(ev.clientX, ev.clientY, itemMenu(e.item));
       };
       card.onclick = (ev) => {
         if ((ev.target as HTMLElement).classList.contains("x")) {
@@ -187,6 +205,11 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
           selection.delete(e.item.id);
           if (activeId === e.item.id) activeId = visible().at(-1)?.item.id ?? null;
           changed();
+        } else if ((ev.target as HTMLElement).classList.contains("eye")) {
+          const hidden = !e.hidden;
+          loadout = loadout.map((x) => (x.item.id === e.item.id ? { ...x, hidden } : x));
+          changed();
+          hooks.restyled?.([{ item: e.item.id, hidden }]);
         } else {
           // click an equipped item to paint it: its paint chart opens under it; Shift + click adds it to (or takes it out of) the selection
           const r = card.getBoundingClientRect();
@@ -411,7 +434,7 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
       tile.onclick = () => toggle(it);
       tile.oncontextmenu = (ev) => {
         ev.preventDefault();
-        showContextMenu(ev.clientX, ev.clientY, [{ label: "Inspect", run: () => hooks.inspect(it) }]);
+        showContextMenu(ev.clientX, ev.clientY, itemMenu(it));
       };
       if (it.image) {
         tile.dataset.image = it.image;
@@ -454,6 +477,13 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
   function toggle(item: ItemInfo) {
     const cls = hooks.gameClass();
     const equip = !visible().some((e) => e.item.id === item.id);
+    // a locked item stays on: not taken off, not replaced by one that shares its region
+    const locked = hooks.locked?.() ?? [];
+    if (locked.length) {
+      if (!equip && locked.includes(item.id)) { hooks.refused?.(item, null); return; }
+      const blocker = equip && !hooks.allowOverlap() ? loadout.find((e) => locked.includes(e.item.id) && e.item.id !== item.id && itemUsableBy(e.item, cls) && conflicts(e.item, item)) : undefined;
+      if (blocker) { hooks.refused?.(item, blocker.item); return; }
+    }
     loadout = withItem(loadout, item, equip, cls);
     if (!equip) {
       if (activeId === item.id) activeId = visible().at(-1)?.item.id ?? null;
@@ -481,7 +511,9 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
     selectAllEquipped(r.left, r.bottom + 4);
   };
   els.clear.onclick = () => {
-    loadout = [];
+    // the locked items stay on
+    const locked = hooks.locked?.() ?? [];
+    loadout = loadout.filter((e) => locked.includes(e.item.id));
     activeId = null;
     changed();
     hooks.cleared?.();

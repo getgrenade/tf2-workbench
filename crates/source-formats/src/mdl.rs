@@ -38,8 +38,12 @@ pub struct Jiggle {
     pub angle_limit: f32,
     pub min_yaw: f32,
     pub max_yaw: f32,
+    pub yaw_friction: f32,
+    pub yaw_bounce: f32,
     pub min_pitch: f32,
     pub max_pitch: f32,
+    pub pitch_friction: f32,
+    pub pitch_bounce: f32,
     pub base_mass: f32,
     pub base_stiffness: f32,
     pub base_damping: f32,
@@ -455,10 +459,13 @@ fn parse_jiggle(data: &[u8], base: usize) -> Result<Jiggle> {
     let angle_limit = r.f32()?;
     let min_yaw = r.f32()?;
     let max_yaw = r.f32()?;
-    r.skip(8); // yawFriction, yawBounce (unused by the simulation)
+    // yawFriction, yawBounce: not used by the simulation, carried for the read-only inspector
+    let yaw_friction = r.f32()?;
+    let yaw_bounce = r.f32()?;
     let min_pitch = r.f32()?;
     let max_pitch = r.f32()?;
-    r.skip(8); // pitchFriction, pitchBounce
+    let pitch_friction = r.f32()?;
+    let pitch_bounce = r.f32()?;
     let base_mass = r.f32()?;
     let base_stiffness = r.f32()?;
     let base_damping = r.f32()?;
@@ -478,8 +485,12 @@ fn parse_jiggle(data: &[u8], base: usize) -> Result<Jiggle> {
         angle_limit,
         min_yaw,
         max_yaw,
+        yaw_friction,
+        yaw_bounce,
         min_pitch,
         max_pitch,
+        pitch_friction,
+        pitch_bounce,
         base_mass,
         base_stiffness,
         base_damping,

@@ -2,8 +2,11 @@
 
 pub mod anim;
 pub mod binary;
+pub mod choreo;
 pub mod itemcompile;
 pub mod propcompile;
+pub mod sentence;
+pub mod soundscript;
 pub mod items;
 pub mod kv;
 pub mod map_cubemaps;
@@ -12,6 +15,7 @@ pub mod mdl;
 pub mod model;
 pub mod steam;
 pub mod tga;
+pub mod vfe;
 pub mod vmt;
 pub mod vpk;
 pub mod vtf;

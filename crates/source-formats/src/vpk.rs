@@ -110,6 +110,8 @@ pub struct VpkSet {
     /// Folders of loose files the user mounted (an addon, a map's content, the output of the prop compiler): what the game's archives do not
     /// have is read from them. The game's own files win over them, so an addon cannot change the game's props.
     custom: RwLock<Vec<CustomMount>>,
+    /// Item zips the user dropped onto the view, mounted in place for this session (read-only; nothing is copied into the game folder).
+    extra_item_zips: RwLock<Vec<PathBuf>>,
 }
 
 /// A folder of loose files with a `models/` and a `materials/` folder in it, indexed by the paths the game would ask for.
@@ -269,6 +271,8 @@ impl VpkSet {
         if let Some(dir) = &self.workshop_dir {
             workshop_zips(dir, &mut found, 0);
         }
+        // then the item zips dropped onto the view: mounted in place like the importer's own, so their cosmetics show up under Workshop
+        found.extend(self.extra_item_zips.read().unwrap().iter().cloned());
         let mut mount = Mount::default();
         for path in found {
             let Ok(zip) = ZipFile::open(&path) else { continue };
@@ -296,6 +300,15 @@ impl VpkSet {
             }
         }
         *self.workshop.write().unwrap() = mount;
+    }
+
+    /// Adds item zips to be mounted in place (read-only) by their paths on disk: the next `rescan_workshop` mounts them, and their
+    /// cosmetics show under Workshop. Session-only: nothing is copied into the game folder, and the mounts are gone on the next launch.
+    pub fn add_item_zips(&self, paths: impl IntoIterator<Item = PathBuf>) {
+        let mut extra = self.extra_item_zips.write().unwrap();
+        for path in paths {
+            if !extra.contains(&path) { extra.push(path); }
+        }
     }
 
     /// Sets the folder of the custom effect zips and mounts them.
@@ -332,6 +345,13 @@ impl VpkSet {
         h
     }
 
+    /// The workshop schema file beside the zips (`items_game.txt`, or `workbench_items.txt`, in `tf/workshop/import_source`): what the
+    /// zips cannot say about their items, in items_game's own words. None without one.
+    pub fn workshop_schema(&self) -> Option<String> {
+        let dir = self.workshop_dir.as_ref()?;
+        ["items_game.txt", "workbench_items.txt"].iter().find_map(|name| std::fs::read(dir.join(name)).ok()).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+    }
+
     /// The manifests (`manifest.txt`) of the mounted workshop zips, with the zip's file name.
     pub fn workshop_manifests(&self) -> Vec<(String, String)> {
         self.workshop
@@ -353,7 +373,7 @@ impl VpkSet {
 
     /// A set of files that are fetched on demand (the web build): `index` lists every path there is, `read` returns a file's bytes.
     pub fn remote(index: Vec<String>, read: RemoteRead) -> Self {
-        let mut set = VpkSet { loose_root: None, dirs: Vec::new(), files: HashMap::new(), sorted: Vec::new(), workshop: RwLock::new(Mount::default()), workshop_dir: None, effects_dir: RwLock::new(None), custom: RwLock::new(Vec::new()), remote: Some(read), recorded: Mutex::new(None) };
+        let mut set = VpkSet { loose_root: None, dirs: Vec::new(), files: HashMap::new(), sorted: Vec::new(), workshop: RwLock::new(Mount::default()), workshop_dir: None, effects_dir: RwLock::new(None), custom: RwLock::new(Vec::new()), extra_item_zips: RwLock::new(Vec::new()), remote: Some(read), recorded: Mutex::new(None) };
         set.sorted = index.into_iter().map(|p| Self::norm(&p)).collect();
         set.sorted.sort_unstable();
         set.sorted.dedup();
@@ -381,7 +401,7 @@ impl VpkSet {
     }
 
     pub fn open_dirs(paths: &[PathBuf]) -> Result<Self, VpkError> {
-        let mut set = VpkSet { loose_root: None, dirs: Vec::new(), files: HashMap::new(), sorted: Vec::new(), workshop: RwLock::new(Mount::default()), workshop_dir: None, effects_dir: RwLock::new(None), custom: RwLock::new(Vec::new()), remote: None, recorded: Mutex::new(None) };
+        let mut set = VpkSet { loose_root: None, dirs: Vec::new(), files: HashMap::new(), sorted: Vec::new(), workshop: RwLock::new(Mount::default()), workshop_dir: None, effects_dir: RwLock::new(None), custom: RwLock::new(Vec::new()), extra_item_zips: RwLock::new(Vec::new()), remote: None, recorded: Mutex::new(None) };
         for p in paths {
             set.add_dir(p, false)?;
         }

@@ -6,6 +6,8 @@ description = "Parsers for Source engine formats (VPK, MDL/VVD/VTX, VTF/VMT, Key
 
 [dependencies]
 thiserror = "2"
+crc32fast = "1"
+lzma-rs = "0.3"
 miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
 
 [target.'cfg(windows)'.dependencies]

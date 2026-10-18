@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { CONDITION_KEYS, NO_CONDITIONS, anyCondition, conditionParticles, materialEffects, parseConditions, uberMaterialPath } from "../../src/viewer/conditions";
+import { cigaretteEffects, CONDITION_KEYS, NO_CONDITIONS, anyCondition, conditionParticles, materialEffects, parseConditions, uberMaterialPath } from "../../src/viewer/conditions";
 import { evaluateMaterialVars, modulationColor, type ProxyDef } from "../../src/viewer/proxies";
 import { ConditionParticles, type ConditionLane } from "../../src/viewer/particles/conditionLanes";
 import { SourceMaterials } from "../../src/viewer/sourceMaterials";
@@ -27,8 +27,10 @@ test("conditions are parsed strictly and say what they change", () => {
   // a crit boost sparks around the weapon, not the body
   assert.deepEqual(conditionParticles({ ...NO_CONDITIONS, crit: true }, 1), [{ system: "critgun_weaponmodel_blu", weapon: true }]);
   assert.ok(conditionParticles(wet, 0).every((p) => !p.weapon));
-  // the Spy's cigarette smokes at the cig_smoke attachment of his model
-  assert.deepEqual(conditionParticles({ ...NO_CONDITIONS, cig: true }, 0).map((p) => [p.system, p.attachment]), [["cig_smoke", "cig_smoke"], ["cig_burn", "cig_smoke"]]);
+  // the Spy's cigarette smokes at the cig_smoke attachment of his model: not a lane, but an effect of his own (it runs on the fallback simulator too)
+  assert.deepEqual(conditionParticles({ ...NO_CONDITIONS, cig: true }, 0), []);
+  assert.deepEqual(cigaretteEffects({ ...NO_CONDITIONS, cig: true }).map((p) => [p.system, p.attachment]), [["cig_smoke", "cig_smoke"], ["cig_burn", "cig_smoke"]]);
+  assert.deepEqual(cigaretteEffects(NO_CONDITIONS), []);
 });
 
 test("a player skin turns yellow through YellowLevel -> $yellow -> $color2, and only with the condition", () => {

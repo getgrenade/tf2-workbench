@@ -24,6 +24,11 @@ export interface JiggleParams {
   maxYaw: number;
   minPitch: number;
   maxPitch: number;
+  /** Yaw/pitch constraint friction and bounce: not used by the simulation, carried from the model for the read-only jiggle inspector. */
+  yawFriction?: number;
+  yawBounce?: number;
+  pitchFriction?: number;
+  pitchBounce?: number;
   baseMass: number;
   baseStiffness: number;
   baseDamping: number;

@@ -36,6 +36,8 @@ export interface AnimState {
   /** Bumped by every bake request; an older bake finishing late is dropped. */
   token: number;
   seqName: string;
+  /** The latest bake (resolves when its clip is playing, or was superseded); for whoever has to wait for the pose. */
+  pending?: Promise<void>;
 }
 
 export const newAnimState = (): AnimState => ({ modelPath: "", info: null, seq: BIND_POSE, encoded: [], token: 0, seqName: "" });
@@ -75,7 +77,11 @@ export function createAnimUi(els: AnimEls, getViewer: () => Viewer | null, getAc
   let rebakeTimer: number | undefined;
   let scrubbing = false;
 
-  async function bake(actor: Actor, state: AnimState, keepTime: boolean) {
+  function bake(actor: Actor, state: AnimState, keepTime: boolean): Promise<void> {
+    return (state.pending = bakeNow(actor, state, keepTime));
+  }
+
+  async function bakeNow(actor: Actor, state: AnimState, keepTime: boolean) {
     const viewer = getViewer();
     if (!viewer) return;
     const shown = state === cur;
@@ -350,5 +356,5 @@ export function createAnimUi(els: AnimEls, getViewer: () => Viewer | null, getAc
     if (state.seq !== BIND_POSE && state.info) void bake(actor, state, true);
   }
 
-  return { attach, show, selectByName, applyHeld, sequenceNames, onFrame, refresh, rebake };
+  return { attach, show, select, selectByName, applyHeld, sequenceNames, onFrame, refresh, rebake };
 }

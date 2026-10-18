@@ -1,3 +1,5 @@
+import { solidOf, type ShotEffects } from "./promo";
+import { picturePsd } from "./promoPsd";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { createCompilerUi, type PreviewApplication } from "../compiler/compilerUi";
 import { MODEL_EXTENSIONS } from "../compiler/importModel";
@@ -6,11 +8,18 @@ import { propLabel } from "../props/propList";
 import { forgetThumbnail } from "../props/propThumbs";
 import { decodeTga, encodeTga, iconProblem, ICON_SAFE_ROWS } from "../compiler/tga";
 import { fadeAmount, maskIcon, type IconFade } from "../compiler/iconMask";
-import { importSourceDir, readItemSession, readPropSession, saveItemIcon, buildItem, buildProp, loadTextureFrames, readSourceFile, revealFile, sourceSiblings, sourceStamp } from "../api";
+import { importSourceDir, readItemSession, readPropSession, saveItemIcon, buildItem, buildProp, loadTextureFrames, readSourceFile, revealFile, sourceSiblings, sourceStamp, mountItemZips } from "../api";
+import { FILE_DROP_EVENT, type FileDropDetail } from "../fileDrop";
 import { parseTextureFrames } from "./sourceMaterials";
 import { getWeaponProfile, importEffectZip, removeCustomEffect, type WeaponProfile, type UnusualEffectInfo } from "../api";
+import { lipSync, loadScene, phonemeClasses, scenePlaying, voiceLines, type VoiceLine } from "../api";
+import { closeVoiceLines, openVoiceLines } from "./voiceLinesUi";
+import { FaceDriver, type FaceLine } from "./faceDriver";
+import type { LipSync, PhonemeClasses, SceneData } from "./faceScene";
+import { loadVoice, setVoiceMuted, stopAll as stopVoices, voiceMuted } from "./voicePlayer";
 import { listSequences, loadMaterial, loadModel, loadSession, prepareWorkshopTaunt, readTextFile, saveSession, rewriteModelFile, writeAdjustedModel, writeBinaryFile, writeTextFile, type WorkshopTaunt } from "../api";
-import { loadItemDb } from "./itemCatalog";
+import { loadItemDb, workshopItemsAsZipped } from "./itemCatalog";
+import { openWorkshopStyles } from "./workshopStyles";
 import { parseScene, type SceneEntity, type SceneFile } from "./scene";
 import { deletePoseFile, openPosesFolder, readPoses, refreshWorkshop as refreshWorkshopCommand, savePoseFile, workshopStamp as workshopStampCommand } from "../api";
 import { applyHandFile, parsePoseFile, poseForSkeleton, toHandFile, toPoseFile, type PoseData, type PoseFile } from "./poseRig";
@@ -45,8 +54,19 @@ import { countOf, newPostId, POST_KINDS, statesOf, type PostItem, type PostKind 
 import { entityHidden, isInside, newGroupName, parseGroups, withDescendants, type HierarchyGroup } from "./hierarchyTree";
 import { createBodyPicker } from "./bodyPicker";
 import { createTexturePreview, type PreviewItem } from "./texturePreview";
-import { alphaBounds, cropImages, openPaintChart } from "./paintChart";
-import { defaultBodyGroupsFor } from "./bodyGroups";
+import { closePaintChart, openPaintChart, type ChartCell } from "./paintChart";
+import { openRandomLoadout, regionLabel, rollLoadout, type LoadoutRule, type RollSettings } from "./randomLoadout";
+import { layoutChart } from "./chartLayout";
+import { bodyMasksLoaded } from "./bodyMasks";
+import { DEFAULT_CHART, DEFAULT_TEXT, aimDirection, layer, measureContent, openPromo, textLayer, type ChartCellRect, pictureBlob, type ChartSpec, type PromoLayer, type PromoPicture, type PromoText, type ShotSpec } from "./promo";
+import { showBoard, type BoardHost } from "./promoBoard";
+import { forgetBoard, loadBoards, saveBoard, type Written } from "./promoStore";
+import type { PaintChartOpts } from "./viewer";
+import { isJunkSequence } from "./sequenceFilter";
+import { paramsToSetup } from "../compiler/jiggleBones";
+import { turnTowards } from "../compiler/boneAxes";
+import type { JiggleParams } from "./jiggle";
+import { defaultBodyGroupsFor, type BodyGroup } from "./bodyGroups";
 import { purgeIcons } from "./itemIcons";
 import { reloadItemDb } from "./itemCatalog";
 import type { PoseHud } from "./poseHud";
@@ -67,7 +87,7 @@ import { createLightingUi } from "./lightingUi";
 import { defaultLightingRig, newRigLight, parseLightingRig, type RigLight } from "./lighting";
 import { blankUnusuals, parseUnusualSettings, loadUnusualCatalog as fetchUnusualCatalog, customEffectZips, type UnusualSettings } from "./particles/assets";
 import { DEFAULT_SHADOW, type ShadowParams } from "./shadowMath";
-import { CONDITION_CLASS, CONDITION_KEYS, CONDITION_LABELS, anyCondition, parseConditions, uberMaterialPath, type ConditionKey } from "./conditions";
+import { CONDITION_CLASS, CONDITION_KEYS, CONDITION_LABELS, anyCondition, parseConditions, uberMaterialPath, type ConditionKey, cigaretteEffects } from "./conditions";
 import { DEFAULT_FOG, parseFog, type FogState } from "./fog";
 import { DEFAULT_AO, parseAo, type AoState } from "./aoMath";
 import { hotkeyMatches, redoMatches } from "../hotkeys";
@@ -154,6 +174,7 @@ interface Els {
   focusAll: HTMLButtonElement;
   unusual: { hat: HTMLSelectElement; taunt: HTMLSelectElement; hatClear: HTMLButtonElement; tauntClear: HTMLButtonElement; restart: HTMLButtonElement; status: HTMLElement; search: HTMLInputElement; catalog: HTMLElement; bar: HTMLElement; loadZip: HTMLButtonElement; custom: HTMLElement };
   anim: AnimEls;
+  face: { scene: HTMLInputElement; mute: HTMLButtonElement; pick: HTMLSelectElement; keep: HTMLButtonElement; lines: HTMLButtonElement; info: HTMLElement };
   flex: FlexEls;
   /** RED / BLU team buttons. */
   teams: HTMLButtonElement[];
@@ -179,6 +200,8 @@ interface Els {
     status: HTMLElement;
     menu: HTMLButtonElement;
     paintChart: HTMLButtonElement;
+    promo: HTMLButtonElement;
+    randomLoadout: HTMLButtonElement;
   };
   entities: {
     list: HTMLElement;
@@ -244,6 +267,15 @@ interface Entity {
   showToken: number;
   /** The level of detail the character and its cosmetics are drawn at (0 is the full model). */
   lod: number;
+  /** What drives the face now (the scene of the animation, a taunt's); see faceDriver.ts. */
+  face?: FaceDriver | null;
+  faceToken?: number;
+  /** The sounds the face's scene says (for the choice of line where a sound has several). */
+  faceSounds?: { name: string; waves: string[] }[];
+  /** The line picked for a sound of several (lower-case sound name -> index into its waves). */
+  voicePicks?: Map<string, number>;
+  /** A voice line the browser put on the face (its name); the animation's scene waits until it is let go. */
+  faceVoiceLine?: string;
 }
 
 /** The "Viewer" tab: class picker, light controls and the 3D view. */
@@ -466,6 +498,7 @@ export function createViewTab(els: Els) {
     rewriteModel: (path, bytes) => rewriteModelFile(path, bytes),
   });
   const entities: Entity[] = [];
+  /** The promo character being edited in 3D: the only one the view and the list show (the others are in other shots). */
   /** The groups of the hierarchy. */
   let groups: HierarchyGroup[] = [];
   let nextEntity = 1;
@@ -479,7 +512,10 @@ export function createViewTab(els: Els) {
       else anim.rebake(e.actor, e.anim);
     }
   });
-  const flex = createFlexUi(els.flex, (globals) => selected?.actor.setFlexControllers(globals));
+  const flex = createFlexUi(els.flex, (globals) => {
+    selected?.actor.setFlexControllers(globals);
+    selected?.face?.invalidate(); // a scene face goes over the sliders
+  });
   const gameClassOf = (mdl: string) => CLASSES.find(([, m]) => m === mdl)?.[2] ?? mdl;
   const classLabelOf = (mdl: string) => {
     const building = buildingOf(mdl);
@@ -491,7 +527,7 @@ export function createViewTab(els: Els) {
   function newEntity(actor: Actor, cls: string, team: number, id?: number): Entity {
     // a model of a path that is not a building is a prop: its geometry is in Source's frame
     actor.sourceBind = isBuildingCls(cls) && !buildingOf(cls);
-    return {
+    const e: Entity = {
       id: id ?? nextEntity++,
       hidden: false,
       lod: 0,
@@ -511,6 +547,9 @@ export function createViewTab(els: Els) {
       loadoutToken: 0,
       showToken: 0,
     };
+    // a new animation: the face of its scene (and its lines)
+    actor.onClip = () => void refreshFace(e);
+    return e;
   }
 
   function syncUnusuals() {
@@ -627,11 +666,14 @@ export function createViewTab(els: Els) {
       const hat = e.applied.find((x) => x.item.equipRegions.some((r) => r === "hat" || r === "whole_head"));
       e.unusuals = { ...e.unusuals, hatItem: hat?.item.id ?? null };
     }
-    const settings = e.unusuals;
+    // the effects the worn items always show (a halo, a pipe's smoke) play with the ones chosen, each on its own item
+    const own: NonNullable<UnusualSettings["items"]> = [...e.applied.flatMap((x) => (x.item.particles ?? []).map((p) => ({ item: x.item.id, ...p }))), ...cigaretteEffects(e.actor.conditions)];
+    const chosen = e.unusuals;
+    const settings: UnusualSettings = { ...chosen, ...(own.length ? { items: own } : {}) };
     e.unusualError = "";
     try { await viewer.setUnusuals(e.actor, settings, restart); }
     catch (err) {
-      if (e.unusuals === settings) e.unusualError = `Could not preview effects: ${String(err)}`;
+      if (e.unusuals === chosen) e.unusualError = `Could not preview effects: ${String(err)}`;
       console.error("Unusual effect preview", err);
     }
     if (e === selected) syncUnusuals();
@@ -696,6 +738,7 @@ export function createViewTab(els: Els) {
       applyBuildingFx(e);
       return;
     }
+    loadout = loadout.filter((x) => !x.hidden); // an item hidden with its eye stays in the loadout but is not worn
     e.applied = loadout;
     const team = e.team;
     const cls = gameClassOf(e.cls);
@@ -802,6 +845,7 @@ export function createViewTab(els: Els) {
     e.actor.setProp(prop);
     void syncConditions(e);
     if (e === selected) refreshTextures();
+    if (e === selected) renderJiggles();
     if (imported) {
       const target = classPath(e.cls);
       if (e.anim.modelPath !== imported.animation || e.anim.targetPath !== target) {
@@ -861,13 +905,22 @@ export function createViewTab(els: Els) {
           const change = changes.find((c) => c.item === w.item.id);
           if (!change) return w;
           touched = true;
-          return { ...w, ...("paint" in change ? { paint: change.paint ?? null } : {}), ...(change.style !== undefined ? { style: change.style } : {}) };
+          return { ...w, ...("paint" in change ? { paint: change.paint ?? null } : {}), ...(change.style !== undefined ? { style: change.style } : {}), ...(change.hidden !== undefined ? { hidden: change.hidden } : {}) };
         });
         if (!touched) continue;
         e.items = { ...e.items, loadout };
         const cls = gameClassOf(e.cls);
         void applyLoadout(e, loadout.filter((w) => itemUsableBy(w.item, cls)));
       }
+    },
+    locked: () => (promoEditing && selected === promoEditing.e ? promoEditing.locked : []),
+    refused: (item, because) => {
+      const note = promoEditing?.bar.querySelector(".promoEditNote");
+      if (!note) return;
+      note.textContent = because
+        ? `${item.displayName} was not put on: it would take off ${because.displayName}, the item being promoted (they share an equip region).`
+        : `${item.displayName} stays on: it is the item being promoted.`;
+      note.classList.add("warn");
     },
     cleared: () => {
       for (const e of cosmeticTargets()) {
@@ -886,6 +939,7 @@ export function createViewTab(els: Els) {
     },
     apply: (loadout) => (selected ? applyLoadout(selected, loadout) : Promise.resolve()),
     inspect: (item) => void inspectItem(item, false),
+    workshopStyles: (item) => openWorkshopStyles(workshopStylesHost, item.name),
     allowOverlap: () => settings().allowOverlappingCosmetics,
     temporary: () => (compilerPreview && selected && selected === compilerTarget && compilerPreview.cls === selected.cls ? { name: compilerPreview.name } : null),
     removeTemporary: () => showCompilerItem(null),
@@ -993,12 +1047,25 @@ export function createViewTab(els: Els) {
   // --- the workshop importer's zips: reloaded without a restart ---------------------------------------------------------
 
   let workshopStamp: string | null = null;
-  let refreshing = false;
+  let refreshRun: Promise<void> | null = null;
 
   /** Rescans tf/workshop/import_source and reloads whatever came from it: the catalog, the models, materials and icons, and every character that wears one. */
-  async function refreshWorkshopItems(quiet = false) {
-    if (refreshing) return;
-    refreshing = true;
+  /**
+   * Reloads the workshop cosmetics. One reload runs at a time: a call made while one runs waits for it and then reloads again, since
+   * a zip may have been mounted after that one read the list (dropping a zip focuses the window, which starts a reload of its own).
+   */
+  function refreshWorkshopItems(quiet = false): Promise<void> {
+    const before = refreshRun;
+    const run = (async () => {
+      await before;
+      await reloadWorkshopItems(quiet);
+    })();
+    refreshRun = run;
+    void run.finally(() => { if (refreshRun === run) refreshRun = null; });
+    return run;
+  }
+
+  async function reloadWorkshopItems(quiet: boolean) {
     els.items.refresh.disabled = true;
     try {
       await refreshWorkshopCommand();
@@ -1031,11 +1098,122 @@ export function createViewTab(els: Els) {
     } catch (err) {
       els.items.count.textContent = `Could not reload the workshop cosmetics: ${String(err)}`;
     } finally {
-      refreshing = false;
       els.items.refresh.disabled = false;
     }
   }
   els.items.refresh.onclick = () => void refreshWorkshopItems();
+  // which workshop items are styles of another: by their names, and linked by hand here; a change reads the catalog again
+  const workshopStylesHost = {
+    items: async () => { await loadItemDb(); return workshopItemsAsZipped(); },
+    changed: () => refreshWorkshopItems(true),
+  };
+  els.items.workshopStyles.onclick = () => openWorkshopStyles(workshopStylesHost);
+  // drop a workshop item .zip anywhere on the app to mount it in place (read-only, this session) and show it under the Workshop filter
+  // (the places that take a file of their own, the compiler's file rows say, keep theirs: the nearest one under the pointer gets it)
+  const dropZone = document.getElementById("view");
+  const busyHost = document.getElementById("canvasWrap");
+  if (!__WEB__ && dropZone && busyHost) {
+    dropZone.setAttribute("data-file-drop", "");
+    dropZone.classList.add("appDrop");
+    dropZone.addEventListener(FILE_DROP_EVENT, (ev) => {
+      const zips = (ev as CustomEvent<FileDropDetail>).detail.paths.filter((p) => p.toLowerCase().endsWith(".zip"));
+      if (!zips.length) return;
+      // shown at once over the view, so the drop is seen to be taken while the zip mounts and the catalog reloads
+      const names = zips.map((z) => z.replace(/\\/g, "/").split("/").pop()!);
+      const busy = document.createElement("div");
+      busy.className = "dropBusy";
+      busy.setAttribute("role", "status");
+      busy.innerHTML = '<div class="dropBusyCard"><span class="dropBusySpin"></span><span></span></div>';
+      const busyText = (text: string) => ((busy.querySelector(".dropBusyCard > span:last-child") as HTMLElement).textContent = text);
+      busyText(`Loading ${names.length === 1 ? names[0] : `${names.length} zips`}…`);
+      busyHost.appendChild(busy);
+      const done = () => busy.remove();
+      void (async () => {
+        const say = (text: string) => { els.items.count.textContent = text; window.setTimeout(() => { if (els.items.count.textContent === text) els.items.count.textContent = ""; }, 8000); };
+        const tell = (message: string) => {
+          done();
+          const back = document.createElement("div");
+          back.className = "sceneDialogBack";
+          back.innerHTML = '<div class="sceneDialog" role="dialog" aria-modal="true"><p></p><div class="btns"><button class="primary">OK</button></div></div>';
+          (back.querySelector("p") as HTMLElement).textContent = message;
+          (back.querySelector("button") as HTMLButtonElement).onclick = () => back.remove();
+          document.body.appendChild(back);
+        };
+        try {
+          els.items.count.textContent = `Mounting ${zips.length} zip${zips.length === 1 ? "" : "s"}…`;
+          const before = await loadItemDb();
+          const had = new Set([...before.items, ...before.taunts].filter((i) => i.workshop).map((i) => i.id));
+          await mountItemZips(zips); // (the refresh that follows mounts them, once for all)
+          await refreshWorkshopItems(true);
+          const db = await loadItemDb();
+          const added = [...db.items, ...db.taunts].filter((i) => i.workshop && !had.has(i.id));
+          let item = added[0] as ItemInfo | undefined;
+          let already = false;
+          if (!item) {
+            // the zip was already mounted (e.g. it is already in import_source): find its item by the zip's base name in the model path
+            const stems = zips.map((z) => z.replace(/\\/g, "/").split("/").pop()!.replace(/\.zip$/i, "").toLowerCase()).filter(Boolean);
+            const hits = (i: ItemInfo) => [i.model ?? "", ...Object.values(i.perClass)].some((p) => stems.some((s) => p.toLowerCase().includes(`/${s}/`)));
+            item = [...db.items, ...db.taunts].find((i) => i.workshop && hits(i));
+            already = !!item;
+          }
+          if (!item) { tell("Mounted the zip, but no workshop cosmetic matched it. Does it have a manifest and the usual models/materials layout?"); return; }
+          const found = item;
+          const more = added.length > 1 ? ` (and ${added.length - 1} more)` : "";
+          const verb = already ? "Already in your workshop:" : "Mounted";
+          const game = selected ? gameClassOf(selected.cls) : null;
+          const canHere = !!game && itemUsableBy(found, game); // the loaded class can already wear it (an all-class item): no switch needed
+          const targetCls = CLASSES.find((c) => itemUsableBy(found, c[2]))?.[1];
+          const scope = () => document.querySelector<HTMLButtonElement>('#itemScopes [data-scope="workshop"]')?.click();
+          const equipHere = async () => { // the loaded class can wear it: put it on the character that is loaded
+            const e = selected; if (!e) return;
+            const g = gameClassOf(e.cls);
+            e.items = itemsUi.toggleFor(e.items, found, true, g);
+            e.applied = e.items.loadout.filter((x) => itemUsableBy(x.item, g));
+            await applyLoadout(e, e.applied);
+            itemsUi.load(e.items);
+            scope();
+          };
+          // switch this scene to the item's class and put it on, alone: the tab starts over, so what the old class wore goes (all-class items too)
+          const switchAndEquip = async (mdl: string) => {
+            const e = selected; if (!e) return;
+            stopPlay();
+            if (compilerOn) { showCompilerItem(null); compiler.selectionChanged(); }
+            const g = gameClassOf(mdl);
+            e.items = itemsUi.toggleFor({ loadout: [], activeId: null }, found, true, g);
+            const wear = e.items.loadout.filter((x) => itemUsableBy(x.item, g));
+            // the item panel re-applies its own list when the class changes: give it the new one first, or it puts the old loadout back
+            itemsUi.load(e.items);
+            await show(e, mdl); // loads the new class model (so the cosmetic has a skeleton to bind to) before applying
+            await applyLoadout(e, wear);
+            restoreUi(e);
+            renderEntities();
+            scope();
+          };
+          // "set up" = a scene with work worth keeping (cosmetics on, or several characters); a fresh single character is not
+          const setUp = !!selected && !selected.actor.inspectOnly && (selected.items.loadout.length > 0 || entities.length > 1);
+          if (canHere) { busyText(`Putting on “${found.displayName}”…`); await equipHere(); tell(`Equipped “${found.displayName}”${more} on the loaded character.`); return; }
+          if (!targetCls) { scope(); tell(`${verb} “${found.displayName}”${more}, now under the Workshop filter.`); return; }
+          if (!setUp) { busyText(`Switching class for “${found.displayName}”…`); await switchAndEquip(targetCls); tell(`Switched class and equipped “${found.displayName}”${more}.`); return; }
+          // the scene is set up and the item is for another class: putting it on would switch this scene, so ask first
+          const back = document.createElement("div");
+          back.className = "sceneDialogBack";
+          back.innerHTML = '<div class="sceneDialog" role="dialog" aria-modal="true"><p></p><div class="btns"><button>Cancel</button><button>Replace this tab</button><button class="primary">Open in a new tab</button></div></div>';
+          (back.querySelector("p") as HTMLElement).textContent = `“${found.displayName}”${more} is for a different class, so putting it on would switch this scene. What would you like to do?`;
+          const [cancel, replace, newTab] = Array.from(back.querySelectorAll("button")) as HTMLButtonElement[];
+          const close = () => back.remove();
+          cancel.onclick = () => { close(); scope(); say(`${verb} “${found.displayName}”${more}, under the Workshop filter.`); };
+          replace.onclick = () => { close(); busyText(`Switching class for “${found.displayName}”…`); busyHost.appendChild(busy); void (async () => { await switchAndEquip(targetCls!); tell(`Switched class and equipped “${found.displayName}”${more}.`); })(); };
+          newTab.onclick = () => { close(); void inspectItem(found, false); say(`${verb} “${found.displayName}”${more}, opened in a new tab.`); };
+          done();
+          document.body.appendChild(back);
+        } catch (err) {
+          tell(`Could not mount the zip: ${String(err)}`);
+        } finally {
+          done(); // a choice that still has loading to do (Replace this tab) puts the card back up
+        }
+      })();
+    });
+  }
   // coming back to the window (from the game, say, after recompiling an item): reload when the zips changed
   window.addEventListener("focus", () => {
     if (document.getElementById("view")?.hidden) return;
@@ -1592,49 +1770,90 @@ export function createViewTab(els: Els) {
 
   const bodyBox = document.getElementById("bodyGroups") as HTMLElement | null;
   const bodyReset = document.getElementById("bodyReset") as HTMLButtonElement | null;
+  const bodyAll = document.getElementById("bodyAll") as HTMLButtonElement | null;
+  const bodyNone = document.getElementById("bodyNone") as HTMLButtonElement | null;
 
   /** One drop-down per body part that has more than one model, showing what is set (by hand, else by a cosmetic, else the default). */
+  /**
+   * The character's parts, one list: each part that can be drawn or not (a checkbox), with the model's own switch beside it when the
+   * part is one of the model's bodygroups (the stepper: which of its models shows). The model's bodygroups come first, in bold, then a
+   * line, then the parts that are only drawn or not.
+   */
   function renderBodygroups() {
     if (!bodyBox) return;
     bodyBox.replaceChildren();
     const e = selected;
     const data = e ? models.get(classPath(e.cls)) : null;
-    const parts = data?.bodyParts.filter((bp) => bp.models.length > 1) ?? [];
+    const parts = new Map((data?.bodyParts ?? []).filter((bp) => bp.models.length > 1).map((bp) => [bp.name.toLowerCase(), bp] as const));
+    const groups = e?.actor.bodyGroups ?? [];
     if (bodyReset) bodyReset.disabled = !e || e.bodyManual.size === 0;
-    if (!e || !data || parts.length === 0) {
+    for (const b of [bodyAll, bodyNone]) if (b) b.disabled = !e || groups.length === 0;
+    if (!e || !data || (parts.size === 0 && groups.length === 0)) {
       const none = document.createElement("div");
       none.className = "dim hint";
-      none.textContent = data ? "This model has no body groups." : "";
+      none.textContent = data ? "This model has no bodygroups." : "";
       bodyBox.appendChild(none);
       return;
     }
-    for (const bp of parts) {
-      const key = bp.name.toLowerCase();
+    const shown = e.actor.visibleRegions;
+    const all = () => new Set(shown.has("*") ? groups.map((g) => g.id) : shown);
+    const row = (text: string, title: string, group: BodyGroup | null, bp: { name: string; models: unknown[] } | null, bold: boolean) => {
       const label = document.createElement("label");
-      label.textContent = bp.name.replace(/_/g, " ");
-      label.title = bp.name;
-      const count = bp.models.length;
-      const manual = e.bodyManual.get(key);
-      const current = Math.min(Math.max(0, manual ?? e.bodyItems[key] ?? e.bodyItems[bp.name] ?? 0), count - 1);
-      const stepper = document.createElement("div");
-      stepper.className = "stepper" + (manual !== undefined ? " manual" : "");
-      stepper.title = manual !== undefined ? "Set by hand" : key in e.bodyItems ? "Set by a cosmetic" : "Default";
-      const step = (by: number) => {
-        e.bodyManual.set(key, (current + by + count) % count);
-        applyBodygroups(e);
-        renderBodygroups();
-      };
-      const arrow = (text: string, by: number) => {
-        const b = document.createElement("button");
-        b.textContent = text;
-        b.onclick = () => step(by);
-        return b;
-      };
-      const value = document.createElement("span");
-      value.textContent = String(current);
-      stepper.append(arrow("‹", -1), value, arrow("›", 1));
-      bodyBox.append(label, stepper);
+      label.className = "bgRow" + (bold ? " valve" : "");
+      label.title = title;
+      if (group) {
+        const check = document.createElement("input");
+        check.type = "checkbox";
+        check.checked = shown.has("*") || shown.has(group.id);
+        check.onchange = () => {
+          const next = all();
+          if (check.checked) next.add(group.id); else next.delete(group.id);
+          e.actor.setVisibleRegions(next);
+          renderBodygroups();
+        };
+        label.appendChild(check);
+      } else {
+        const pad = document.createElement("span");
+        pad.className = "bgPad";
+        label.appendChild(pad);
+      }
+      label.append(text);
+      const cell = document.createElement("div");
+      if (bp) {
+        const key = bp.name.toLowerCase();
+        const count = bp.models.length;
+        const manual = e.bodyManual.get(key);
+        const current = Math.min(Math.max(0, manual ?? e.bodyItems[key] ?? e.bodyItems[bp.name] ?? 0), count - 1);
+        cell.className = "stepper" + (manual !== undefined ? " manual" : "");
+        cell.title = `Which of its ${count} models shows: ${manual !== undefined ? "set by hand" : key in e.bodyItems ? "set by a cosmetic" : "the default"}`;
+        const step = (by: number) => {
+          e.bodyManual.set(key, (current + by + count) % count);
+          applyBodygroups(e);
+          renderBodygroups();
+        };
+        const arrow = (text: string, by: number) => {
+          const b = document.createElement("button");
+          b.textContent = text;
+          b.onclick = () => step(by);
+          return b;
+        };
+        const value = document.createElement("span");
+        value.textContent = String(current);
+        cell.append(arrow("‹", -1), value, arrow("›", 1));
+      }
+      bodyBox.append(label, cell);
+    };
+    // the model's own bodygroups first (the parts of the same name, then the switches that are no part), then a line, then the rest
+    const valve = groups.filter((g) => parts.has(g.id));
+    for (const g of valve) row(g.label, g.id, g, parts.get(g.id)!, true);
+    for (const bp of parts.values()) if (!valve.some((g) => g.id === bp.name.toLowerCase())) row(bp.name.replace(/_/g, " "), bp.name, null, bp, true);
+    const rest = groups.filter((g) => !parts.has(g.id));
+    if (parts.size && rest.length) {
+      const line = document.createElement("div");
+      line.className = "bgLine";
+      bodyBox.appendChild(line);
     }
+    for (const g of rest) row(g.label, g.id, g, null, false);
   }
 
   async function applyBodygroups(e: Entity) {
@@ -1642,6 +1861,8 @@ export function createViewTab(els: Els) {
     await ensureGroupMaterials(e, merged); // the model a group switches on may bring materials that are not loaded yet
     e.actor.setBodygroups(merged);
   }
+  if (bodyAll) bodyAll.onclick = () => { const e = selected; if (!e) return; e.actor.setVisibleRegions(new Set(e.actor.bodyGroups.map((g) => g.id))); e.actor.setHandMaskState(undefined); renderBodygroups(); };
+  if (bodyNone) bodyNone.onclick = () => { const e = selected; if (!e) return; e.actor.setVisibleRegions(new Set()); renderBodygroups(); };
   if (bodyReset) {
     bodyReset.onclick = () => {
       const e = selected;
@@ -1650,6 +1871,147 @@ export function createViewTab(els: Els) {
       applyBodygroups(e);
       renderBodygroups();
     };
+  }
+
+  // --- jiggle bones: a read-only look at the spring physics of a loaded model's jiggle bones, for studying -----------------------
+
+  const jiggleBlock = document.getElementById("jiggleBlock") as HTMLElement | null;
+  const jiggleList = document.getElementById("jiggleList") as HTMLElement | null;
+  /** The jiggle bone whose visualizers and parameters are shown (by name, as the worn cosmetics name it); null when none is open. */
+  let selectedJiggle: string | null = null;
+
+  function clearJiggleDrawing() {
+    viewer?.setBoneHelper(null, null);
+    viewer?.setBoneAimHandle(null);
+    viewer?.setBoneGizmo(null);
+  }
+
+  const degStr = (radians: number) => `${Math.round((radians * 180 / Math.PI) * 100) / 100}°`;
+  const numStr = (v: number) => String(Math.round(v * 1000) / 1000);
+
+  /** The read-only parameter readout under an open jiggle bone. Angles are shown in degrees; the solver-ignored fields are fenced off. */
+  function jiggleDetails(params: JiggleParams): HTMLElement {
+    const s = paramsToSetup(params);
+    const wrap = document.createElement("div");
+    wrap.className = "jiggleDetails";
+    const row = (label: string, value: string, title?: string) => {
+      const r = document.createElement("div");
+      r.className = "cosRow";
+      const a = document.createElement("span");
+      a.textContent = label;
+      const b = document.createElement("span");
+      b.textContent = value;
+      if (title) b.title = title;
+      r.append(a, b);
+      wrap.appendChild(r);
+    };
+    const head = (t: string) => {
+      const h = document.createElement("div");
+      h.className = "jiggleSub";
+      h.textContent = t;
+      wrap.appendChild(h);
+    };
+    row("Type", s.mode === "flexible" ? "Flexible" : "Rigid");
+    row("Length", numStr(s.length));
+    row("Tip mass", numStr(s.tipMass));
+    if (s.mode === "flexible") {
+      head("Flex");
+      row("Yaw stiffness / damping", `${numStr(s.yawStiffness)} / ${numStr(s.yawDamping)}`);
+      row("Pitch stiffness / damping", `${numStr(s.pitchStiffness)} / ${numStr(s.pitchDamping)}`);
+      row("Length", s.allowLengthFlex ? `flex (along ${numStr(s.alongStiffness)} / ${numStr(s.alongDamping)})` : "fixed");
+    }
+    if (s.yaw.on || s.pitch.on || s.angle.on) {
+      head("Constraints");
+      if (s.yaw.on) row("Yaw range", `${degStr(params.minYaw)} … ${degStr(params.maxYaw)}`);
+      if (s.pitch.on) row("Pitch range", `${degStr(params.minPitch)} … ${degStr(params.maxPitch)}`);
+      if (s.angle.on) row("Angle limit", degStr(params.angleLimit));
+    }
+    if (s.baseSpring.on) {
+      const b = s.baseSpring;
+      head("Base spring");
+      row("Mass / stiffness / damping", `${numStr(b.mass)} / ${numStr(b.stiffness)} / ${numStr(b.damping)}`);
+      row("Left min / max", `${numStr(b.left.min)} … ${numStr(b.left.max)}`);
+      row("Up min / max", `${numStr(b.up.min)} … ${numStr(b.up.max)}`);
+      row("Forward min / max", `${numStr(b.forward.min)} … ${numStr(b.forward.max)}`);
+    }
+    if (s.boing.on) {
+      const b = s.boing;
+      head("Boing");
+      row("Impact speed / angle", `${numStr(b.impactSpeed)} / ${numStr(b.impactAngle)}°`);
+      row("Damping / frequency / amplitude", `${numStr(b.dampingRate)} / ${numStr(b.frequency)} / ${numStr(b.amplitude)}`);
+    }
+    // the four the Source solver never reads (the original MDL reader skipped them): kept apart so they don't read as live physics
+    if (s.yaw.on || s.pitch.on) {
+      head("Stored, not simulated");
+      if (s.yaw.on) row("Yaw friction / bounce", `${numStr(s.yaw.friction)} / ${numStr(s.yaw.bounce)}`, "Carried in the model but ignored by the jiggle solver");
+      if (s.pitch.on) row("Pitch friction / bounce", `${numStr(s.pitch.friction)} / ${numStr(s.pitch.bounce)}`, "Carried in the model but ignored by the jiggle solver");
+    }
+    return wrap;
+  }
+
+  /** Lists the selected character's jiggle bones and draws the open one's axes, spring and constraints (no editing gizmo). */
+  function renderJiggles() {
+    if (!jiggleBlock || !jiggleList) return;
+    // the compiler drives the viewer's bone helper itself; stay out of its way while it is open
+    if (compilerOn) return;
+    const e = selected;
+    const bones = e && propsKind === "character" && !isBuildingCls(e.cls) ? e.actor.simulatedJiggleBones() : [];
+    if (selectedJiggle && !bones.some((b) => b.name === selectedJiggle)) selectedJiggle = null;
+    jiggleBlock.hidden = bones.length === 0;
+    jiggleList.replaceChildren();
+    const open = bones.find((b) => b.name === selectedJiggle);
+    if (open && e) {
+      // the white-tip handle shows only while the bone is overridden (posed by hand); dragging it aims the bone, clamped to its limits, so
+      // the handle stops at the cone. The helper (axes/limits) stays on the fixed goal as the reference, and drops its own rest tip so the
+      // draggable handle is the only white sphere.
+      const overridden = e.actor.boneOverridden(open.name);
+      viewer?.setBoneHelper({ bone: open.name, setup: paramsToSetup(open.params), hideTip: overridden }, e.actor);
+      viewer?.setBoneAimHandle(overridden ? {
+        bone: open.name, actor: e.actor, length: paramsToSetup(open.params).length,
+        onAim: (dir) => e.actor.setBoneAim(open.name, turnTowards(dir)),
+      } : null);
+    } else clearJiggleDrawing();
+    if (bones.length) {
+      const hint = document.createElement("div");
+      hint.className = "dim hint";
+      hint.textContent = "Select a bone to see its spring and limits. Tick “Override rotation (pose)” to pose it by hand: drag the white handle at the tip, and the aim stays within the bone’s limits. Play an animation to watch it jiggle and hit those limits on its own.";
+      jiggleList.appendChild(hint);
+    }
+    for (const bone of bones) {
+      const row = document.createElement("button");
+      row.className = "jiggleRow" + (bone.name === selectedJiggle ? " on" : "");
+      row.textContent = bone.name;
+      row.title = bone.name;
+      row.onclick = () => {
+        selectedJiggle = selectedJiggle === bone.name ? null : bone.name;
+        renderJiggles();
+      };
+      jiggleList.appendChild(row);
+      if (bone.name === selectedJiggle) {
+        jiggleList.appendChild(jiggleDetails(bone.params));
+        const overridden = !!e && e.actor.boneOverridden(bone.name);
+        const label = document.createElement("label");
+        label.className = "jiggleOverride";
+        const box = document.createElement("input");
+        box.type = "checkbox";
+        box.checked = overridden;
+        box.onchange = () => {
+          if (!e) return;
+          e.actor.setBoneOverride(bone.name, box.checked);
+          renderJiggles();
+        };
+        label.append(box, document.createTextNode(" Override rotation (pose)"));
+        jiggleList.appendChild(label);
+        if (overridden) {
+          const reset = document.createElement("button");
+          reset.className = "jiggleReset";
+          reset.textContent = "Reset aim";
+          reset.title = "Return the bone to its rest orientation (still overridden)";
+          reset.onclick = () => { e?.actor.setBoneAim(bone.name, null); renderJiggles(); };
+          jiggleList.appendChild(reset);
+        }
+      }
+    }
   }
 
   // --- effects: the conditions that change how a character looks (Jarate, Ubercharge, fire, ...) -------------------------------
@@ -1693,6 +2055,7 @@ export function createViewTab(els: Els) {
     const v = ensureViewer();
     v.setConditions(e.actor, { ...e.actor.conditions, [key]: on });
     void syncConditions(e);
+    if (key === "cig") void applyUnusuals(e); // the cigarette plays with the effects of what he wears
     if (e === selected) renderConditions();
   }
   if (condReset) {
@@ -1700,6 +2063,7 @@ export function createViewTab(els: Els) {
       const e = selected;
       if (!e) return;
       ensureViewer().setConditions(e.actor, parseConditions(null));
+      void applyUnusuals(e);
       renderConditions();
     };
   }
@@ -1782,7 +2146,7 @@ export function createViewTab(els: Els) {
         viewStamp: () => (viewer ? viewer.camera.matrixWorld.elements.join(",") + "," + viewer.camera.fov + "," + viewer.camera.aspect : ""),
         hasBoxMask: () => selected?.actor.hasHandMask ?? false,
         clearBoxMask: () => selected?.actor.setHandMaskState(undefined),
-      })
+      }, false)
     : null;
 
   // --- the textures of the worn cosmetics (diffuse, normal, exponent mask) under the body groups ---
@@ -1873,12 +2237,14 @@ export function createViewTab(els: Els) {
     renderBodygroups();
     renderLod();
     renderConditions();
+    renderJiggles();
     bodyPicker?.sync();
     itemsUi.load(e.items);
     weapons.load(e.held);
     flex.restore(e.flex, models.get(classPath(e.cls)) ?? null);
     renderBuildingPanel();
     anim.show(e.anim, e.actor);
+    renderFaceUi();
     syncPoseUi();
     markSelected();
     markTeams();
@@ -1909,6 +2275,8 @@ export function createViewTab(els: Els) {
     stopPlay();
     if (selected) saveUi(selected);
     selected = e;
+    // a different character: forget the open jiggle bone so its drawing does not carry over
+    selectedJiggle = null;
     viewer?.select(e.actor);
     restoreUi(e);
     renderEntities();
@@ -2045,7 +2413,6 @@ export function createViewTab(els: Els) {
 
   /** Shows the part of the panel for what is selected. */
   function applyProps() {
-    if (viewer) viewer.lightDragEnabled = propsKind === "light";
     const building = !!selected && isBuildingCls(selected.cls);
     propsEl("propChar").hidden = nothingSelected || propsKind !== "character";
     propsEl("propLight").hidden = nothingSelected || propsKind !== "light";
@@ -2710,6 +3077,7 @@ export function createViewTab(els: Els) {
 
   function removeEntity(e: Entity) {
     if (entities.length <= 1) return;
+    clearFace(e);
     const i = entities.indexOf(e);
     entities.splice(i, 1);
     if (gizmoEntity === e) {
@@ -3558,8 +3926,16 @@ export function createViewTab(els: Els) {
     const d = new Date();
     const p2 = (n: number) => String(n).padStart(2, "0");
     const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
-    const path = await save({ defaultPath: `${options.source === "turntable" ? "turntable" : "loadout"}-${stamp}.${options.format}`, filters: [{ name: options.format.toUpperCase(), extensions: [options.format] }] });
+    const base = `${options.source === "turntable" ? "turntable" : "loadout"}-${stamp}`;
+    // a PNG sequence goes into a folder, as <base>_0001.png, <base>_0002.png, …
+    const sequence = options.format === "png";
+    const picked = sequence
+      ? await open({ directory: true, title: "Folder for the PNG frames" })
+      : await save({ defaultPath: `${base}.${options.format}`, filters: [{ name: options.format.toUpperCase(), extensions: [options.format] }] });
+    const path = typeof picked === "string" ? picked : null;
     if (!path) { report(""); return; }
+    const sep = path.includes("\\") ? "\\" : "/";
+    const framePath = (i: number) => `${path.replace(/[\\/]+$/, "")}${sep}${base}_${String(i + 1).padStart(4, "0")}.png`;
     const buttons = [els.capture.shot, els.capture.psd];
     buttons.forEach((b) => (b.disabled = true));
     const started = performance.now();
@@ -3567,7 +3943,11 @@ export function createViewTab(els: Els) {
       const result = await recordVideo(v, options, (p) => {
         const seconds = (performance.now() - started) / 1000;
         report(p.phase === "rendering" ? `Rendering frame ${p.done} of ${p.total}… ${seconds.toFixed(0)} s` : options.format === "gif" ? "Optimizing the GIF…" : "Finishing the file…");
-      }, signal);
+      }, signal, sequence ? (i, png) => writeBinaryFile(framePath(i), png) : undefined);
+      if (sequence) {
+        report(`Saved ${result.frames} frames, ${result.width}×${result.height}: ${framePath(0)} …`);
+        return;
+      }
       await writeBinaryFile(path, result.bytes);
       const mb = result.bytes.length / 1048576;
       report(`Saved ${result.width}×${result.height}, ${result.frames} frames, ${mb >= 1 ? mb.toFixed(1) + " MB" : Math.round(result.bytes.length / 1024) + " KB"}: ${path}`);
@@ -3580,107 +3960,1371 @@ export function createViewTab(els: Els) {
     record: recordVideoToFile,
   });
 
-  // --- the paint chart: one picture of an inspected cosmetic per paint, laid out in an editor ----------------------
-
-  let chartRunning = false;
+  // --- the paint chart: the inspected cosmetic in every paint, drawn live from the view's camera into an editor window ----------------
 
   /**
-   * Renders the cosmetic of the open Inspect scene in every paint (team paints once per team), as the view frames it now, and opens the
-   * chart editor with the pictures cut to the same rectangle.
+   * Opens the paint chart editor for the selected character's paintable cosmetic (the active one, else the first; an Inspect scene's
+   * item). Every picture is the item as the view's camera sees it, so
+   * orbiting, panning or zooming the view moves them all at once; the editor lays them out and saves the PNG.
    */
-  async function makePaintChart() {
-    const v = viewer;
-    const e = selected;
-    const status = els.capture.status;
-    const worn = e?.items.loadout[0];
-    if (!v || !e || !worn || !e.actor.inspectOnly || e.items.loadout.length !== 1 || !worn.item.paintable) {
-      status.textContent = "Paint chart: open a paintable cosmetic with Inspect first, and frame it the way you want the pictures.";
-      return;
-    }
-    if (chartRunning) return;
-    chartRunning = true;
+  /**
+   * The pictures of a paint chart of an item a character wears: unpainted first (when asked), then every paint; a team paint once per
+   * team in that team's skin (or only in the character's team).
+   */
+  async function paintCells(e: Entity, worn: Equipped, unpainted: boolean | "both", teams: "both" | "own"): Promise<ChartCell[]> {
     const db = await loadItemDb();
-    interface Job {
-      label: string;
-      paint: PaintInfo;
-      team: number;
+    const skinOf = (team: number) => itemSkinFor(worn.item, team, worn.style) ?? team;
+    // both skins' materials, so a BLU picture is drawn in the BLU skin
+    for (const path of [itemModelFor(worn.item, gameClassOf(e.cls), worn.style), ...(worn.item.extraModels ?? [])]) {
+      const data = path ? models.get(path) : undefined;
+      if (data) for (const t of [0, 1]) await ensureMaterials(data, skinOf(t));
     }
-    const jobs: Job[] = [];
-    for (const p of db.paints) {
-      if (p.rgb2 !== null && p.rgb2 !== p.rgb) jobs.push({ label: `${p.displayName} (RED)`, paint: p, team: 0 }, { label: `${p.displayName} (BLU)`, paint: p, team: 1 });
-      else jobs.push({ label: p.displayName, paint: p, team: e.team });
+    const own = skinOf(e.team);
+    const out: ChartCell[] = [];
+    if (unpainted === "both") out.push({ label: "Unpainted (RED)", paint: null, skin: skinOf(0) }, { label: "Unpainted (BLU)", paint: null, skin: skinOf(1) });
+    else if (unpainted) out.push({ label: "Unpainted", paint: null, skin: own });
+    for (const p of db.paints as PaintInfo[]) {
+      if (p.rgb2 !== null && p.rgb2 !== p.rgb) {
+        if (teams === "both") out.push({ label: `${p.displayName} (RED)`, paint: unpackRgb(p.rgb), skin: skinOf(0) }, { label: `${p.displayName} (BLU)`, paint: unpackRgb(p.rgb2), skin: skinOf(1) });
+        else out.push({ label: p.displayName, paint: unpackRgb(e.team === 1 ? p.rgb2 : p.rgb), skin: own });
+      } else out.push({ label: p.displayName, paint: unpackRgb(p.rgb), skin: own });
     }
+    return out;
+  }
 
-    const back = document.createElement("div");
-    back.className = "sceneDialogBack";
-    back.innerHTML = '<div class="sceneDialog" role="dialog" aria-modal="true"><p></p><div class="btns"><button>Cancel</button></div></div>';
-    const text = back.querySelector("p") as HTMLElement;
-    let cancelled = false;
-    (back.querySelector("button") as HTMLButtonElement).onclick = () => (cancelled = true);
-    document.body.appendChild(back);
-
-    const original = { team: e.team, entry: worn };
-    const blobs: Blob[] = [];
-    const labels: string[] = [];
-    type Bounds = { x0: number; y0: number; x1: number; y1: number; width: number; height: number };
-    let union = null as Bounds | null;
-    try {
-      for (const [i, job] of jobs.entries()) {
-        if (cancelled || !entities.includes(e)) break;
-        text.textContent = `Rendering ${i + 1} of ${jobs.length}: ${job.label}`;
-        e.team = job.team;
-        e.items.loadout[0] = { ...worn, paint: job.paint };
-        e.applied = [e.items.loadout[0]];
-        const data = models.get(classPath(e.cls));
-        if (data) await ensureClassMaterials(e, data);
-        await applyLoadout(e, e.applied);
-        await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
-        const shot = await v.capture(settings().screenshotScale, true, { only: e.actor });
-        const b = await alphaBounds(shot.blob);
-        if (!b) continue;
-        const u: Bounds | null = union;
-        union = u ? { ...u, x0: Math.min(u.x0, b.x0), y0: Math.min(u.y0, b.y0), x1: Math.max(u.x1, b.x1), y1: Math.max(u.y1, b.y1) } : b;
-        blobs.push(shot.blob);
-        labels.push(job.label);
-      }
-    } catch (err) {
-      status.textContent = `Paint chart failed: ${String(err)}`;
-    } finally {
-      e.team = original.team;
-      e.items.loadout[0] = original.entry;
-      e.applied = [original.entry];
-      const data = models.get(classPath(e.cls));
-      if (data) await ensureClassMaterials(e, data);
-      await applyLoadout(e, e.applied);
-      itemsUi.load(e.items);
-      markTeams();
-      renderEntities();
-      back.remove();
-      chartRunning = false;
-    }
-    if (cancelled || !union || blobs.length === 0) {
-      if (!cancelled) status.textContent = "Paint chart: nothing was rendered (is the cosmetic in view?).";
+  function makePaintChart() {
+    const v = viewer, e = selected;
+    const status = els.capture.status;
+    const paintable = e?.items.loadout.filter((x) => x.item.paintable) ?? [];
+    const worn = paintable.find((x) => x.item.id === e?.items.activeId) ?? paintable[0];
+    if (!v || !e || !worn) {
+      status.textContent = "Paint chart: the selected character wears nothing paintable. Put on a paintable cosmetic (or Inspect one) first.";
       return;
     }
-    const margin = Math.round(Math.max(union.x1 - union.x0, union.y1 - union.y0) * 0.03);
-    const rect = {
-      x0: Math.max(0, union.x0 - margin),
-      y0: Math.max(0, union.y0 - margin),
-      x1: Math.min(union.width, union.x1 + margin),
-      y1: Math.min(union.height, union.y1 + margin),
+    // the head can be shown with the item while the chart is open (an inspected hat often shows no character at all); the scene's
+    // own parts come back when it closes
+    const regions = [...e.actor.visibleRegions];
+    const headIds = e.actor.bodyGroups.filter((g) => g.category === "head").map((g) => g.id);
+    const headHidden = !regions.includes("*") && headIds.some((id) => !regions.includes(id));
+    let headAdded = false;
+    const showHead = (on: boolean) => {
+      if (on === headAdded) return;
+      headAdded = on;
+      e.actor.setVisibleRegions(on ? [...new Set([...regions, ...headIds])] : regions);
     };
-    const images = await cropImages(blobs, rect, 1024);
-    openPaintChart(
-      images.map((image, i) => ({ label: labels[i], image })),
-      `${worn.item.displayName}: paint chart`,
-      async (blob) => {
+    openPaintChart({
+      title: `${worn.item.displayName}: paint chart`,
+      team: e.team === 1 ? "BLU" : "RED",
+      cells: ({ unpainted, teams }) => paintCells(e, worn, unpainted, teams),
+      render: (cells, o, w, h) => v.renderPaintChart(e.actor, cells, o, w, h, worn.item.id),
+      viewStamp: () => v.cameraStamp(),
+      showHead: headHidden ? showHead : undefined,
+      save: async (blob) => {
         const path = await save({ defaultPath: `${worn.item.displayName.replace(/[^\w\- ]+/g, "")} paints.png`, filters: [{ name: "PNG image", extensions: ["png"] }] });
         if (!path) return;
         await writeBinaryFile(path, new Uint8Array(await blob.arrayBuffer()));
         status.textContent = `Saved paint chart: ${path}`;
       },
-    );
+      closed: () => { showHead(false); v.releasePaintChart(); },
+    });
   }
+
+  // --- random loadouts: cosmetics (and poses) rolled by the rules of the Random loadout window, for one character or a row of them ------
+
+  /** The characters the last roll added beside the selected one (by id); a roll with fewer characters takes them out again. */
+  let rolledExtras: number[] = [];
+  /** A random pose is stopped on a frame where the character is this much taller than wide on screen (or as near to it as it gets). */
+  const COMFORT_SHAPE: [number, number] = [1.4, 2.8];
+  /** A pose's pelvis-to-head line is at most this far from upright (cos 37°): sitting and a bow are poses, falling over is not. */
+  const UPRIGHT_MIN = 0.8;
+  /** A frame whose limbs and spine are on average less than this many degrees from the reference pose is that pose (or a blend into it). */
+  const BIND_MIN_DEGREES = 14;
+  /** Animations a random pose does not pick: overlays and aim matrices (half a pose on their own), and the reference pose. */
+  // (also what leaves the floor or the hands, or is a death: in the air, a jump, a stun, the blends into and out of a taunt)
+  const NOT_A_POSE = /^(layer_|gesture|a_|g_)|_layer$|^ref$|aimmatrix|crouch|stun|airwalk|jump|inblend|outblend|death|dieviolent/i;
+  /** A held weapon whose bone is farther than this from both hands (model units) is not held in that frame: the animation let go of it. */
+  const WEAPON_LET_GO = 12;
+
+  const pickOne = <T,>(list: readonly T[]): T | undefined => list[Math.floor(Math.random() * list.length)];
+
+  /**
+   * Stops the character's animation on a frame where it keeps a comfortable shape on screen (a random one of those, for variety), and
+   * stands upright. False when no frame tried stands (it then stops on the best shaped of them).
+   */
+  function settlePose(e: Entity): { stands: boolean; dropped: boolean } {
+    const v = viewer, pb = e.actor.playback, clip = pb.clip;
+    if (!v || !clip || clip.frames <= 1) return { stands: true, dropped: false };
+    const span = (clip.frames - 1) / clip.fps;
+    const tries = 14;
+    const scored: { t: number; off: number; dropped: boolean }[] = [];
+    for (let i = 0; i < tries; i++) {
+      const t = (span * (i + Math.random())) / tries;
+      pb.time = t;
+      e.actor.poseBones();
+      // a frame that tips the character over is not a pose, nor one still (mostly) in the skeleton's raw reference pose (some taunts
+      // start in it and blend out of it, and the reference pose is turned to lie along the floor)
+      const up = e.actor.uprightness(), fromBind = e.actor.distanceFromBind();
+      const lying = (up !== null && up < UPRIGHT_MIN) || (fromBind !== null && fromBind < BIND_MIN_DEGREES);
+      // a weapon held, but not in the hands in this frame (dropped by the feet): a frame where it is in them is better
+      const reach = e.held ? e.actor.weaponReach() : null;
+      const dropped = reach !== null && reach > WEAPON_LET_GO;
+      const shape = v.screenShape(e.actor);
+      if (shape === null) continue;
+      const [lo, hi] = COMFORT_SHAPE;
+      scored.push({ t, dropped, off: (lying ? 100 : 0) + (dropped ? 10 : 0) + (shape < lo ? Math.log(lo / shape) : shape > hi ? Math.log(shape / hi) : 0) });
+    }
+    if (!scored.length) return { stands: true, dropped: false };
+    const best = Math.min(...scored.map((s) => s.off));
+    const pick = pickOne(scored.filter((s) => s.off <= best + 1e-6))!;
+    pb.time = pick.t;
+    pb.playing = false;
+    e.actor.poseBones();
+    return { stands: best < 100, dropped: pick.dropped };
+  }
+
+  /** Rolls the scene: the selected character and the ones beside it, each with its own loadout (and pose). Resolves to a report. */
+  async function rollScene(s: RollSettings): Promise<string> {
+    const v = viewer, base = selected;
+    if (!v || !base || isBuildingCls(base.cls)) return "Select a character first.";
+    if (play?.active) stopPlay();
+    const db = await loadItemDb();
+    const conflicts = (a: ItemInfo, b: ItemInfo) => a.equipRegions.some((ra) => b.equipRegions.some((rb) => ra === rb || db.equipConflicts[ra]?.includes(rb) || db.equipConflicts[rb]?.includes(ra)));
+    const named = s.rules.filter((r) => r.mode === "include" && r.kind === "item").map((r) => db.items.find((i) => String(i.id) === r.value)).filter((i): i is ItemInfo => !!i);
+    const wears = (item: ItemInfo, game: string) => itemUsableBy(item, game) && itemModelFor(item, game) !== null;
+    const fitsClass = (game: string) => named.every((item) => wears(item, game));
+    const label = (mdl: string) => CLASSES.find((c) => c[1] === mdl)?.[0] ?? mdl;
+    const classes = CLASSES.filter((c) => fitsClass(c[2]));
+    if (s.classes === "same" && !fitsClass(gameClassOf(base.cls))) return `${named.find((i) => !wears(i, gameClassOf(base.cls)))?.displayName} is not for the ${label(base.cls)}. Switch class, or roll a random class each.`;
+    if (!classes.length) return "No class can wear every item the rules name.";
+    saveUi(base);
+    // the cast: the selected character, the ones the last roll added (still in the scene), and new ones up to the number asked for
+    const extras = rolledExtras.map((id) => entities.find((e) => e.id === id)).filter((e): e is Entity => !!e && e !== base);
+    while (extras.length > s.copies - 1) removeEntity(extras.pop()!);
+    while (extras.length < s.copies - 1) {
+      const e = newEntity(v.addActor(), base.cls, base.team);
+      e.group = base.group;
+      e.actor.setScale(base.actor.scale);
+      e.held = base.held;
+      entities.push(e);
+      extras.push(e);
+    }
+    rolledExtras = extras.map((e) => e.id);
+    v.select(base.actor); // adding a character selects it in the view; the selected one stays selected
+    renderEntities();
+    const cast = [base, ...extras];
+    const usedTaunts = new Set<number>(), usedSequences = new Set<string>();
+    let worn = "";
+    for (const e of cast) {
+      // a new character has no model yet: it gets its class below whatever the roll says
+      const fresh = !e.actor.hasModel;
+      const mdl = s.classes === "same" ? base.cls : pickOne(classes)![1];
+      const game = gameClassOf(mdl);
+      const pool = db.items.filter((i) => i.slot !== "taunt" && wears(i, game));
+      const rolled = rollLoadout(pool, db.paints, conflicts, s.rules, s);
+      if ("failed" in rolled) {
+        const r = rolled.failed;
+        const what = r.kind === "medal" ? "a medal" : r.kind === "item" ? db.items.find((i) => String(i.id) === r.value)?.displayName ?? "that item" : regionLabel(r.value).toLowerCase();
+        return `Nothing the ${label(mdl)} can wear meets “must include ${what}” with the other rules.`;
+      }
+      const loadout: Equipped[] = rolled.items.map((x) => ({ item: x.item, paint: x.paint, style: x.style }));
+      // the pose: a taunt is held (it plays its own animation); an animation drops a held taunt
+      const free = !e.actor.isPosing && !e.actor.holdsPose;
+      const kind = !free ? "keep" : s.pose === "mix" ? (Math.random() < 0.5 ? "taunt" : "anim") : s.pose;
+      let taunt: ItemInfo | null = null;
+      if (kind === "taunt") {
+        const taunts = db.taunts.filter((t) => !t.workshop && itemUsableBy(t, game) && t.tauntScenes[game] !== undefined);
+        taunt = pickOne(taunts.filter((t) => !usedTaunts.has(t.id))) ?? pickOne(taunts) ?? null;
+        if (taunt) { usedTaunts.add(taunt.id); e.held = taunt; }
+      } else if (kind === "anim" && e.held?.slot === "taunt") e.held = null;
+      e.items = { loadout, activeId: loadout.at(-1)?.item.id ?? null };
+      e.applied = loadout;
+      if (e === selected) {
+        // the panels re-apply their own lists when the class changes: they get the new ones first
+        itemsUi.load(e.items);
+        weapons.load(e.held);
+      }
+      if (fresh || e.cls !== mdl) await show(e, mdl); // loads the class (the loadout goes on with it)
+      else await applyLoadout(e, loadout);
+      if (kind === "taunt" && taunt) playWeaponAnimation(e, taunt);
+      else if (kind === "anim" && e.anim.info) {
+        const sequences = e.anim.info.sequences.filter((q) => q.frames > 1 && !NOT_A_POSE.test(q.name) && !isJunkSequence(q.name));
+        const seq = pickOne(sequences.filter((q) => !usedSequences.has(q.name))) ?? pickOne(sequences);
+        if (seq) { usedSequences.add(seq.name); anim.select(e.actor, e.anim, seq.index); }
+      }
+      if (kind !== "keep") {
+        await e.anim.pending;
+        settlePose(e);
+      }
+      if (e === base) worn = loadout.map((x) => x.item.displayName).join(", ") || "nothing";
+    }
+    if (selected) restoreUi(selected);
+    renderEntities();
+    v.focusAll();
+    return cast.length > 1 ? `Rolled ${cast.length} characters. The selected one wears: ${worn}.` : `Wearing: ${worn}.`;
+  }
+
+  els.capture.randomLoadout.onclick = () =>
+    openRandomLoadout({
+      className: () => CLASSES.find((c) => c[1] === selected?.cls)?.[0] ?? "",
+      catalog: async () => {
+        const db = await loadItemDb();
+        const pool = db.items.filter((i) => i.slot !== "taunt");
+        const regions = [...new Set(pool.flatMap((i) => i.equipRegions))].sort();
+        return { regions, items: [...pool].sort((a, b) => a.displayName.localeCompare(b.displayName)) };
+      },
+      roll: rollScene,
+    });
+
+  // --- scene faces: the scene that goes with an animation (a taunt's) drives the face (its expressions, and the mouth of what it says) ---
+
+  const SCENE_FACES_KEY = "tf2workbench.sceneFaces";
+  let sceneFaces = (() => { try { return localStorage.getItem(SCENE_FACES_KEY) !== "0"; } catch { return true; } })();
+  const sceneCache = new Map<string, Promise<SceneData | null>>();
+  const loadSceneCached = (path: string) => {
+    const key = path.toLowerCase();
+    let p = sceneCache.get(key);
+    if (!p) sceneCache.set(key, (p = loadScene(key).catch(() => null)));
+    return p;
+  };
+  /** Which taunt scene plays a sequence, by class and sequence name (null: none does). */
+  const playingCache = new Map<string, Promise<string | null>>();
+  const lipCache = new Map<string, Promise<LipSync | null>>();
+  const lipOf = (wave: string) => {
+    let p = lipCache.get(wave);
+    if (!p) lipCache.set(wave, (p = lipSync(wave).catch(() => null)));
+    return p;
+  };
+  const phonemeCache = new Map<string, Promise<Partial<Record<"plain" | "hwm", PhonemeClasses>> | null>>();
+  /** The character's own controller values (the sliders). */
+  const flexBase = (e: Entity) => flexGlobalsFor(models.get(classPath(e.cls)) ?? null, e === selected ? flex.state() : e.flex);
+  const controllersOf = (e: Entity) => new Set((models.get(classPath(e.cls))?.flexControllers ?? []).map((c) => c.name.toLowerCase()));
+  /** The mouth shapes for a character: of the class's two sets, the one that drives the controllers its model has. */
+  async function mouthShapesOf(e: Entity): Promise<PhonemeClasses | null> {
+    const game = gameClassOf(e.cls);
+    let p = phonemeCache.get(game);
+    if (!p) phonemeCache.set(game, (p = phonemeClasses(game).catch(() => null)));
+    const have = controllersOf(e);
+    const fit = (set: PhonemeClasses) => new Set(Object.values(set.normal ?? {}).flat().map(([c]) => c.toLowerCase()).filter((c) => have.has(c))).size;
+    return Object.values((await p) ?? {}).sort((a, b) => fit(b) - fit(a)).find((set) => fit(set) > 0) ?? null;
+  }
+  /**
+   * The line a sound plays for a character: the one picked for it, else the first of the sound's pool. The game picks one at random each
+   * time; a scene here stays the same every time it plays.
+   */
+  const waveFor = (e: Entity, sound: { name: string; waves: string[] }) => sound.waves[Math.min(e.voicePicks?.get(sound.name.toLowerCase()) ?? 0, sound.waves.length - 1)];
+
+  function clearFace(e: Entity) {
+    e.faceToken = (e.faceToken ?? 0) + 1;
+    if (!e.face) return;
+    e.face.dispose();
+    e.face = null;
+    e.actor.faceDriver = null;
+    e.actor.setFlexControllers(flexBase(e));
+    if (e === selected) renderFaceUi();
+  }
+
+  /**
+   * Looks up the scene of what the character plays and puts it on the face, in step with the animation: its expressions and flex
+   * animations, and the lines its speak events say (heard, for the selected character, with their mouth shapes from the game's phoneme
+   * data). The scene is the held taunt item's own (items_game names it), else the class's scene of the sequence's name
+   * (`scenes/player/heavy/low/taunt05.vcd`, how the stock weapon taunts' scenes are filed), else the scene of whichever taunt item plays
+   * this sequence (a taunt's animation picked from the list); in each case only one that plays this very sequence.
+   */
+  async function refreshFace(e: Entity) {
+    if (e.faceVoiceLine) return;
+    const token = (e.faceToken = (e.faceToken ?? 0) + 1);
+    const game = gameClassOf(e.cls);
+    const seqName = e.anim.seqName;
+    if (!sceneFaces || isBuildingCls(e.cls) || !seqName || e.anim.seq < 0) { clearFace(e); return; }
+    const plays = (s: SceneData | null) => !!s?.events.some((ev) => ev.kind === "sequence" && ev.params.toLowerCase() === seqName.toLowerCase());
+    const own = e.held?.slot === "taunt" ? e.held.tauntScenePaths?.[game] : undefined;
+    let scene = own ? await loadSceneCached(own) : null;
+    if (!plays(scene)) scene = await loadSceneCached(`scenes/player/${game}/low/${seqName}.vcd`);
+    if (!plays(scene)) {
+      const db = await loadItemDb();
+      const paths = [...new Set(db.taunts.map((t) => t.tauntScenePaths?.[game]).filter((p): p is string => !!p))];
+      // (asked once per class and sequence: the answer reads every taunt scene of the class, and most sequences are not a taunt's)
+      const key = `${game}|${seqName.toLowerCase()}`;
+      let lookup = playingCache.get(key);
+      if (!lookup) playingCache.set(key, (lookup = paths.length ? scenePlaying(paths, seqName).catch(() => null) : Promise.resolve(null)));
+      const path = await lookup;
+      scene = path ? await loadSceneCached(path) : null;
+    }
+    if (token !== e.faceToken) return;
+    if (!scene || !plays(scene) || !scene.events.some((ev) => ["expression", "flexanimation", "speak"].includes(ev.kind))) { clearFace(e); return; }
+    const sc = scene;
+    // the scene's time where the sequence starts in it (the face lines up with the body)
+    const at = sc.events.find((ev) => ev.kind === "sequence" && ev.params.toLowerCase() === seqName.toLowerCase())?.start ?? 0;
+    const speaks = sc.events.filter((ev) => ev.kind === "speak").map((ev) => ({ start: ev.start, sound: sc.sounds[ev.params.toLowerCase()] })).filter((s) => s.sound?.waves.length);
+    const [classes, lines] = await Promise.all([
+      mouthShapesOf(e),
+      Promise.all(speaks.map(async (s) => {
+        const wave = waveFor(e, s.sound);
+        const [buffer, lip] = await Promise.all([loadVoice(wave), lipOf(wave)]);
+        return { start: s.start, wave, buffer, lip } satisfies FaceLine;
+      })),
+    ]);
+    if (token !== e.faceToken) return;
+    e.face?.dispose();
+    const driver = new FaceDriver({
+      owner: `face${e.id}`,
+      scene: sc,
+      lines,
+      classes,
+      controllers: controllersOf(e),
+      base: () => flexBase(e),
+      clock: (pb) => (pb.clip ? pb.frame() / pb.clip.fps : 0) + at,
+      audible: (pb) => pb.playing && !!pb.clip && e === selected && !e.hidden,
+    });
+    e.face = driver;
+    e.faceSounds = speaks.map((s) => s.sound);
+    e.actor.faceDriver = (pb) => driver.run(pb);
+    if (e === selected) renderFaceUi();
+  }
+
+  /** The face row under the animation controls: the scene face switch, the sound switch, the choice of line and the keep button. */
+  function renderFaceUi() {
+    const f = els.face;
+    const e = selected;
+    f.scene.checked = sceneFaces;
+    f.mute.textContent = voiceMuted() ? "🔇 Sound off" : "🔊 Sound on";
+    f.mute.setAttribute("aria-pressed", String(!voiceMuted()));
+    f.keep.disabled = !e?.face;
+    // a sound of several lines: which one this character says
+    const pools = (e?.face ? e.faceSounds ?? [] : []).filter((s, i, all) => s.waves.length > 1 && all.findIndex((x) => x.name === s.name) === i);
+    f.pick.hidden = !pools.length;
+    f.pick.innerHTML = "";
+    for (const s of pools) {
+      const group = document.createElement("optgroup");
+      group.label = s.name;
+      s.waves.forEach((w, i) => {
+        const o = new Option(w.split("/").pop()!.replace(/\.(mp3|wav)$/i, ""), `${s.name.toLowerCase()}|${i}`);
+        o.selected = (e?.voicePicks?.get(s.name.toLowerCase()) ?? 0) === i;
+        group.appendChild(o);
+      });
+      f.pick.appendChild(group);
+    }
+    f.info.textContent = e?.faceVoiceLine ? `Voice line: ${e.faceVoiceLine}` : e?.face ? "Face from the taunt's scene" : "";
+  }
+
+  els.face.scene.onchange = () => {
+    sceneFaces = els.face.scene.checked;
+    try { localStorage.setItem(SCENE_FACES_KEY, sceneFaces ? "1" : "0"); } catch { /* not kept */ }
+    for (const e of entities) void refreshFace(e);
+  };
+  els.face.mute.onclick = () => { setVoiceMuted(!voiceMuted()); renderFaceUi(); };
+  els.face.pick.onchange = () => {
+    const e = selected;
+    if (!e) return;
+    const [name, index] = els.face.pick.value.split("|");
+    (e.voicePicks ??= new Map()).set(name, Number(index));
+    void refreshFace(e);
+  };
+  // the face of this moment goes onto the flex sliders, where it stays when the animation changes
+  els.face.keep.onclick = () => {
+    const e = selected;
+    if (!e?.face) return;
+    const values = new Map(e.face.face(e.face.setup.clock(e.actor.playback)));
+    e.flex = values;
+    flex.restore(values, models.get(classPath(e.cls)) ?? null);
+    e.face.invalidate();
+  };
+
+
+  // the voice line browser: a line on the selected character's face, on a timeline of its own
+  let voiceEntity: Entity | null = null;
+  let voiceClock = { time: 0, playing: false, since: 0 };
+  const voiceTime = () => (voiceClock.playing ? voiceClock.time + (performance.now() - voiceClock.since) / 1000 : voiceClock.time);
+
+  /** Counts the lines put on: a line still loading when another is picked is dropped. */
+  let voicePick = 0;
+
+  async function playVoiceLine(line: VoiceLine | null): Promise<number> {
+    const token = ++voicePick;
+    const prev = voiceEntity;
+    voiceEntity = null;
+    if (prev) {
+      prev.faceVoiceLine = undefined;
+      clearFace(prev);
+      void refreshFace(prev);
+    }
+    const e = selected;
+    if (!line || !e || isBuildingCls(e.cls)) return 0;
+    const scene = await loadSceneCached(line.scene);
+    if (!scene) return 0;
+    const speaks = scene.events.filter((ev) => ev.kind === "speak").map((ev) => ({ start: ev.start, sound: scene.sounds[ev.params.toLowerCase()] })).filter((s) => s.sound?.waves.length);
+    const [classes, lines] = await Promise.all([
+      mouthShapesOf(e),
+      Promise.all(speaks.map(async (s) => {
+        const wave = waveFor(e, s.sound);
+        const [buffer, lip] = await Promise.all([loadVoice(wave), lipOf(wave)]);
+        return { start: s.start, wave, buffer, lip } satisfies FaceLine;
+      })),
+    ]);
+    if (selected !== e || token !== voicePick) return 0;
+    clearFace(e); // also drops a scene face still loading
+    e.faceVoiceLine = line.sound.waves[0]?.split("/").pop()?.replace(/\.(mp3|wav)$/i, "") ?? line.sound.name;
+    voiceEntity = e;
+    voiceClock = { time: 0, playing: false, since: performance.now() };
+    const driver = new FaceDriver({
+      owner: `voice${e.id}`,
+      scene,
+      lines,
+      classes,
+      controllers: controllersOf(e),
+      base: () => flexBase(e),
+      clock: () => voiceTime(),
+      audible: () => voiceClock.playing,
+    });
+    e.face = driver;
+    e.faceSounds = speaks.map((s) => s.sound);
+    e.actor.faceDriver = (pb) => driver.run(pb);
+    renderFaceUi();
+    const soundEnd = Math.max(0, ...lines.map((l) => l.start + (l.buffer?.duration ?? 0)));
+    return Math.max(line.duration, soundEnd);
+  }
+
+  els.face.lines.onclick = () =>
+    openVoiceLines({
+      character: () => (selected && !isBuildingCls(selected.cls) ? { label: classLabelOf(selected.cls), game: gameClassOf(selected.cls) } : null),
+      lines: (game) => voiceLines(game),
+      play: playVoiceLine,
+      seek: (time, playing) => {
+        voiceClock = { time, playing, since: performance.now() };
+        voiceEntity?.face?.invalidate();
+      },
+      position: () => ({ time: voiceTime(), playing: voiceClock.playing }),
+      keepFace: () => {
+        const e = voiceEntity;
+        if (!e?.face) return;
+        const values = new Map(e.face.face(voiceTime()));
+        e.flex = values;
+        if (e === selected) flex.restore(values, models.get(classPath(e.cls)) ?? null);
+        e.face.invalidate();
+      },
+    });
+
+  // --- promo images: a set of cosmetics, pictured in a scene tab of its own (see promo.ts) ------------------------------------------
+
+  const nextFrames = () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+
+  /** A picture of one character, alone, transparent: framed from `dir` by a camera of its own (the view's light follows it there). */
+  /**
+   * A picture of one character, alone, transparent: framed for a slot of w × h from `dir` (the view's light follows it there), and taken
+   * with {@link PROMO_MARGIN} more room round the slot, so what reaches past the character (a long weapon) is not cut off at the slot's
+   * edge but spills over it (see {@link marginBox}).
+   */
+  async function promoShot(e: Entity, dir: THREE.Vector3, w: number, h: number, fill: number, scaleDistance?: number, pan?: { panX?: number; panY?: number; light?: { azimuth: number; elevation: number }; particles?: { seed: number; time: number } }, margin = true, effects?: ShotEffects, bounds?: THREE.Box3): Promise<HTMLCanvasElement> {
+    const v = ensureViewer();
+    const fov = PROMO_FOV;
+    const cam = v.framingCamera([e.actor], dir, w / h, fill, fov, scaleDistance !== undefined ? scaleDistance / fill : undefined, bounds);
+    const target = slideCamera(cam, w / h, fov, pan);
+    v.restoreCamera(cam.position.toArray() as [number, number, number], target.toArray() as [number, number, number]);
+    // the same camera, seeing the margin round the slot too: a taller view (the slot keeps its size in it) and a wider one
+    const mx = margin ? PROMO_MARGIN.x : 0, my = margin ? PROMO_MARGIN.y : 0;
+    const W = Math.round(w * (1 + 2 * mx)), H = Math.round(h * (1 + 2 * my));
+    cam.fov = (2 * Math.atan(Math.tan((fov * Math.PI) / 360) * (1 + 2 * my)) * 180) / Math.PI;
+    cam.aspect = W / H;
+    cam.updateProjectionMatrix();
+    await bodyMasksLoaded(); // the parts an item shown alone hides are hidden by a mask texture
+    await nextFrames();
+    const shadow = effects?.shadow.on ? { enabled: true, azimuth: effects.shadow.azimuth, length: effects.shadow.length, blur: effects.shadow.blur, opacity: effects.shadow.opacity } : undefined;
+    const look = !!effects?.look;
+    // the particle effects at a set moment of theirs (the shot is the same each time it is taken), held still while it is taken
+    if (pan?.particles) await v.restartEffects(e.actor, pan.particles.seed, pan.particles.time);
+    try {
+      return await withShotLight(pan?.light, async () => {
+        const shot = await v.capture(1, true, { camera: cam, only: e.actor, size: { w: W, h: H }, canvas: true, groundShadow: shadow, look });
+        // with effects, the shot again without them: the character alone, for its bounds and clicks
+        if (shadow || look) {
+          const plain = await v.capture(1, true, { camera: cam, only: e.actor, size: { w: W, h: H }, canvas: true });
+          solidOf.set(shot.canvas!, plain.canvas!);
+        }
+        return shot.canvas!;
+      });
+    } finally {
+      if (pan?.particles) v.holdEffects(e.actor, false);
+    }
+  }
+
+  /** Where the view's directional light comes from (degrees): the selected one when it is directional, else the first, else the plain light. */
+  function viewLightDirection(): { azimuth: number; elevation: number } {
+    const l = ensureViewer().getLight();
+    const d = l.rig ? (l.rig.lights.find((x) => x.id === l.rig!.selected && x.type === "directional") ?? l.rig.lights.find((x) => x.type === "directional")) : null;
+    return d ? { azimuth: d.azimuth, elevation: d.elevation } : { azimuth: l.azimuth, elevation: l.elevation };
+  }
+
+  /** Runs `job` with the directional light turned to where a shot wants it (a light of its own), the view's light put back after. */
+  async function withShotLight<T>(light: { azimuth: number; elevation: number } | undefined, job: () => Promise<T>): Promise<T> {
+    if (!light) return job();
+    const v = ensureViewer();
+    const was = v.getLight();
+    const l = v.getLight();
+    const d = l.rig ? (l.rig.lights.find((x) => x.id === l.rig!.selected && x.type === "directional") ?? l.rig.lights.find((x) => x.type === "directional")) : null;
+    if (d) { d.azimuth = light.azimuth; d.elevation = light.elevation; }
+    else if (!l.rig) { l.azimuth = light.azimuth; l.elevation = light.elevation; }
+    v.setLight(l);
+    try {
+      return await job();
+    } finally {
+      v.setLight(was);
+    }
+  }
+
+  /**
+   * Slides a framing camera sideways and up by its aim's pan (shares of half its frame), the camera and the point it looks at together;
+   * returns that point.
+   */
+  function slideCamera(cam: THREE.PerspectiveCamera, aspect: number, fov: number, pan?: { panX?: number; panY?: number }): THREE.Vector3 {
+    const target = (cam.userData.target as THREE.Vector3).clone();
+    const px = pan?.panX ?? 0, py = pan?.panY ?? 0;
+    if (!px && !py) return target;
+    const half = Math.tan((fov * Math.PI) / 360) * cam.position.distanceTo(target);
+    const right = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 0), up = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 1);
+    // the frame moves the other way to the subject: a pan to the right slides the camera left of it
+    const shift = right.multiplyScalar(-px * half * aspect).addScaledVector(up, -py * half);
+    cam.position.add(shift);
+    target.add(shift);
+    cam.lookAt(target);
+    cam.updateMatrixWorld(true);
+    return target;
+  }
+
+  /** The room a promo shot is taken with round its slot, as a share of the slot's width and height on each side. */
+  const PROMO_MARGIN = { x: 0.4, y: 0.12 };
+  /** The box a shot taken with the margin is drawn into, for a slot (the slot sits in the middle of it, as in the shot). */
+  const marginBox = (x: number, y: number, w: number, h: number): [number, number, number, number] =>
+    [x - w * PROMO_MARGIN.x, y - h * PROMO_MARGIN.y, w * (1 + 2 * PROMO_MARGIN.x), h * (1 + 2 * PROMO_MARGIN.y)];
+
+  /** Dresses a character of the promo scene and poses it: a weapon's idle (holding it), or the reference pose. */
+  async function promoDress(e: Entity, loadout: Equipped[], weapon: ItemInfo | null, regions: string[] | null, team = 0) {
+    const game = gameClassOf(e.cls);
+    if (e.team !== team) {
+      // the team: the class's own skin now, the cosmetics' with the loadout below
+      e.team = team;
+      markTeams();
+      const data = models.get(classPath(e.cls));
+      if (data) await ensureClassMaterials(e, data);
+    }
+    e.items = { loadout, activeId: loadout.at(-1)?.item.id ?? null };
+    e.applied = loadout.filter((x) => itemUsableBy(x.item, game));
+    e.held = weapon;
+    e.actor.setInspectOnly(regions !== null);
+    // a whole character shows every part of its body (the parts by name: a "show all" would leave the head's own materials out)
+    const all = e.actor.bodyGroups.map((g) => g.id);
+    e.actor.setVisibleRegions(regions ?? (all.length ? all : ["*"]));
+    if (e === selected && !promoQuiet) { itemsUi.load(e.items); weapons.load(e.held); }
+    else if (e === selected) uiStale = true;
+    await applyLoadout(e, e.applied);
+    const idle = weapon ? weaponIdleSequences(weapon, game) : [];
+    if (!(idle.length && anim.selectByName(e.actor, e.anim, idle))) anim.selectByName(e.actor, e.anim, ["ref"]);
+    await e.anim.pending;
+    e.actor.playback.playing = false;
+    e.actor.playback.time = 0;
+    e.actor.poseBones();
+  }
+
+  /** The field of view of every promo shot and chart (degrees, vertical). */
+  const PROMO_FOV = 30;
+  /** How many characters a promo's loadout picture lines up (each in its own loadout with the item). */
+  const PROMO_LINEUP = 4;
+  /** A promo's styles picture shows at most this many styles side by side (and makes a paint chart of each). */
+  const MAX_PROMO_STYLES = 4;
+  /** The paints that show styles that differ only in their textures: a grey, Mann Co. Orange or A Deep Commitment to Purple. */
+  const STYLE_PAINTS = [0x7e7e7e, 0xcf7336, 0x7d4071];
+  const stylePaint = (paints: PaintInfo[]): PaintInfo | null => {
+    const choices = paints.filter((p) => STYLE_PAINTS.includes(p.rgb));
+    return choices[Math.floor(Math.random() * choices.length)] ?? null;
+  };
+
+  /**
+   * The promo's scene tabs, one per role (RED, BLU, the item alone, each character of the line-up): a shot's character is alone in a
+   * scene of its own, which is kept to take the shot again. A role's scene is made when it is first needed, and again if its tab was
+   * closed.
+   */
+  interface PromoSession {
+    /** The board's folder among the kept boards (see promoStore.ts). */
+    id: string;
+    /** The set's items as named (the board's title). */
+    title: string;
+    /** The items of the set (they stay on a shot edited in 3D). */
+    ids: Set<number>;
+    /** The class of the promo (a model path): what a role's scene is made with. */
+    cls: string;
+    /** The role scenes, by role. */
+    roles: Map<number, SceneTab>;
+    /** What each role was last dressed in (its character is built anew each time its scene comes to the front, as the scene saved it). */
+    dressed: Map<number, string>;
+    /** The board tab, once the pictures are taken. */
+    board: SceneTab | null;
+    /** The pictures, as the board has them (written to the board's folder when they change). */
+    pictures: PromoPicture[];
+    /** The images written to the folder so far. */
+    written: Written;
+    saveTimer: number;
+    saving: Promise<void>;
+  }
+  const newSession = (title: string, ids: Iterable<number>, cls: string, id = `b${Date.now().toString(36)}`): PromoSession =>
+    ({ id, title, ids: new Set(ids), cls, roles: new Map(), dressed: new Map(), board: null, pictures: [], written: new Map(), saveTimer: 0, saving: Promise.resolve() });
+
+  /** Writes a board a moment after it changed (one write at a time; a change during a write writes again after it). */
+  function scheduleSave(s: PromoSession) {
+    window.clearTimeout(s.saveTimer);
+    s.saveTimer = window.setTimeout(() => {
+      s.saving = s.saving.then(async () => {
+        if (!s.board || !sessions.has(s)) return;
+        try {
+          await saveBoard(s.id, { name: s.board.name, title: s.title, set: [...s.ids], cls: s.cls, pictures: s.pictures }, s.written);
+        } catch (err) {
+          console.warn("could not keep the promo board:", err);
+        }
+      });
+    }, 1500);
+  }
+
+  /** Puts a board of pictures in the strip as a tab (shown when `show`). */
+  function openBoard(mine: PromoSession, name: string, pictures: PromoPicture[], show: boolean): SceneTab | null {
+    const page = document.getElementById("promoPage");
+    if (!page) return null;
+    const root = document.createElement("div");
+    root.className = "promoBoardRoot";
+    root.hidden = !show;
+    page.appendChild(root);
+    mine.pictures = pictures;
+    const dispose = showBoard(root, mine.title, pictures, hostFor(mine));
+    const tab: SceneTab = { id: nextTabId++, name, scene: null, base: "", dirty: false, board: { root, session: mine, dispose } };
+    mine.board = tab;
+    tabs.push(tab);
+    if (show) showBoardTab(tab);
+    else renderTabs();
+    const thumb = root.querySelector<HTMLCanvasElement>(".promoThumb canvas");
+    if (thumb) tab.preview = thumb.toDataURL("image/jpeg", 0.8);
+    return tab;
+  }
+
+  /** The boards kept from before come back into the strip (not in front), with their promos to take shots again. */
+  async function restoreBoards() {
+    let boards: Awaited<ReturnType<typeof loadBoards>> = [];
+    try {
+      boards = await loadBoards();
+    } catch (err) {
+      console.warn("could not read the kept promo boards:", err);
+    }
+    for (const b of boards) {
+      const mine = newSession(b.saved.title, b.saved.set, b.saved.cls, b.id);
+      mine.written = b.written;
+      sessions.add(mine);
+      openBoard(mine, b.saved.name, b.pictures, false);
+    }
+  }
+  const sessions = new Set<PromoSession>();
+  /** The promo being worked on: set by the board whose shot is taken (again), or the set being generated. */
+  let session: PromoSession | null = null;
+  const promo = () => {
+    if (!session) throw new Error("no promo is being made: generate a set first");
+    return session;
+  };
+  /** The tab to go back to when the Viewer shows (the scene that was open before a shot was taken again). */
+  let promoHome: SceneTab | null = null;
+  /**
+   * While shots are taken the view is not looked at: a switch between promo scenes then leaves the panels (the items, the outliner,
+   * the sliders) as they were, which is most of a switch's cost; they are brought up to date once a scene is shown.
+   */
+  let promoQuiet = false;
+  let uiStale = false;
+  function syncStaleUi() {
+    if (!uiStale) return;
+    uiStale = false;
+    if (selected) restoreUi(selected);
+    renderEntities();
+  }
+  const PROMO_ROLE_NAMES = ["RED", "BLU", "Item alone"];
+  const roleName = (role: number) => PROMO_ROLE_NAMES[role] ?? `Line-up ${role - PROMO_ROLE_NAMES.length + 1}`;
+  const isPromoTab = (t: SceneTab | null) => !!t && [...sessions].some((s) => [...s.roles.values()].includes(t));
+
+  /**
+   * Makes a role's scene the open one and gives its character (the one character of that scene). Only a scene that is not a promo one
+   * is remembered as home, to come back to. Throws when the view is busy with something else and the switch cannot be made.
+   */
+  async function enterRole(role: number): Promise<Entity> {
+    const mdl = promo().cls;
+    let tab = promo().roles.get(role);
+    if (!tab || !(tab.parked || tab === activeTab)) {
+      if (!isPromoTab(activeTab)) promoHome = activeTab;
+      const before = activeTab;
+      await openTab(null, `Promo · ${roleName(role)}`, undefined, async () => {
+        const v = ensureViewer();
+        v.cameras.restore(null);
+        for (const e of [...entities]) v.removeActor(e.actor);
+        entities.length = 0;
+        groups = [];
+        gizmoEntity = null;
+        v.setActorGizmo(null);
+        const e = newEntity(v.addActor(), mdl, role === 1 ? 1 : 0);
+        e.name = roleName(role);
+        entities.push(e);
+        selected = e;
+        v.select(e.actor);
+        e.applied = [];
+        if (!promoQuiet) {
+          itemsUi.load(e.items);
+          weapons.load(e.held);
+        }
+        await show(e, mdl, { seqName: "ref" });
+        if (promoQuiet) uiStale = true;
+        else {
+          restoreUi(e);
+          renderEntities();
+        }
+      });
+      tab = activeTab ?? undefined;
+      if (!tab || tab === before) throw new Error("could not open the character's scene (the view is busy)");
+      promo().roles.set(role, tab);
+      promo().dressed.delete(role);
+      hidePromoTab(tab);
+    } else if (activeTab !== tab) {
+      if (!isPromoTab(activeTab)) promoHome = activeTab;
+      await switchTab(tab);
+      if (activeTab !== tab) throw new Error("could not switch to the character's scene (the view is busy)");
+    }
+    const e = entities[0];
+    if (!e) throw new Error("the character's scene is empty");
+    return e;
+  }
+
+  /**
+   * A promo scene is a workspace, not a scene of yours: it is not in the tab strip, except while a shot is edited in it in 3D. (It is
+   * still the open scene while a shot is taken, but the view is not looked at then.)
+   */
+  function showPromoTab(tab: SceneTab) {
+    if (!tabs.includes(tab)) tabs.push(tab);
+    renderTabs();
+  }
+  function hidePromoTab(tab: SceneTab | undefined) {
+    const at = tab ? tabs.indexOf(tab) : -1;
+    if (at >= 0) tabs.splice(at, 1);
+    renderTabs();
+  }
+  /** A promo scene closed from the strip (while it showed) is gone: its role's scene is made again when next needed. */
+  function forgetPromoTab(tab: SceneTab) {
+    for (const s of sessions) for (const [role, t] of s.roles) if (t === tab) s.roles.delete(role);
+  }
+
+  /** The scene that was open before a shot was taken again comes back (the Viewer is shown again, not to edit a promo shot in it). */
+  async function leavePromoScene() {
+    if (promoEditing) return;
+    const home = promoHome;
+    promoHome = null;
+    if (home && isPromoTab(activeTab) && tabs.includes(home)) await switchTab(home);
+  }
+
+  /** Lets a promo go (its board was closed): its role scenes are closed and disposed of; a scene of yours stays open, or a fresh one. */
+  async function disposeSession(s: PromoSession) {
+    await leavePromoScene();
+    if (activeTab && [...s.roles.values()].includes(activeTab)) {
+      const other = tabs.find((t) => !isPromoTab(t) && !t.board);
+      if (other) await switchTab(other);
+      else await openTab(null);
+    }
+    for (const t of s.roles.values()) {
+      const at = tabs.indexOf(t);
+      if (at >= 0) tabs.splice(at, 1);
+      if (t !== activeTab) disposeParked(t);
+    }
+    s.roles.clear();
+    sessions.delete(s);
+    if (session === s) session = null;
+    renderTabs();
+  }
+
+  // --- the boards: a promo's pictures as a tab of the strip, shown in the view's place while it is the tab in front -------------
+  /** The board that shows in place of the 3D view, or none. */
+  let activeBoard: SceneTab | null = null;
+  function showBoardTab(tab: SceneTab) {
+    if (!tab.board) return;
+    activeBoard = tab;
+    for (const t of tabs) if (t.board) t.board.root.hidden = t !== tab;
+    const page = document.getElementById("promoPage"), view = document.getElementById("view");
+    if (page) page.hidden = false;
+    if (view) view.hidden = true;
+    renderTabs();
+  }
+  /** The 3D view again (the scene in front is the one whose characters are loaded). */
+  function hideBoardTab() {
+    activeBoard = null;
+    const page = document.getElementById("promoPage"), view = document.getElementById("view");
+    if (page) page.hidden = true;
+    if (view) view.hidden = false;
+    renderTabs();
+  }
+  async function closeBoardTab(tab: SceneTab) {
+    const b = tab.board;
+    if (!b || tabBusy) return;
+    if (settings().confirmCloseScene) {
+      const { choice, stopAsking } = await askClose(tab);
+      if (stopAsking) void updateSetting("confirmCloseScene", false);
+      if (choice === "cancel") return;
+    }
+    const at = tabs.indexOf(tab);
+    if (at >= 0) tabs.splice(at, 1);
+    if (activeBoard === tab) hideBoardTab();
+    b.dispose();
+    b.root.remove();
+    tab.board = undefined;
+    window.clearTimeout(b.session.saveTimer);
+    await disposeSession(b.session);
+    void b.session.saving.then(() => forgetBoard(b.session.id)).catch((err) => console.warn("could not forget the promo board:", err));
+    renderTabs();
+  }
+
+  /** Dresses a shot's character as its spec says (unless it already is). */
+  async function dressForShot(spec: ShotSpec): Promise<Entity> {
+    const db = await loadItemDb();
+    const byId = new Map([...db.items, ...db.weapons, ...db.taunts].map((i) => [i.id, i] as const));
+    const paints = new Map(db.paints.map((p) => [p.id, p] as const));
+    const e = await enterRole(spec.role);
+    const loadout: Equipped[] = spec.loadout.flatMap((x) => {
+      const item = byId.get(x.item);
+      return item ? [{ item, paint: x.paint !== null ? paints.get(x.paint) ?? null : null, style: x.style }] : [];
+    });
+    const dress = dressKey(spec);
+    if (promo().dressed.get(spec.role) !== dress) {
+      // the bodygroups set by hand in this shot, over what its cosmetics set (as the Bodygroups of the character's properties)
+      e.bodyManual = new Map(Object.entries(spec.bodygroups ?? {}));
+      await promoDress(e, loadout, spec.weapon !== null ? byId.get(spec.weapon) ?? null : null, spec.regions, teamOf(spec));
+      // the pose it holds, when it is not the weapon's idle
+      if (spec.pose) {
+        e.actor.usePose({ pos: Float32Array.from(spec.pose.pos), quat: Float32Array.from(spec.pose.quat), scale: spec.pose.scale ? Float32Array.from(spec.pose.scale) : undefined });
+        e.actor.endPose(true);
+        e.actor.poseBones();
+      }
+      promo().dressed.set(spec.role, dress);
+    }
+    return e;
+  }
+
+  /** A shot's team: its own, else by its role (the BLU role is BLU). */
+  const teamOf = (spec: ShotSpec) => spec.team ?? (spec.role === 1 ? 1 : 0);
+  /** What a shot's character wears, holds, its team and how it stands, as a key (the character is dressed again only when it changes). */
+  const dressKey = (spec: ShotSpec) =>
+    JSON.stringify([spec.loadout.map((x) => [x.item, x.paint, x.style]), spec.weapon, spec.regions, spec.bodygroups ?? null, teamOf(spec), spec.pose ? spec.pose.quat.slice(0, 64).map((q) => Math.round(q * 1e4)) : null]);
+
+  /**
+   * Gives a shot a random pose, as the random loadouts do: a taunt (held) or an animation, half the time each, stopped on a frame where
+   * the character keeps a comfortable shape on screen. `avoid` keeps the others of a line-up from doing the same.
+   */
+  /** The taunts (that play on the character alone: a prop of their own would be left out of the picture) and animations a shot's character can be posed from. */
+  async function shotPoses(spec: ShotSpec) {
+    const db = await loadItemDb();
+    const e = await enterRole(spec.role);
+    const game = gameClassOf(e.cls);
+    const taunts = db.taunts.filter((t) => !t.workshop && itemUsableBy(t, game) && t.tauntScenes[game] !== undefined && !t.tauntPropScenes[game]);
+    const sequences = (e?.anim.info?.sequences ?? []).filter((q) => q.frames > 1 && !NOT_A_POSE.test(q.name) && !isJunkSequence(q.name));
+    return { taunts, sequences };
+  }
+
+  /** A random taunt or animation for a shot (`avoid`: ones the shots beside it already have), stopped on a frame that frames well. */
+  async function rollShotPose(spec: ShotSpec, avoid: Set<string> = new Set(), tries = 3): Promise<void> {
+    const { taunts, sequences } = await shotPoses(spec);
+    const fresh = <T,>(xs: T[], id: (x: T) => string) => pickOne(xs.filter((x) => !avoid.has(id(x)))) ?? pickOne(xs);
+    const taunt = Math.random() < 0.5 ? fresh(taunts, (t) => `t${t.id}`) : null;
+    const seq = taunt ? null : fresh(sequences, (q) => `s${q.name}`);
+    const id = taunt ? `t${taunt.id}` : seq ? `s${seq.name}` : "";
+    if (!id) return;
+    avoid.add(id);
+    // one that never stands up (a lying taunt, or one whose frames are all the raw reference pose): another, a few times
+    if (!(await poseShot(spec, id, -1)) && tries > 0) await rollShotPose(spec, avoid, tries - 1);
+  }
+
+  /** Poses a shot's character from a taunt ("t<id>") or an animation ("s<name>") at `at` (0..1; below 0: a frame that frames well). */
+  async function poseShot(spec: ShotSpec, id: string, at: number): Promise<boolean> {
+    const db = await loadItemDb();
+    const e = await dressForShot({ ...spec, pose: undefined });
+    const game = gameClassOf(e.cls);
+    if (id.startsWith("t")) {
+      const taunt = db.taunts.find((t) => String(t.id) === id.slice(1));
+      if (!taunt) return false;
+      if (e.held?.id !== taunt.id) await promoDress(e, e.items.loadout, taunt, spec.regions, teamOf(spec));
+      playWeaponAnimation(e, taunt);
+      spec.weapon = taunt.id;
+    } else {
+      const seq = e.anim.info?.sequences.find((q) => q.name === id.slice(1));
+      if (!seq) return false;
+      // what the animation is played holding: the class's stock weapon of the slot its name says (stand_MELEE, run_PRIMARY), or
+      // nothing when it names none (the class's own idles, taunts, menus)
+      const slot = /primary|secondary|melee|pda|building/i.exec(seq.name)?.[0].toLowerCase();
+      const held = slot ? db.weapons.find((w) => w.baseItem && itemUsableBy(w, game) && slotForClass(w, game) === slot) ?? null : null;
+      if ((held?.id ?? null) !== (e.held?.id ?? null)) await promoDress(e, e.items.loadout, held, spec.regions, teamOf(spec));
+      spec.weapon = held?.id ?? null;
+      anim.select(e.actor, e.anim, seq.index);
+    }
+    await e.anim.pending;
+    const pb = e.actor.playback, clip = pb.clip;
+    const span = clip && clip.frames > 1 ? (clip.frames - 1) / clip.fps : 0;
+    let stands = true, dropped = false;
+    if (at < 0) ({ stands, dropped } = settlePose(e));
+    // a frame on the timeline that has let go of the weapon too
+    else if (e.held) dropped = (e.actor.weaponReach() ?? 0) > WEAPON_LET_GO;
+    else if (clip) {
+      pb.time = span * Math.max(0, Math.min(1, at));
+      pb.playing = false;
+      e.actor.poseBones();
+    }
+    spec.poseOf = { id, at: span > 0 ? Math.max(0, Math.min(1, pb.time / span)) : 0 };
+    const pose = e.actor.snapshotPose();
+    spec.pose = pose ? { pos: Array.from(pose.pos), quat: Array.from(pose.quat), scale: pose.scale ? Array.from(pose.scale) : undefined } : undefined;
+    spec.randomPose = true;
+    // a weapon the pose is not holding (every frame tried let go of it) is not in the picture: it would hang by the feet
+    if (dropped && !id.startsWith("t")) spec.weapon = null;
+    promo().dressed.delete(spec.role); // dressed again from the spec, the pose held
+    return stands;
+  }
+
+  /** The promo shot being edited in the 3D view, and what to do when the board is shown again. */
+  let promoEditing: { spec: ShotSpec; e: Entity; done: (set: boolean) => void; bar: HTMLElement; locked: number[] } | null = null;
+
+  /** Opens a shot's character in the 3D view as the shot has it (see BoardHost.editIn3D). */
+  function editShotIn3D(spec: ShotSpec): Promise<boolean> {
+    return inPromoScene(async () => {
+      const e = await dressForShot(spec);
+      if (activeTab) showPromoTab(activeTab); // its scene is in the strip while it is edited
+      syncStaleUi(); // the panels show this character before anything reads them back
+      const v = ensureViewer();
+      selectEntity(e);
+      v.select(e.actor);
+      restoreUi(e);
+      renderEntities();
+      // the view looks at it as the shot does
+      const cam = v.framingCamera([e.actor], new THREE.Vector3(...aimDirection(spec)), spec.w / spec.h, spec.fill, PROMO_FOV, spec.scaleDistance !== undefined ? spec.scaleDistance / spec.fill : undefined);
+      const target = slideCamera(cam, spec.w / spec.h, PROMO_FOV, spec);
+      v.restoreCamera(cam.position.toArray() as [number, number, number], target.toArray() as [number, number, number]);
+      return e;
+    }).then((e) => new Promise<boolean>((resolve) => {
+      const bar = document.createElement("div");
+      bar.className = "promoEditBar";
+      bar.innerHTML = `<span class="promoEditNote">Editing a promo shot: change anything about this character (weapon, pose, cosmetics), and the angle of the view. The promoted item stays on.</span><button class="promoEditCancel">Cancel</button><button class="primary promoEditDone">Back to the promo board</button>`;
+      document.getElementById("canvasWrap")?.appendChild(bar);
+      // the promoted items it wears stay on (a line-up's one, a main picture's set)
+      const locked = spec.loadout.map((x) => x.item).filter((id) => promo().ids.has(id) || id === spec.reroll?.item);
+      promoEditing = { spec, e, done: resolve, bar, locked };
+      (bar.querySelector(".promoEditDone") as HTMLButtonElement).onclick = () => finishShotEdit(true);
+      (bar.querySelector(".promoEditCancel") as HTMLButtonElement).onclick = () => finishShotEdit(false);
+      hideBoardTab(); // the role's scene shows, in the board's place
+    }));
+  }
+
+  /**
+   * Ends editing a promo shot in 3D: with `set`, the shot takes the character as it is now and the view's angle; then the board
+   * (`backToBoard` false: the scene is being left for another, the view stays).
+   */
+  function finishShotEdit(set: boolean, backToBoard = true) {
+    const ed = promoEditing;
+    if (!ed) return;
+    promoEditing = null;
+    ed.bar.remove();
+    hidePromoTab(promo().roles.get(ed.spec.role));
+    const { spec, e } = ed;
+    if (set && entities.includes(e)) {
+      if (e === selected) saveUi(e);
+      const game = gameClassOf(e.cls);
+      spec.loadout = e.items.loadout.filter((x) => itemUsableBy(x.item, game)).map((x) => ({ item: x.item.id, name: x.item.displayName, paintable: x.item.paintable, paint: x.paint?.id ?? null, style: x.style }));
+      spec.weapon = e.held?.id ?? null;
+      spec.team = e.team;
+      spec.bodygroups = e.bodyManual.size ? Object.fromEntries(e.bodyManual) : undefined;
+      // the pose it shows now: a custom one, or the frame of what it plays
+      if (e.actor.isPosing) e.actor.endPose(true);
+      const pose = e.actor.snapshotCustomPose() ?? e.actor.snapshotPose();
+      spec.pose = pose ? { pos: Array.from(pose.pos), quat: Array.from(pose.quat), scale: pose.scale ? Array.from(pose.scale) : undefined } : undefined;
+      // the angle the view looks from
+      const v = ensureViewer();
+      const cam = v.getCamera();
+      const d = new THREE.Vector3(...cam.position).sub(new THREE.Vector3(...cam.target)).normalize();
+      spec.yaw = Math.round((Math.atan2(d.x, d.z) * 180) / Math.PI);
+      spec.pitch = Math.round((Math.asin(Math.max(-1, Math.min(1, d.y))) * 180) / Math.PI);
+      promo().dressed.set(spec.role, dressKey(spec)); // it already is as the spec says
+    } else promo().dressed.delete(spec.role); // what was changed in the view is not the shot: it is dressed again from its spec
+    if (backToBoard && session?.board) showBoardTab(session.board);
+    ed.done(set);
+  }
+
+  /** Takes a shot as its spec says, on its character of the open promo scene. */
+  async function takeShot(spec: ShotSpec): Promise<HTMLCanvasElement> {
+    const e = await dressForShot(spec);
+    // its particle effects at a moment of their own (a shot made before this had none: it gets one now)
+    spec.particles ??= { seed: Math.floor(Math.random() * 0x7fffffff), time: 2 };
+    // a larger rendering of the same framing (the same aspect and camera): the layer draws it at the same size, sharper
+    const res = spec.resolution ?? 1;
+    // (an item shown alone casts no shadow: it would float over one)
+    const effects = spec.effects && spec.regions ? { ...spec.effects, shadow: { ...spec.effects.shadow, on: false } } : spec.effects;
+    return promoShot(e, new THREE.Vector3(...aimDirection(spec)), Math.round(spec.w * res), Math.round(spec.h * res), spec.fill, spec.scaleDistance, spec, true, effects);
+  }
+
+  /**
+   * Gives shots one scale: each is measured (how far its camera stands to frame it), and all take the farthest, so every character is
+   * as large as the others and none is cut off.
+   */
+  async function sameScale(specs: ShotSpec[], byHeight = false) {
+    for (const spec of specs) await measureShot(spec, byHeight);
+    shareScale(specs);
+  }
+
+  /** How far each shot's camera stood to frame its character when it was measured (see {@link measureShot}). */
+  const measured = new WeakMap<ShotSpec, number>();
+
+  /**
+   * Measures a shot: how far its camera stands to frame its character as the spec dresses and poses it (`byHeight`: only the height
+   * counts, so a wide pose does not make the others small: it reaches past its slot instead). Done in the character's scene while it is
+   * open for something else, so that {@link shareScale} needs no visit of its own.
+   */
+  async function measureShot(spec: ShotSpec, byHeight = false) {
+    const e = await dressForShot(spec);
+    const v = ensureViewer();
+    const aspect = (spec.w / spec.h) * (byHeight ? 6 : 1);
+    const cam = v.framingCamera([e.actor], new THREE.Vector3(...aimDirection(spec)), aspect, spec.fill);
+    measured.set(spec, (cam.userData.distance as number) * spec.fill);
+  }
+
+  /** Gives measured shots one scale: all take the farthest camera, so every character is as large as the others and none is cut off. */
+  function shareScale(specs: ShotSpec[]) {
+    const far = Math.max(0, ...specs.map((s) => measured.get(s) ?? 0));
+    for (const spec of specs) spec.scaleDistance = far;
+  }
+
+  /** Takes a paint chart as its spec says (1920 × 1080, transparent), the view's camera framing the item for the chart's square pictures. */
+  async function takeChart(spec: ChartSpec): Promise<{ canvas: HTMLCanvasElement; cells: ChartCellRect[] }> {
+    const db = await loadItemDb();
+    const item = db.items.find((i) => i.id === spec.item);
+    if (!item) throw new Error("the promo has no such item");
+    const e = await enterRole(spec.role);
+    const o = (spec.options ??= structuredClone(DEFAULT_CHART)); // (a board made before the chart had settings)
+    const worn: Equipped = { item, paint: null, style: spec.style };
+    await dressForChart(spec);
+    const v = ensureViewer();
+    // framed on the item, not the character wearing it: turned, it stays in its cells (a chart of before starts over at the default zoom)
+    if (spec.framed !== "item") { spec.framed = "item"; spec.fill = 0.9; spec.panX = 0; spec.panY = 0; }
+    // the chart is drawn through the view's camera: it gets the promo's own field of view for the time, so it is the same every time it
+    // is taken (the view's is the scene's, which the promo scene brings back when it is opened again)
+    const aspect = o.cellAspect;
+    const cam = v.framingCamera([e.actor], new THREE.Vector3(...aimDirection(spec)), aspect, spec.fill, PROMO_FOV, undefined, chartBounds(e, spec));
+    const target = slideCamera(cam, aspect, PROMO_FOV, spec);
+    v.restoreCamera(cam.position.toArray() as [number, number, number], target.toArray() as [number, number, number]);
+    await bodyMasksLoaded();
+    await nextFrames();
+    const W = 1920, H = 1080;
+    const unpainted = o.unpainted === "both" ? "both" : o.unpainted === true || o.unpainted === "red";
+    const cells = (await paintCells(e, worn, unpainted, o.teams)).filter((c) => !o.removed.includes(c.label));
+    const opts: PaintChartOpts = { cols: o.cols, gapX: o.gapX, gapY: o.gapY, padding: o.padding, align: o.align, background: null, width: W, height: H, cellAspect: o.cellAspect, cosmeticOnly: o.cosmeticOnly };
+    // laid out at the picture's size, rendered at `resolution` times it (the layer draws it at the same size, sharper)
+    const res = spec.resolution ?? 1;
+    const RW = Math.round(W * res), RH = Math.round(H * res);
+    const fov = v.camera.fov;
+    v.camera.fov = PROMO_FOV;
+    v.camera.updateProjectionMatrix();
+    let image: ImageData;
+    try {
+      image = await withShotLight(spec.light, async () => v.renderPaintChart(e.actor, cells, opts, RW, RH, item.id));
+    } finally {
+      v.camera.fov = fov;
+      v.camera.updateProjectionMatrix();
+      v.releasePaintChart();
+    }
+    const chart = document.createElement("canvas");
+    chart.width = RW;
+    chart.height = RH;
+    chart.getContext("2d")!.putImageData(image, 0, 0);
+    // where each paint is, for the board to point at (to take one out)
+    const layout = layoutChart(cells.length, o.cellAspect, { width: W, height: H, gapX: o.gapX, gapY: o.gapY, padding: o.padding, cols: o.cols, align: o.align });
+    return { canvas: chart, cells: cells.map((c, i) => ({ label: c.label, x: layout.rects[i].x / W, y: layout.rects[i].y / H, w: layout.rects[i].w / W, h: layout.rects[i].h / H })) };
+  }
+
+  /** What a chart frames: its item (the whole character when it shows none of it, or for a chart made before). */
+  function chartBounds(e: Entity, spec: ChartSpec): THREE.Box3 | undefined {
+    if (spec.framed !== "item") return undefined;
+    const box = ensureViewer().itemBounds(e.actor, spec.item);
+    return box.isEmpty() ? undefined : box;
+  }
+
+  /** Dresses the promo scene's character of a chart in its item (unless it already is); the character. */
+  async function dressForChart(spec: ChartSpec): Promise<Entity> {
+    const db = await loadItemDb();
+    const item = db.items.find((i) => i.id === spec.item);
+    if (!item) throw new Error("the promo has no such item");
+    const e = await enterRole(spec.role);
+    const regions = defaultBodyGroupsFor(e.cls, item.equipRegions);
+    const dress = JSON.stringify([[[item.id, null, spec.style]], null, regions]);
+    if (promo().dressed.get(spec.role) !== dress) {
+      await promoDress(e, [{ item, paint: null, style: spec.style }], null, regions, 0); // a chart is of RED (its cells say which team)
+      promo().dressed.set(spec.role, dress);
+    }
+    return e;
+  }
+
+  /** One thing at a time in the promo scene (a shot taken, a look through a camera): they dress its characters and move the view. */
+  let promoBusy: Promise<unknown> = Promise.resolve();
+  function inPromoScene<T>(job: () => Promise<T>): Promise<T> {
+    const mine = session; // the promo the caller works on (its board set it), kept for when the job runs
+    const run = promoBusy.then(async () => {
+      session = mine;
+      promoQuiet = true;
+      try {
+        return await job();
+      } finally {
+        promoQuiet = false;
+      }
+    });
+    promoBusy = run.catch(() => {});
+    return run;
+  }
+
+  /** A new random loadout for a line-up shot: its item kept, two others it can be worn with, unpainted. */
+  async function rerollShot(spec: ShotSpec) {
+    if (!spec.reroll) return;
+    const db = await loadItemDb();
+    const e = await enterRole(spec.role);
+    const game = gameClassOf(e.cls);
+    const conflicts = (a: ItemInfo, b: ItemInfo) => a.equipRegions.some((ra) => b.equipRegions.some((rb) => ra === rb || db.equipConflicts[ra]?.includes(rb) || db.equipConflicts[rb]?.includes(ra)));
+    // the others are the game's own cosmetics; the item kept is in it too, a workshop one included (the set being promoted often is)
+    const pool = db.items.filter((i) => i.slot !== "taunt" && (!i.workshop || i.id === spec.reroll!.item) && itemUsableBy(i, game) && itemModelFor(i, game) !== null);
+    const rules: LoadoutRule[] = [{ mode: "include", kind: "item", value: String(spec.reroll.item) }, { mode: "exclude", kind: "medal", value: "" }];
+    const rolled = rollLoadout(pool, db.paints, conflicts, rules, { count: 3, paintChance: 0, styles: false, workshop: false });
+    if ("items" in rolled) spec.loadout = rolled.items.map((x) => ({ item: x.item.id, name: x.item.displayName, paintable: x.item.paintable, paint: null, style: 0 }));
+  }
+
+  async function generatePromo(set: ItemInfo[], game: string, say: (text: string) => void): Promise<string> {
+    const mdl = CLASSES.find((c) => c[2] === game)?.[1];
+    if (!mdl) return "No such class.";
+    const db = await loadItemDb();
+    // the class's stock weapon, held in its idle: the first of primary, secondary, melee it has
+    const stock = db.weapons.filter((w) => w.baseItem && itemUsableBy(w, game));
+    const weapon = ["primary", "secondary", "melee"].map((slot) => stock.find((w) => slotForClass(w, game) === slot)).find((w) => !!w) ?? null;
+    say("Setting up the promo scenes…");
+    // the pictures are taken in scene tabs of their own, one per character (made as the shots need them), kept to take shots again;
+    // the scene you had comes back. The view is covered meanwhile: the scenes coming and going are not a thing to watch.
+    const busy = document.createElement("div");
+    busy.className = "dropBusy promoBusy";
+    busy.setAttribute("role", "status");
+    busy.innerHTML = '<div class="dropBusyCard"><span class="dropBusySpin"></span><span></span></div>';
+    const busyText = busy.querySelector(".dropBusyCard > span:last-child") as HTMLElement;
+    const tell = (text: string) => { busyText.textContent = `Generating the promo pictures… ${text}`; say(text); };
+    document.body.appendChild(busy);
+    let pictures: PromoPicture[] = [];
+    const mine = newSession(set.map((i) => i.displayName).join(" · "), set.map((i) => i.id), mdl);
+    sessions.add(mine);
+    session = mine;
+    let made = false;
+    try {
+      const home = activeTab;
+      promoQuiet = true;
+      try {
+        pictures = await takePromo(set, mdl, game, tell, weapon, db);
+      } finally {
+        promoQuiet = false;
+        promoHome = null;
+        if (home && tabs.includes(home)) await switchTab(home);
+        syncStaleUi();
+      }
+      // the board: a tab of the strip beside the scenes, shown in the view's place, and kept between runs
+      if (!openBoard(mine, `Promo: ${set.map((i) => i.displayName).join(", ")}`, pictures, true)) return "There is nowhere to show the board.";
+      made = true;
+      scheduleSave(mine);
+      return `${pictures.length} pictures are on the board.`;
+    } finally {
+      busy.remove();
+      if (!made) void disposeSession(mine);
+    }
+  }
+
+  /** Writing a board's pictures, and taking its shots again: each call is for the board's own promo. */
+  const hostFor = (mine: PromoSession): BoardHost => {
+    const h = promoBoardHost;
+    const bound = {} as Record<string, unknown>;
+    for (const k of Object.keys(h) as (keyof BoardHost)[]) bound[k] = (...args: unknown[]) => { session = mine; return (h[k] as (...a: unknown[]) => unknown)(...args); };
+    return bound as unknown as BoardHost;
+  };
+  const promoBoardHost: BoardHost = {
+    async exportAll(pictures, look, format = "png") {
+      const picked = await open({ directory: true, title: format === "psd" ? "Folder for the promo Photoshop files" : "Folder for the promo pictures" });
+      const dir = typeof picked === "string" ? picked : null;
+      if (!dir) return "Cancelled.";
+      const sep = dir.includes("\\") ? "\\" : "/";
+      for (const p of pictures) {
+        const bytes = format === "psd" ? await picturePsd(p, look) : new Uint8Array(await (await pictureBlob(p, look)).arrayBuffer());
+        await writeBinaryFile(`${dir}${sep}${p.name}.${format}`, bytes);
+      }
+      // the board's settings beside them (no pixels): how each picture was made and changed, to make it again or learn from
+      const board = {
+        look,
+        pictures: pictures.map((p) => ({
+          item: p.item, name: p.name, kind: p.kind, w: p.w, h: p.h, backdrop: p.backdrop, strokeAt: p.strokeAt,
+          layers: p.layers.map((l) => ({ name: l.name, box: l.box, scale: l.scale, dx: l.dx, dy: l.dy, rotation: l.rotation ?? 0, hidden: l.hidden, shared: l.shared, link: l.link, shot: l.shot ? { ...l.shot, pose: l.shot.pose ? "(bones)" : undefined } : undefined, chart: l.chart, text: l.text })),
+        })),
+      };
+      await writeBinaryFile(`${dir}${sep}promo-board.json`, new TextEncoder().encode(JSON.stringify(board, null, 1)));
+      void revealFile(dir).catch(() => {}); // the folder, to look at what was made
+      return `Saved ${pictures.length} ${format === "psd" ? "Photoshop files" : "pictures"} to ${dir}.`;
+    },
+    retake: (l) => inPromoScene(async () => {
+      if (l.shot) l.image = await takeShot(l.shot);
+      else if (l.chart) {
+        const taken = await takeChart(l.chart);
+        l.image = taken.canvas;
+        l.cells = taken.cells;
+      }
+    }),
+    // a quick look through a layer's camera, small: the shot's slot, or one picture of a chart
+    cameraView: (l, w, h) => inPromoScene(async () => {
+      if (l.shot) {
+        const e = await dressForShot(l.shot);
+        return promoShot(e, new THREE.Vector3(...aimDirection(l.shot)), w, h, l.shot.fill, l.shot.scaleDistance, l.shot, false);
+      }
+      const spec = l.chart!;
+      const e = await dressForChart(spec);
+      return promoShot(e, new THREE.Vector3(...aimDirection(spec)), w, h, spec.fill, undefined, spec, false, undefined, chartBounds(e, spec));
+    }),
+    reroll: (spec) => inPromoScene(() => rerollShot(spec)),
+    repose: (spec) => inPromoScene(() => rollShotPose(spec)),
+    poses: (spec) => inPromoScene(async () => {
+      const { taunts, sequences } = await shotPoses(spec);
+      return { taunts: taunts.map((t) => ({ id: `t${t.id}`, label: t.displayName })).sort((a, b) => a.label.localeCompare(b.label)), sequences: sequences.map((q) => ({ id: `s${q.name}`, label: q.name })) };
+    }),
+    setPose: (spec, id, at) => inPromoScene(async () => { await poseShot(spec, id, at); }),
+    bodygroups: (spec) => inPromoScene(async () => {
+      const e = await dressForShot(spec);
+      const parts = models.get(classPath(e.cls))?.bodyParts.filter((bp) => bp.models.length > 1) ?? [];
+      return parts.map((bp) => {
+        const key = bp.name.toLowerCase();
+        const byItems = e.bodyItems[key] ?? e.bodyItems[bp.name];
+        return { name: key, count: bp.models.length, byItems: byItems === undefined ? null : byItems };
+      });
+    }),
+    editIn3D: (l) => (l.shot ? editShotIn3D(l.shot) : Promise.resolve(false)),
+    paints: async () => (await loadItemDb()).paints.map((p) => ({ id: p.id, name: p.displayName })),
+    lightDirection: viewLightDirection,
+    changed: () => { if (session) scheduleSave(session); },
+    newSet: () => els.capture.promo.click(),
+  };
+
+  /** The pictures of a promo set, taken in the promo scene that is open (its characters by role: RED, BLU, the item alone, the line-up). */
+  async function takePromo(set: ItemInfo[], mdl: string, game: string, say: (text: string) => void, weapon: ItemInfo | null, db: Awaited<ReturnType<typeof loadItemDb>>): Promise<PromoPicture[]> {
+    const RED = 0, BLU = 1, SOLO = 2, LINEUP = 3;
+    const W = 1920, H = 1080;
+    const slug = (s: string) => s.replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "_") || "item";
+    const out: PromoPicture[] = [];
+    const picture = (item: ItemInfo, name: string, kind: string, w: number, h: number, layers: PromoLayer[], texts: PromoText[] = []) => out.push({ item: item.displayName, name, kind, w, h, layers, texts, backdrop: null });
+    const worn = (item: ItemInfo, paint: PaintInfo | null = null, style = 0) => ({ item: item.id, name: item.displayName, paintable: item.paintable, paint: paint?.id ?? null, style });
+    // a shot's layer: its slot, grown by the margin it was taken with (aligned in the middle: the slot is where the shot puts it)
+    const shot = async (name: string, spec: ShotSpec, x: number, y: number, w: number, h: number, centre = false) => {
+      const l: PromoLayer = { ...layer(name, await takeShot(spec), ...marginBox(x, y, w, h)), shot: spec, centre };
+      measureContent(l);
+      return l;
+    };
+    const FRONT = { yaw: 24, pitch: 13 };
+
+    // Each character has a scene of its own, and every visit to one is a scene switch: the work is ordered by character, not by item.
+    // RED and BLU, then every item's own pictures (all of the one character wearing it alone), then the line-ups, their characters
+    // dressed, posed and measured for every item in one visit each, and pictured for every item in another.
+    say("Picturing the set…");
+    const setWorn = set.map((i) => worn(i));
+    const redSpec: ShotSpec = { role: RED, loadout: setWorn, weapon: weapon?.id ?? null, regions: null, yaw: 22, pitch: 4, fill: 0.98, w: 700, h: 1030 };
+    const bluSpec: ShotSpec = { ...redSpec, role: BLU, loadout: set.map((i) => worn(i)), yaw: -37 };
+    // one scale by their heights, as the line-ups: they stand as tall as the picture, a long weapon reaching past its slot
+    await sameScale([redSpec, bluSpec], true);
+    const redImage = await takeShot(redSpec), bluImage = await takeShot(bluSpec);
+
+    /** A line-up to picture once its characters have been through their scenes: the item's, and the shots of its characters. */
+    interface Lineup { item: ItemInfo; name: string; cellW: number; specs: ShotSpec[]; posed: Set<string> }
+    const lineups: Lineup[] = [];
+    for (const item of set) {
+      const name = slug(item.displayName);
+      const regions = defaultBodyGroupsFor(mdl, item.equipRegions);
+      const aloneSpec = (w: number, h: number, fill: number, extra: Partial<ShotSpec> = {}): ShotSpec => ({ role: SOLO, loadout: [worn(item)], weapon: null, regions, ...FRONT, fill, w, h, ...extra });
+
+      say(`${item.displayName}: main picture…`);
+      // RED and BLU are one shot each, shared by every main picture
+      picture(item, `${name}_main`, "Main", W, H, [
+        { ...layer("RED", redImage, ...marginBox(10, 26, 700, 1030)), shot: redSpec, link: "red", shared: true },
+        { ...layer("BLU", bluImage, ...marginBox(400, 26, 700, 1030)), shot: bluSpec, link: "blu", shared: true },
+        await shot(item.displayName, aloneSpec(760, 980, 0.96), 1140, 50, 760, 980, true),
+      ]);
+
+      say(`${item.displayName}: thumbnail…`);
+      picture(item, `${name}_thumb`, "Thumbnail", 512, 512, [await shot(item.displayName, aloneSpec(512, 512, 0.92), 0, 0, 512, 512, true)]);
+
+      // the styles side by side, and a paint chart of each (of the item itself when it has one look)
+      const styles = item.styles.length > 1 ? item.styles.slice(0, MAX_PROMO_STYLES) : [];
+      const styleName = (i: number) => item.styles[i]?.name || `Style ${i + 1}`;
+      if (styles.length) {
+        say(`${item.displayName}: styles…`);
+        // styles of one model and the same parts differ in their textures only, which unpainted can look alike: they are shown painted
+        const shapes = new Set(styles.map((st, i) => `${itemModelFor(item, game, i)}|${JSON.stringify(st.bodygroups ?? {})}`));
+        const paint = shapes.size === 1 && item.paintable ? stylePaint(db.paints) : null;
+        const cellW = Math.floor((W - 80) / styles.length);
+        const layers: PromoLayer[] = [], names: PromoLayer[] = [];
+        const specs = styles.map((_, i) => aloneSpec(cellW, 920, 0.95, { loadout: [worn(item, paint, i)] }));
+        await sameScale(specs);
+        for (let i = 0; i < styles.length; i++) {
+          const x = 40 + i * cellW;
+          layers.push(await shot(styleName(i), specs[i], x, 40, cellW, 920, true));
+          names.push(await textLayer(styleName(i), { ...DEFAULT_TEXT, text: styleName(i), font: "resource/tf2build.ttf", weight: 400, size: 64, shadow: true, color: "#ffffff" }, x + cellW / 2, 1010));
+        }
+        picture(item, `${name}_styles`, "Styles", W, H, [...layers, ...names]);
+      }
+      if (item.paintable) {
+        for (let i = 0; i < Math.max(1, styles.length); i++) {
+          say(`${item.displayName}: paint chart${styles.length ? ` (${styleName(i)})` : ""}…`);
+          const spec: ChartSpec = { role: SOLO, item: item.id, style: i, ...FRONT, fill: 0.9, options: structuredClone(DEFAULT_CHART) };
+          const taken = await takeChart(spec);
+          picture(item, styles.length ? `${name}_paints_${slug(styleName(i))}` : `${name}_paints`, styles.length ? `Paint chart: ${styleName(i)}` : "Paint chart", W, H, [{ ...layer("Paints", taken.canvas, 0, 0, W, H), chart: spec, cells: taken.cells }]);
+        }
+      }
+
+      // a line-up: each wears the item and two random others it can be worn with, unpainted (pictured below, character by character)
+      const cellW = Math.floor((W - 60) / PROMO_LINEUP);
+      const specs = Array.from({ length: PROMO_LINEUP }, (_, i): ShotSpec => ({ role: LINEUP + i, loadout: [worn(item)], weapon: weapon?.id ?? null, regions: null, yaw: 19, pitch: 4, fill: 0.98, w: cellW, h: 1030, reroll: { item: item.id } }));
+      lineups.push({ item, name, cellW, specs, posed: new Set() });
+    }
+
+    // the line-ups, character by character: each is dressed, posed and measured for every item in one visit to its scene...
+    for (let i = 0; i < PROMO_LINEUP; i++) {
+      for (const lu of lineups) {
+        say(`${lu.item.displayName}: loadouts, character ${i + 1}…`);
+        const spec = lu.specs[i];
+        await rerollShot(spec);
+        await rollShotPose(spec, lu.posed);
+        await measureShot(spec, true);
+      }
+    }
+    // one scale by their heights: a line-up stands as tall as the picture, a wide pose reaching into its neighbours' room
+    for (const lu of lineups) shareScale(lu.specs);
+    // ...and pictured for every item in another
+    const lineupLayers = lineups.map(() => [] as PromoLayer[]);
+    for (let i = 0; i < PROMO_LINEUP; i++) {
+      for (const [k, lu] of lineups.entries()) {
+        say(`${lu.item.displayName}: loadouts, picturing character ${i + 1}…`);
+        lineupLayers[k][i] = await shot(`Character ${i + 1}`, lu.specs[i], 30 + i * lu.cellW, 26, lu.cellW, 1030);
+      }
+    }
+    for (const [k, lu] of lineups.entries()) picture(lu.item, `${lu.name}_loadout`, "Loadouts", W, H, lineupLayers[k]);
+    return out;
+  }
+
+  els.capture.promo.onclick = () =>
+    openPromo({
+      catalog: async () => {
+        const db = await loadItemDb();
+        return db.items.filter((i) => i.slot !== "taunt").sort((a, b) => a.displayName.localeCompare(b.displayName));
+      },
+      preferredClass: () => (selected && !isBuildingCls(selected.cls) ? gameClassOf(selected.cls) : null),
+      currentSet: () => {
+        const e = selected;
+        if (!e || isBuildingCls(e.cls)) return [];
+        if (e === selected) saveUi(e);
+        const game = gameClassOf(e.cls);
+        return e.items.loadout.filter((x) => x.item.slot !== "taunt" && itemUsableBy(x.item, game)).map((x) => x.item.id);
+      },
+      classesFor: (set) => CLASSES.filter((c) => set.every((i) => itemUsableBy(i, c[2]) && itemModelFor(i, c[2]) !== null)).map((c) => ({ label: c[0], game: c[2] })),
+      generate: generatePromo,
+    });
 
   // --- scenes --------------------------------------------------------------------------------------------------
 
@@ -3727,7 +5371,7 @@ export function createViewTab(els: Els) {
         ...(e.group ? { group: e.group } : {}),
         ...(e.hidden ? { hidden: true } : {}),
         placement: { x: e.actor.offset.x, y: e.actor.offset.y, z: e.actor.offset.z, yaw: e.actor.yaw, ...(e.actor.pitch !== 0 ? { pitch: e.actor.pitch } : {}), ...(e.actor.roll !== 0 ? { roll: e.actor.roll } : {}), scale: e.actor.scale.toArray() as [number, number, number], placed: v.isPlaced(e.actor) },
-        loadout: e.items.loadout.map((l) => ({ item: l.item.id, paint: l.paint?.id ?? null, style: l.style })),
+        loadout: e.items.loadout.map((l) => ({ item: l.item.id, paint: l.paint?.id ?? null, style: l.style, ...(l.hidden ? { hidden: true } : {}) })),
         activeItem: e.items.activeId,
         held: e.held?.id ?? null,
         ...(isBuildingCls(e.cls) ? { building: { ...e.fx } } : {}),
@@ -3797,7 +5441,7 @@ export function createViewTab(els: Els) {
       e.actor.setBodygroups(Object.fromEntries(e.bodyManual));
       const loadout: Equipped[] = s.loadout.flatMap((l) => {
         const item = byId.get(l.item);
-        return item ? [{ item, paint: l.paint !== null ? paints.get(l.paint) ?? null : null, style: l.style }] : [];
+        return item ? [{ item, paint: l.paint !== null ? paints.get(l.paint) ?? null : null, style: l.style, ...(l.hidden ? { hidden: true } : {}) }] : [];
       });
       e.items = { loadout, activeId: loadout.some((x) => x.item.id === s.activeItem) ? s.activeItem : loadout.at(-1)?.item.id ?? null };
       e.held = s.held !== null ? byId.get(s.held) ?? null : null;
@@ -3859,6 +5503,7 @@ export function createViewTab(els: Els) {
     selected = entities[scene.selected] ?? entities[0];
     v.select(selected.actor);
     restoreUi(selected);
+    uiStale = false;
     renderEntities();
     v.restoreCamera(scene.camera.position, scene.camera.target);
     v.restoreProjection(scene.viewportProjection);
@@ -3890,6 +5535,16 @@ export function createViewTab(els: Els) {
     base: string;
     dirty: boolean;
     path?: string;
+    /** A small picture of the view as the tab was left, shown when the pointer rests on the tab (none until it has been in front). */
+    preview?: string;
+    /**
+     * A promo scene in the background keeps its character as it is (parked, out of the view) instead of being built again from its
+     * saved scene when it comes back: a switch to it is then a moment's work. Such a scene shares the lights and look of the scene that
+     * is open.
+     */
+    parked?: { entities: Entity[]; groups: HierarchyGroup[]; selected: Entity | null };
+    /** A promo board (a set's pictures) in place of a scene: shown in the view's place while it is the tab in front. */
+    board?: { root: HTMLElement; session: PromoSession; dispose: () => void };
   }
   const tabs: SceneTab[] = [];
   let activeTab: SceneTab | null = null;
@@ -3899,19 +5554,80 @@ export function createViewTab(els: Els) {
   const tabStrip = document.getElementById("sceneTabs");
   const strip = tabStrip
     ? createSceneTabs(tabStrip, {
-        select: (id) => void switchTab(tabs.find((t) => t.id === id)),
-        close: (id) => void closeTab(tabs.find((t) => t.id === id)),
+        select: (id) => {
+          const t = tabs.find((x) => x.id === id);
+          if (!t) return;
+          if (t.board) showBoardTab(t);
+          else {
+            if (activeBoard) hideBoardTab();
+            void switchTab(t);
+          }
+        },
+        close: (id) => {
+          const t = tabs.find((x) => x.id === id);
+          if (t?.board) void closeBoardTab(t);
+          else void closeTab(t);
+        },
         add: () => void openTab(null),
         rename: (id, name) => {
           const t = tabs.find((x) => x.id === id);
           if (t) t.name = name;
+          if (t?.board) scheduleSave(t.board.session);
           renderTabs();
         },
       })
     : null;
   function renderTabs() {
-    strip?.render(tabs.map((t) => ({ id: t.id, name: t.name, dirty: t.dirty })), activeTab?.id ?? -1);
+    strip?.render(tabs.map((t) => ({ id: t.id, name: t.name, dirty: t.dirty, preview: t.preview })), (activeBoard ?? activeTab)?.id ?? -1);
     syncIconMode();
+  }
+
+  /** Parks the open promo scene's characters: out of the view, kept as they are, to be put back when the scene comes to the front. */
+  function parkActive() {
+    const t = activeTab;
+    const v = ensureViewer();
+    if (!t) return;
+    for (const e of entities) v.detachActor(e.actor);
+    t.parked = { entities: [...entities], groups, selected };
+    entities.length = 0;
+    groups = [];
+    selected = null;
+    gizmoEntity = null;
+    v.setActorGizmo(null);
+  }
+
+  /** Puts a parked scene's characters back in the view, in place of what is there (which is taken out and disposed of). */
+  function unpark(tab: SceneTab) {
+    const p = tab.parked;
+    if (!p) return;
+    tab.parked = undefined;
+    const v = ensureViewer();
+    editHistory.clear();
+    for (const e of [...entities]) v.removeActor(e.actor);
+    entities.length = 0;
+    gizmoEntity = null;
+    v.setActorGizmo(null);
+    for (const e of p.entities) {
+      v.attachActor(e.actor);
+      entities.push(e);
+      void applyUnusuals(e);
+    }
+    groups = p.groups;
+    selected = p.selected && entities.includes(p.selected) ? p.selected : entities[0] ?? null;
+    if (selected) v.select(selected.actor);
+    if (promoQuiet) uiStale = true;
+    else {
+      if (selected) restoreUi(selected);
+      renderEntities();
+    }
+  }
+
+  /** Disposes of a closed tab's parked characters. */
+  function disposeParked(tab: SceneTab) {
+    const p = tab.parked;
+    if (!p) return;
+    tab.parked = undefined;
+    for (const e of p.entities) e.actor.dispose();
   }
 
   /** Stores the open tab's live scene into it. */
@@ -3923,8 +5639,18 @@ export function createViewTab(els: Els) {
     activeTab.dirty = fingerprint(scene) !== activeTab.base;
   }
 
+  /** Keeps a picture of the view in the open tab before another scene takes its place. */
+  function snapshotActive() {
+    if (activeTab && viewer) activeTab.preview = viewer.viewSnapshot() ?? activeTab.preview;
+  }
+
   /** Play and pose modes do not carry over between scenes: a pose in progress is held as a custom pose before the scene is stored. */
   function settleForSwitch() {
+    if (promoEditing) finishShotEdit(false, false); // a promo shot edited in 3D is of this scene: the edit is dropped (the board stays as it was)
+    closePaintChart(); // the chart is of a cosmetic of this scene
+    rolledExtras = []; // the characters a roll added are this scene's
+    stopVoices();
+    closeVoiceLines(); // its line is on a character of this scene
     if (play?.active) stopPlay();
     for (const e of entities) if (e.actor.isPosing) e.actor.endPose();
     syncPoseUi();
@@ -4264,6 +5990,8 @@ export function createViewTab(els: Els) {
     try {
       settleForSwitch();
       captureActive();
+      if (isPromoTab(activeTab)) parkActive();
+      else snapshotActive();
       const tab = freshTab(name);
       tab.path = path;
       tabs.push(tab);
@@ -4285,9 +6013,13 @@ export function createViewTab(els: Els) {
     try {
       settleForSwitch();
       captureActive();
+      // a promo scene is parked, not rebuilt: its character waits out of the view, and comes back as it was in a moment
+      if (isPromoTab(activeTab)) parkActive();
+      else snapshotActive();
       activeTab = tab;
       renderTabs();
-      await applyScene(tab.scene);
+      if (tab.parked) unpark(tab);
+      else await applyScene(tab.scene);
       syncPoseUi();
     } finally {
       tabBusy = false;
@@ -4342,8 +6074,10 @@ export function createViewTab(els: Els) {
       }
     }
     const at = tabs.indexOf(tab);
+    forgetPromoTab(tab);
     if (tab !== activeTab) {
       tabs.splice(at, 1);
+      disposeParked(tab);
       renderTabs();
       return;
     }
@@ -4351,11 +6085,12 @@ export function createViewTab(els: Els) {
     try {
       settleForSwitch();
       tabs.splice(at, 1);
-      const next = tabs[at] ?? tabs[at - 1];
+      const next = tabs.slice(at).find((t) => !t.board) ?? tabs.slice(0, at).reverse().find((t) => !t.board);
       if (next?.scene) {
         activeTab = next;
         renderTabs();
-        await applyScene(next.scene);
+        if (next.parked) unpark(next);
+        else await applyScene(next.scene);
         syncPoseUi();
       } else {
         // closing the only scene leaves a fresh one
@@ -4446,7 +6181,7 @@ export function createViewTab(els: Els) {
   }
   if (import.meta.env.DEV) (window as unknown as { __workbenchScene: unknown }).__workbenchScene = { serializeScene, applyScene, applyLights, postItemsOf, setPostItems, capturePost, saveScenePart, loadScenePart, loadShell: (path: string) => loadWeaponShell(path), recordVideo: (o: VideoOptions) => recordVideo(viewer!, o, () => {}, new AbortController().signal) };
 
-  els.capture.paintChart.onclick = () => void makePaintChart();
+  els.capture.paintChart.onclick = () => makePaintChart();
   els.capture.menu.onclick = () => openMenu(els.capture.menu, [
     { label: "New scene", children: [
       { label: "Copy", hint: "of this scene", run: () => void newSceneCopy() },
@@ -4467,6 +6202,7 @@ export function createViewTab(els: Els) {
   /** All open scenes are stored as the session shortly after they change, to come back at the next start. */
   let lastSession = "";
   let autosave = 0;
+  let previewDue = false;
   function startAutosave() {
     if (autosave) return;
     autosave = window.setInterval(() => {
@@ -4474,15 +6210,25 @@ export function createViewTab(els: Els) {
       const before = activeTab?.dirty;
       captureActive();
       if (activeTab?.dirty !== before) renderTabs();
-      if (!tabs.length || tabs.some((t) => !t.scene)) return;
-      const text = JSON.stringify({
+      const scenes = tabs.filter((t) => !t.board); // (a promo board is not kept between sessions)
+      if (!scenes.length || scenes.some((t) => !t.scene)) return;
+      const session = {
         app: "tf2-workbench",
-        tabs: tabs.map((t) => ({ name: t.name, path: t.path ?? null, base: t.base, scene: t.scene })),
-        active: Math.max(0, activeTab ? tabs.indexOf(activeTab) : 0),
-      });
-      if (text === lastSession) return;
-      lastSession = text;
-      void saveSession(text).catch(() => {});
+        tabs: scenes.map((t) => ({ name: t.name, path: t.path ?? null, base: t.base, scene: t.scene })),
+        active: Math.max(0, activeTab ? scenes.indexOf(activeTab) : 0),
+      };
+      // compared without the pictures; the open tab's picture is taken a tick after the scene last changed (what is loading has had time to show)
+      const text = JSON.stringify(session);
+      if (text === lastSession) {
+        if (!previewDue) return;
+        previewDue = false;
+        snapshotActive();
+      } else {
+        lastSession = text;
+        previewDue = true;
+      }
+      const withPreviews = { ...session, tabs: session.tabs.map((s, i) => ({ ...s, preview: scenes[i].preview ?? null })) };
+      void saveSession(JSON.stringify(withPreviews)).catch(() => {});
     }, 2000);
   }
 
@@ -4507,6 +6253,7 @@ export function createViewTab(els: Els) {
         tab.base = typeof r.base === "string" ? r.base : fingerprint(scene);
         tab.dirty = fingerprint(scene) !== tab.base;
         if (typeof r.path === "string") tab.path = r.path;
+        if (typeof r.preview === "string" && r.preview.startsWith("data:image/")) tab.preview = r.preview;
         restored.push({ tab, scene });
       } catch (err) {
         console.warn("skipped a stored scene:", err);
@@ -4531,6 +6278,7 @@ export function createViewTab(els: Els) {
         console.warn("could not restore the last scene:", err);
       }
     }
+    await restoreBoards();
     if (entities.length === 0) {
       const e = newEntity(v.addActor(), CLASSES[0][1], 0);
       entities.push(e);
@@ -5226,10 +6974,23 @@ export function createViewTab(els: Els) {
     setCompiler(on: boolean) {
       if (on === compilerOn) return;
       compilerOn = on;
-      if (on) void compiler.show(); else compiler.hide();
+      if (on) {
+        // the compiler drives the viewer's bone helper itself: close the read-only inspector's drawing first
+        selectedJiggle = null;
+        clearJiggleDrawing();
+        void compiler.show();
+      } else {
+        compiler.hide();
+        renderJiggles();
+      }
     },
     async onShown() {
+      // the board in front, if any, stays in the view's place
+      if (activeBoard) showBoardTab(activeBoard);
+      else { const page = document.getElementById("promoPage"); if (page) page.hidden = true; }
       if (!els.isIndexed()) { els.info.textContent = "TF2 not indexed yet."; return; }
+      await leavePromoScene(); // a shot was taken again in the promo scene: the scene you had comes back
+      syncStaleUi(); // a promo scene that stays open (a shot edited in 3D) shows its panels
       void loadIcons();
       if (!viewer) await startFirstEntity();
     },
