@@ -1,5 +1,5 @@
 //! The parts of the app's backend that do not depend on Tauri: they read the game's files through a [`VpkSet`] and answer in JSON or bytes.
-//! The desktop app calls them from its commands; the web build runs the very same code in WebAssembly.
+//! The desktop app calls them from its commands.
 use serde::Serialize;
 use source_formats::VpkSet;
 
@@ -355,7 +355,8 @@ pub fn unusual_effects(vpk: &VpkSet) -> Result<Vec<UnusualEffectDto>, String> {
         }
     }
     let mut result = Vec::new();
-    for (category, kind) in [("cosmetic_unusual_effects", "hat"), ("taunt_unusual_effects", "taunt")] {
+    // ("other": the effects some items always show, such as the Cheater's Lament's halo; not offered as an unusual effect, but found by id)
+    for (category, kind) in [("cosmetic_unusual_effects", "hat"), ("taunt_unusual_effects", "taunt"), ("other_particles", "other")] {
         let entries = kv::find(particles, category).and_then(kv::Node::block).ok_or("Missing unusual category")?;
         for entry in entries {
             let Ok(id) = entry.key.parse::<u32>() else { continue; };
@@ -366,6 +367,26 @@ pub fn unusual_effects(vpk: &VpkSet) -> Result<Vec<UnusualEffectDto>, String> {
             result.push(UnusualEffectDto { id, name, system: system.to_owned(), kind: kind.to_owned(), file: files.get(system).cloned(),
                 attachment: value("attachment").to_owned(), root_bone: value("attach_to_rootbone") == "1", refire: value("refire_time").parse().unwrap_or(0.0) });
         }
+    }
+    // the systems items attach by name (`visuals/attached_particlesystems`: the Earbuds' notes), as entries of their own, found by system
+    let mut named = std::collections::BTreeSet::new();
+    if let Some(items_block) = kv::find(root, "items").and_then(kv::Node::block) {
+        for item in items_block.iter().filter_map(kv::Node::block) {
+            let Some(systems) = kv::find(item, "visuals").and_then(kv::Node::block).and_then(|v| kv::find(v, "attached_particlesystems")).and_then(kv::Node::block) else { continue };
+            for n in systems.iter().filter_map(kv::Node::block) {
+                if let Some(system) = kv::find(n, "system").and_then(kv::Node::as_str) {
+                    let attachment = kv::find(n, "attachment").and_then(kv::Node::as_str).unwrap_or("");
+                    named.insert((system.to_owned(), attachment.to_owned()));
+                }
+            }
+        }
+    }
+    // the systems the engine starts itself at an attachment of a model: the Spy's cigarette (`cig`), which no item names
+    named.insert(("cig_smoke".to_owned(), "cig_smoke".to_owned()));
+    named.insert(("cig_burn".to_owned(), "cig_smoke".to_owned()));
+    for (i, (system, attachment)) in named.into_iter().enumerate() {
+        if result.iter().any(|e| e.system == system) { continue; }
+        result.push(UnusualEffectDto { id: 1_000_000 + i as u32, name: system.clone(), kind: "other".to_owned(), file: files.get(&system).cloned(), attachment, root_bone: false, refire: 0.0, system });
     }
     result.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then(a.id.cmp(&b.id)));
     Ok(result)

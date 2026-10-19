@@ -8,9 +8,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "tauri": "tauri",
-    "test": "node tests/run.mjs",
-    "dev:web": "vite --mode web",
-    "build:web": "tsc --noEmit && vite build --mode web"
+    "test": "node tests/run.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

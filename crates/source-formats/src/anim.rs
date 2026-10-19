@@ -619,6 +619,20 @@ impl AnimSet {
         }
     }
 
+    /// `params` with the aim (`body_pitch`, `body_yaw`) back at its default; None when no aim is set (or the model has none).
+    fn without_aim(&self, params: &[f32]) -> Option<Vec<f32>> {
+        let defaults = self.default_pose_params();
+        let mut pin = params.to_vec();
+        let mut aimed = false;
+        for (i, p) in self.pose_params.iter().enumerate() {
+            if (p.name == "body_pitch" || p.name == "body_yaw") && i < pin.len() && i < defaults.len() && (pin[i] - defaults[i]).abs() > 1e-4 {
+                pin[i] = defaults[i];
+                aimed = true;
+            }
+        }
+        aimed.then_some(pin)
+    }
+
     /// Model-space positions of every bone for a local pose.
     pub fn world_positions(&self, pose: &Pose) -> Vec<[f32; 3]> {
         world_transforms(&self.bone_parents(), pose).0
@@ -1707,6 +1721,50 @@ impl AnimSet {
         self.layer_base_of_stand()
     }
 
+    /// The part of a taunt's cycle (0..1) where it is fully itself: its auto layers bring it in over the weapon's stand pose at the start and
+    /// take it out again at the end, and a frame in either blend is a mix of the two (props and limbs out of place), not a pose. None for
+    /// what is not a taunt, and for one with no such blend. The ends are frames: the first and the last that are not in a blend (or the
+    /// stand pose before it).
+    pub fn taunt_window(&self, seq: usize) -> Option<(f32, f32)> {
+        self.layer_base(seq)?;
+        let params = self.default_pose_params();
+        let frames = (self.timing(seq, &params).max_frame.max(0) as usize + 1).max(1);
+        if frames < 4 {
+            return None;
+        }
+        let (_, sv) = self.seq_view(seq);
+        let layers: Vec<AutoLayer> = (0..sv.num_autolayers()).map(|i| sv.autolayer(i)).filter(|l| l.flags & (STUDIO_AL_LOCAL | STUDIO_AL_POSE) == 0 && l.start != l.end).collect();
+        if layers.is_empty() {
+            return None;
+        }
+        // a frame is in a blend when some layer is part way in or out
+        let blending = |f: usize| {
+            let cycle = f as f32 / (frames - 1) as f32;
+            layers.iter().any(|l| {
+                if cycle < l.start || cycle >= l.end {
+                    return false;
+                }
+                let mut s = 1.0f32;
+                if cycle < l.peak && l.start != l.peak {
+                    s = (cycle - l.start) / (l.peak - l.start);
+                } else if cycle > l.tail && l.end != l.tail {
+                    s = (l.end - cycle) / (l.end - l.tail);
+                }
+                s > 0.002 && s < 0.998
+            })
+        };
+        let edge = (frames as f32 * 0.3) as usize;
+        let mut lo = 0;
+        if let Some(first) = (0..edge).find(|&f| blending(f)) {
+            lo = (first..frames).find(|&f| !blending(f)).unwrap_or(frames);
+        }
+        let mut hi = frames - 1;
+        if let Some(last) = (frames - edge..frames).rev().find(|&f| blending(f)) {
+            hi = (0..=last).rev().find(|&f| !blending(f)).unwrap_or(0);
+        }
+        (hi > lo).then(|| (lo as f32 / (frames - 1) as f32, hi as f32 / (frames - 1) as f32))
+    }
+
     /// Samples `seq` at its native frame rate into a [`Clip`] using the given pose parameters. A taunt is sampled over its base pose ([`layer_base`]).
     pub fn bake(&self, seq: usize, params: &[f32]) -> Clip {
         self.bake_over(seq, params, None)
@@ -1759,18 +1817,25 @@ impl AnimSet {
         let (_, sv) = self.seq_view(seq);
         let mut pos = Vec::with_capacity(frames * nb * 3);
         let mut quat = Vec::with_capacity(frames * nb * 4);
+        // the aim (body pitch and yaw) leans the body, and with it the feet would come off the floor: the game's foot IK keeps them where
+        // the movement alone has them, so with an aim set the feet are planted where they stand with the aim at its default
+        let pin = self.without_aim(params);
+        let eval = |cycle: f32, params: &[f32]| match (&outside, base) {
+            _ if gesture.is_some() => self.evaluate_layered(gesture.unwrap(), cycle, &[(seq, cycle, 1.0)], params),
+            (Some(under), _) => {
+                let mut pose = under.clone();
+                self.accumulate_pose(&mut pose, seq as i32, cycle, 1.0, params);
+                pose
+            }
+            (None, Some(base)) => self.evaluate_layered(base, 0.0, &[(seq, cycle, 1.0)], params),
+            (None, None) => self.evaluate(seq, cycle, params),
+        };
         for f in 0..frames {
             let cycle = if frames > 1 { f as f32 / (frames - 1) as f32 } else { 0.0 };
-            let pose = match (&outside, base) {
-                _ if gesture.is_some() => self.evaluate_layered(gesture.unwrap(), cycle, &[(seq, cycle, 1.0)], params),
-                (Some(under), _) => {
-                    let mut pose = under.clone();
-                    self.accumulate_pose(&mut pose, seq as i32, cycle, 1.0, params);
-                    pose
-                }
-                (None, Some(base)) => self.evaluate_layered(base, 0.0, &[(seq, cycle, 1.0)], params),
-                (None, None) => self.evaluate(seq, cycle, params),
-            };
+            let mut pose = eval(cycle, params);
+            if let Some(pin) = &pin {
+                self.plant_feet(&mut pose, &eval(cycle, pin));
+            }
             for b in 0..nb {
                 pos.extend_from_slice(&pose.pos[b]);
                 quat.extend_from_slice(&pose.quat[b]);

@@ -15,7 +15,6 @@ export const PANEL_DEFS: { id: string; title: string; element: string }[] = [
   { id: "lightsetups", title: "Light", element: "lightSetupsPane" },
   { id: "post", title: "Post-processing", element: "postPane" },
   { id: "particles", title: "Particles", element: "particlesPane" },
-  // the prop browser is of the desktop program only (the web version has no props)
   { id: "props", title: "Props", element: "propsPane" },
 ];
 

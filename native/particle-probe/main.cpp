@@ -357,6 +357,8 @@ int main(int argc, char** argv) {
     if (argc < 3) { std::fprintf(stderr, "usage: particle-probe <pcf> <system> [-game <tf>]\n"); return 2; }
     std::puts("initializing Source tool environment"); std::fflush(stdout);
     MathLib_Init(); CommandLine()->CreateCmdLine(argc, argv);
+    // the collections' random seed (-seed): the same seed, control points and ticks give the same particles every time
+    const int seed = CommandLine()->ParmValue("-seed", 273);
     const char* modules[] = { "materialsystem.dll", "filesystem_stdio.dll", "vstdlib.dll" };
     for (int i = 0; i < 3; ++i) {
         HMODULE module = LoadLibraryA(modules[i]);
@@ -426,7 +428,7 @@ int main(int argc, char** argv) {
         if (!manager->ReadParticleConfigFile(buffer, true)) return 7;
         std::free(bytes);
     }
-    auto* particles = manager->CreateParticleCollection(argv[2], 0, 273);
+    auto* particles = manager->CreateParticleCollection(argv[2], 0, seed);
     if (!particles) return 8;
     // Creating the graph precaches its reachable materials. Recreate it before
     // the first tick so collections acquire Source-owned sheets from the cache.
@@ -434,7 +436,7 @@ int main(int argc, char** argv) {
     std::unordered_set<std::string> loadedSheets;
     loadSimulationSheets(manager, particles, loadedSheets);
     delete particles;
-    particles = manager->CreateParticleCollection(argv[2], 0, 273);
+    particles = manager->CreateParticleCollection(argv[2], 0, seed);
     if (!particles) return 8;
     particles->SetControlPoint(0, Vector(0, 0, 0));
     particles->SetControlPointOrientation(0, Vector(1, 0, 0), Vector(0, -1, 0), Vector(0, 0, 1));
@@ -444,7 +446,7 @@ int main(int argc, char** argv) {
         if(slots<1 || slots>32) return 18;
         std::vector<CParticleCollection*> instances{particles};
         for(int i=1;i<slots;i++) {
-            auto* instance=manager->CreateParticleCollection(argv[2],0,273+i);
+            auto* instance=manager->CreateParticleCollection(argv[2],0,seed+i);
             if(!instance) return 8;
             instance->SetControlPointObject(0,&query);
             instances.push_back(instance);
@@ -505,7 +507,7 @@ int main(int argc, char** argv) {
                 // stopped child-emitter state (notably the pipebomb trail).
                 if(command==1 && slots>1) {
                     delete instance;
-                    instance=manager->CreateParticleCollection(argv[2],0,273+i);
+                    instance=manager->CreateParticleCollection(argv[2],0,seed+i);
                     if(!instance) return 8;
                     instances[i]=instance;instance->SetControlPointObject(0,&query);
                     if(i==0) particles=instance;

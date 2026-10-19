@@ -1,8 +1,8 @@
-import { effectiveScale, GIF_MAX_SIDE, VIDEO_FPS, VIDEO_LIMITS, type VideoFormat, type VideoOptions, type VideoSource } from "./videoRecorder";
+import { canBeTransparent, effectiveScale, GIF_MAX_SIDE, VIDEO_FPS, VIDEO_LIMITS, type VideoFormat, type VideoOptions, type VideoSource } from "./videoRecorder";
 
 const KEY = "videoOptions";
 
-const DEFAULTS: VideoOptions & { fpsGif: number } = { source: "live", format: "mp4", scale: 0.5, fps: 30, fpsGif: 15, seconds: 5, turn: 360 };
+const DEFAULTS: VideoOptions & { fpsGif: number } = { source: "live", format: "mp4", scale: 0.5, fps: 30, fpsGif: 15, seconds: 5, turn: 360, transparent: false };
 
 function load(): VideoOptions & { fpsGif: number } {
   try {
@@ -15,12 +15,13 @@ function clean(o: typeof DEFAULTS): typeof DEFAULTS {
   const [lo, hi] = VIDEO_LIMITS.seconds, [tlo, thi] = VIDEO_LIMITS.turn;
   return {
     source: o.source === "turntable" ? "turntable" : "live",
-    format: o.format === "webm" || o.format === "gif" ? o.format : "mp4",
+    format: o.format === "webm" || o.format === "gif" || o.format === "png" ? o.format : "mp4",
     scale: (VIDEO_LIMITS.scales as readonly number[]).includes(o.scale) ? o.scale : DEFAULTS.scale,
     fps: VIDEO_FPS.mp4.includes(o.fps) ? o.fps : DEFAULTS.fps,
     fpsGif: VIDEO_FPS.gif.includes(o.fpsGif) ? o.fpsGif : DEFAULTS.fpsGif,
     seconds: Number.isFinite(o.seconds) ? Math.max(lo, Math.min(hi, o.seconds)) : DEFAULTS.seconds,
     turn: Number.isFinite(o.turn) ? Math.max(tlo, Math.min(thi, o.turn)) : DEFAULTS.turn,
+    transparent: o.transparent === true,
   };
 }
 
@@ -66,9 +67,16 @@ export function toggleVideoPanel(anchor: HTMLElement, host: VideoPanelHost) {
   };
 
   const source = segment<VideoSource>([["live", "Live view", "Records the scene as it moves now: the animations, the particles, the weapon"], ["turntable", "Turntable", "The camera turns round the character while the scene plays"]], () => o.source, (v) => (o.source = v));
-  const format = segment<VideoFormat>([["mp4", "MP4", "H.264"], ["webm", "WebM"], ["gif", "GIF", `Optimized: one palette, only the changes are stored; the longest side stops at ${GIF_MAX_SIDE} pixels`]], () => o.format, (v) => (o.format = v));
+  const format = segment<VideoFormat>([["mp4", "MP4", "H.264"], ["webm", "WebM"], ["gif", "GIF", `Optimized: one palette, only the changes are stored; the longest side stops at ${GIF_MAX_SIDE} pixels`], ["png", "PNG seq.", "One numbered PNG per frame, written into a folder you pick"]], () => o.format, (v) => (o.format = v));
   row("Record", source.box);
   row("Format", format.box);
+  const clear = document.createElement("label");
+  clear.className = "inline-check";
+  const clearBox = document.createElement("input");
+  clearBox.type = "checkbox";
+  clear.append(clearBox, " Transparent background");
+  const clearRow = row("Background", clear);
+  clearBox.onchange = () => { o.transparent = clearBox.checked; sync(); };
 
   const size = document.createElement("select");
   size.setAttribute("aria-label", "Size");
@@ -107,6 +115,11 @@ export function toggleVideoPanel(anchor: HTMLElement, host: VideoPanelHost) {
     Object.assign(o, clean(o));
     source.refresh(); format.refresh();
     turnRow.hidden = o.source !== "turntable";
+    clearRow.hidden = !canBeTransparent(o.format);
+    clearBox.checked = o.transparent;
+    clear.title = o.format === "gif"
+      ? "Leaves the background and the ground plane out. A GIF pixel is either shown or not, so soft edges and the ground shadow come out hard. A shot through a camera follows its Capture background setting"
+      : "Leaves the background and the ground plane out (the ground shadow keeps its soft edge). A shot through a camera follows its Capture background setting";
     const base = host.baseSize();
     const scale = effectiveScale(base, o);
     size.replaceChildren(...VIDEO_LIMITS.scales.map((s) => new Option(`${Math.round(s * 100)}%`, String(s))));
@@ -118,7 +131,7 @@ export function toggleVideoPanel(anchor: HTMLElement, host: VideoPanelHost) {
     fps.value = String(o.format === "gif" ? o.fpsGif : o.fps);
     seconds.value = String(o.seconds);
     turn.value = String(o.turn);
-    for (const el of [size, fps, seconds, turn]) el.disabled = !!busy;
+    for (const el of [size, fps, seconds, turn, clearBox]) el.disabled = !!busy;
     for (const b of panel.querySelectorAll<HTMLButtonElement>(".slotBtns button")) b.disabled = !!busy;
     go.textContent = busy ? "Cancel" : o.source === "turntable" ? "Render turntable" : "Record";
     go.classList.toggle("on", !busy);
@@ -129,7 +142,7 @@ export function toggleVideoPanel(anchor: HTMLElement, host: VideoPanelHost) {
     busy = new AbortController();
     sync();
     status.textContent = "";
-    const options: VideoOptions = { source: o.source, format: o.format, scale: o.scale, fps: o.format === "gif" ? o.fpsGif : o.fps, seconds: o.seconds, turn: o.turn };
+    const options: VideoOptions = { source: o.source, format: o.format, scale: o.scale, fps: o.format === "gif" ? o.fpsGif : o.fps, seconds: o.seconds, turn: o.turn, transparent: o.transparent && canBeTransparent(o.format) };
     try { await host.record(options, busy.signal, (t) => (status.textContent = t)); }
     catch (e) { status.textContent = e instanceof Error && e.message === "Cancelled" ? "Cancelled." : `Failed: ${e instanceof Error ? e.message : String(e)}`; }
     finally { busy = null; if (panel.isConnected) sync(); }

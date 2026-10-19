@@ -28,28 +28,39 @@ let brushSize = 24;
 let tool: Tool | null = null;
 let ring: HTMLElement | null = null;
 
-export function createBodyPicker(tools: HTMLElement, host: BodyHost): { sync: () => void } {
+/**
+ * The parts picker: which parts of the selected character are drawn, as a checklist with All and None (in `panel`, a block of the
+ * properties panel, beside the bodygroups; in the view's popup when there is no panel), and the view tools that hide triangles by hand
+ * (box, lasso, brush), in a popup off a button at the bottom right of the view.
+ */
+export function createBodyPicker(tools: HTMLElement, host: BodyHost, panel?: HTMLElement | null | false): { sync: () => void } {
+  /** The checklist is in the popup (no panel given): the popup is the parts picker; otherwise it holds the triangle tools alone. */
+  const inPopup = panel === undefined || panel === null;
   const button = document.createElement("button");
   button.id = "hudBody";
   button.innerHTML = ICON;
-  button.title = "Character parts: choose which parts of the character are shown";
-  button.setAttribute("aria-label", "Character parts");
+  button.title = inPopup ? "Character parts: choose which parts of the character are shown" : "Hide triangles: box, lasso or brush over the view hides what they cover (which parts are drawn is under Properties, Bodygroups)";
+  button.setAttribute("aria-label", inPopup ? "Character parts" : "Hide triangles");
   tools.parentElement?.appendChild(button); // bottom right corner of the view
 
   const pop = document.createElement("div");
   pop.id = "bodyPop";
   pop.hidden = true;
-  pop.innerHTML = '<div class="bpHead">Show character parts</div><div class="bpPresets"></div>';
+  pop.innerHTML = `<div class="bpHead">${inPopup ? "Show character parts" : "Hide triangles"}</div>`;
+  // the checklist and its presets: in the panel, in the popup when there is none, nowhere when the panel is `false` (the properties
+  // panel lists the parts itself)
+  const listHost = panel === false ? null : panel ?? pop;
+  const presets = document.createElement("div");
+  presets.className = "bpPresets";
   const list = document.createElement("div");
   list.className = "bpGroupList";
-  pop.appendChild(list);
+  listHost?.append(presets, list);
   const checks = new Map<string, HTMLInputElement>();
   let groupKey = "";
   const hint = document.createElement("div");
   hint.className = "bpHint dim";
-  hint.textContent = "Checked groups are visible. View tools hide selected triangles (Shift restores them).";
+  hint.textContent = inPopup ? "Checked groups are visible. View tools hide selected triangles (Shift restores them)." : "What a tool covers is hidden (Shift: shown again). Which parts are drawn at all is set under Properties, Bodygroups.";
   pop.appendChild(hint);
-  const presets = pop.querySelector<HTMLElement>(".bpPresets")!;
   const toolRow = document.createElement("div");
   toolRow.className = "bpBoxRow";
   const toolButtons = new Map<Tool, HTMLButtonElement>();
@@ -85,7 +96,8 @@ export function createBodyPicker(tools: HTMLElement, host: BodyHost): { sync: ()
     }
   };
   sizeRow.append("Brush size", sizeInput);
-  presets.after(toolRow, sizeRow);
+  if (listHost === pop) presets.after(toolRow, sizeRow);
+  else pop.querySelector(".bpHead")!.after(toolRow, sizeRow);
   for (const [label, all] of [["All", true], ["None", false]] as const) {
     const b = document.createElement("button");
     b.textContent = label;
@@ -99,6 +111,7 @@ export function createBodyPicker(tools: HTMLElement, host: BodyHost): { sync: ()
   tools.parentElement?.appendChild(pop);
 
   function paint() {
+    if (!listHost) return;
     const groups = host.groups();
     const key = groups.map(g => g.id).join(",");
     if (groupKey !== key) {
@@ -122,6 +135,7 @@ export function createBodyPicker(tools: HTMLElement, host: BodyHost): { sync: ()
     }
     const now = host.get();
     for (const [key, check] of checks) check.checked = now.has(key) || now.has("*");
+    if (panel) panel.hidden = groups.length === 0; // (a prop or a building has no parts to pick)
   }
 
   // --- the view tools: box, lasso and brush over the 3D view ---

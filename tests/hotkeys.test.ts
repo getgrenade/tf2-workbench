@@ -93,3 +93,36 @@ test("clashes are between actions that can be pressed together", () => {
   assert.deepEqual(conflictsOf("outliner.rename", "Space"), ["outliner.toggle"]);
   assert.deepEqual(conflictsOf("nav.pan", "Mouse0"), ["nav.orbit"]);
 });
+
+test("layouts: each sets valid bindings for the tool keys and the mouse, without clashes", async () => {
+  const { HOTKEY_LAYOUTS, LAYOUT_ACTIONS } = await import("../src/hotkeys.ts");
+  assert.deepEqual(HOTKEY_LAYOUTS.map((l) => l.id), ["hlmv", "blender", "industry"]);
+  for (const layout of HOTKEY_LAYOUTS) {
+    for (const id of LAYOUT_ACTIONS) assert.ok(validFor(hotkeyDef(id), layout.bindings[id]), `${layout.id} ${id}`);
+    const keys = LAYOUT_ACTIONS.map((id) => layout.bindings[id]);
+    assert.equal(new Set(keys.slice(0, 3)).size, 3, `${layout.id}: three different tool keys`);
+    assert.equal(new Set(keys.slice(3)).size, 3, `${layout.id}: three different mouse buttons`);
+  }
+});
+
+test("layouts: HLMV is the default, Blender and Industry share a mouse, and Blender has G, R, S", async () => {
+  const { HOTKEY_LAYOUTS, LAYOUT_ACTIONS, currentLayout, layoutOverrides } = await import("../src/hotkeys.ts");
+  const by = Object.fromEntries(HOTKEY_LAYOUTS.map((l) => [l.id, l]));
+  setHotkeyOverrides({});
+  assert.equal(currentLayout()?.id, "hlmv", "nothing changed: HLMV");
+  assert.deepEqual(layoutOverrides(by.hlmv, {}), {});
+  assert.deepEqual(by.blender.bindings["tool.move"] + by.blender.bindings["tool.rotate"] + by.blender.bindings["tool.scale"], "KeyGKeyRKeyS");
+  for (const id of ["nav.orbit", "nav.zoom", "nav.pan"] as const) assert.equal(by.blender.bindings[id], by.industry.bindings[id]);
+  assert.notEqual(by.hlmv.bindings["nav.zoom"], by.industry.bindings["nav.zoom"], "HLMV zooms with the right button, Industry with the middle one");
+  for (const layout of HOTKEY_LAYOUTS) {
+    setHotkeyOverrides(layoutOverrides(layout, { "edit.undo": "Ctrl+KeyU" }));
+    assert.equal(currentLayout()?.id, layout.id);
+    for (const id of LAYOUT_ACTIONS) assert.equal(binding(id), layout.bindings[id]);
+    assert.equal(binding("edit.undo"), "Ctrl+KeyU", "what a layout does not set stays");
+  }
+  // a mix is no layout
+  setHotkeyOverrides({ "tool.move": "KeyG" });
+  assert.equal(currentLayout(), null);
+  assert.equal(toolOfCode("KeyG"), "move");
+  setHotkeyOverrides({});
+});

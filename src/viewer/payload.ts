@@ -192,7 +192,7 @@ export function parseVec(value: string | undefined, fallback: number[]): number[
  * `$phongalbedotint 1`, which is off unless the material sets it: Hell-Bent Leather omits it and shows untinted shine in hlmv), else plain white. A negative red channel is the shader's "use the map" flag.
  */
 export function resolvePhongTint(params: Record<string, string>, hasExponentTexture: boolean): [number, number, number] {
-  const t = parseVec(params["$phongtint"], [0, 0, 0]);
+  const t = parseColor(params["$phongtint"], [0, 0, 0]);
   if (t[0] !== 0 || t[1] !== 0 || t[2] !== 0) return [t[0], t[1], t[2]];
   const albedoTint = hasExponentTexture && Number(params["$phongalbedotint"] ?? 0) !== 0;
   return albedoTint ? [-1, 0, 0] : [1, 1, 1];
@@ -213,6 +213,8 @@ export interface SequenceInfo {
   hidden: boolean;
   /** The authored activity (`ACT_MP_THROW`); empty when the sequence has none. */
   activity?: string;
+  /** A taunt's part of the cycle (0..1) outside the blends into and out of it, where it is itself and not a mix with the stand pose. */
+  window?: [number, number];
 }
 
 export interface PoseParamInfo {
@@ -299,6 +301,11 @@ export interface ItemInfo {
   paintable: boolean;
   /** Wearing the item puts the character in the zombie skin of the class model (the Voodoo-Cursed souls). */
   skinOverride: boolean;
+  /**
+   * The particle effects the item always shows (a pipe's smoke, the Earbuds' notes): by the game's effect id (as the unusual effects are
+   * numbered), or a particle system by name, at an attachment of the item's model.
+   */
+  particles?: { effect?: number; system?: string; attachment?: string }[];
   /** Medals and badges (thousands of tournament / community medals); hidden by default in the browser. */
   medal: boolean;
   /** Definition quality (`unique`, `vintage`, `selfmade`, ...), lowercase. */
@@ -307,6 +314,8 @@ export interface ItemInfo {
   tauntScenes: Record<string, string>;
   /** Taunts only: class -> the prop's own scene name. */
   tauntPropScenes: Record<string, string>;
+  /** Taunts only: class -> the player's scene path (`scenes/player/heavy/low/taunt_x.vcd`): the face it makes. */
+  tauntScenePaths?: Record<string, string>;
   /** A cosmetic from the workshop importer's zips (tf/workshop/import_source), not from the game's own items. */
   workshop: boolean;
 }

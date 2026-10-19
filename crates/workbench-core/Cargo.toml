@@ -2,7 +2,7 @@
 name = "workbench-core"
 version = "0.1.0"
 edition = "2021"
-description = "The app's backend without Tauri: reads the game's files and answers the viewer (desktop commands and the web build's WebAssembly both use it)"
+description = "The app's backend without Tauri: reads the game's files and answers the viewer"
 
 [dependencies]
 source-formats = { path = "../source-formats" }

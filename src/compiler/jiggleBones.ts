@@ -1,3 +1,5 @@
+import * as THREE from "three";
+import { turnMatrix, turnTowards, type BoneTurn } from "./boneAxes";
 import type { JiggleParams } from "../viewer/jiggle";
 
 /**
@@ -154,6 +156,76 @@ export function jiggleParams(s: JiggleSetup): JiggleParams {
     baseMin: [b.left.min, b.up.min, b.forward.min], baseMax: [b.left.max, b.up.max, b.forward.max], baseFriction: [b.left.friction, b.up.friction, b.forward.friction],
     // the model keeps the cosine of the angle (a boing starts when the direction of the movement turns by more than it)
     boingImpactSpeed: s.boing.impactSpeed, boingImpactAngle: Math.cos(rad(s.boing.impactAngle)), boingDampingRate: s.boing.dampingRate, boingFrequency: s.boing.frequency, boingAmplitude: s.boing.amplitude,
+  };
+}
+
+/** Degrees from radians, as a setup stores its angles. */
+const deg = (radians: number) => (radians * 180) / Math.PI;
+
+const _clampM = new THREE.Matrix4();
+const _clampDir = new THREE.Vector3();
+const _clampQ = new THREE.Quaternion();
+const _clampQ2 = new THREE.Quaternion();
+const _Z = new THREE.Vector3(0, 0, 1);
+
+/**
+ * Clamps a hand aim (a turn about the bone's own axes) to the bone's jiggle limits, so an override pose can never point the bone past its
+ * yaw, pitch or angle constraint. Mirrors the solver's checks: yaw swings about Y (the X-Z plane), pitch about X (the Y-Z plane), and the
+ * angle is the deviation from the bone's own +Z. Returns the clamped turn in degrees (no roll: a turn is only an aim here).
+ */
+export function clampAimToLimits(params: JiggleParams, turn: BoneTurn): BoneTurn {
+  const d = _clampDir.setFromMatrixColumn(turnMatrix(turn, _clampM), 2).normalize(); // where this turn points the bone's +Z
+  const f = params.flags;
+  if (f & YAW) {
+    const yaw = Math.atan2(d.x, d.z);
+    const c = Math.min(Math.max(yaw, params.minYaw), params.maxYaw);
+    if (c !== yaw) { const r = Math.hypot(d.x, d.z); d.x = r * Math.sin(c); d.z = r * Math.cos(c); }
+  }
+  if (f & PITCH) {
+    const pitch = Math.atan2(d.y, d.z);
+    const c = Math.min(Math.max(pitch, params.minPitch), params.maxPitch);
+    if (c !== pitch) { const r = Math.hypot(d.y, d.z); d.y = r * Math.sin(c); d.z = r * Math.cos(c); }
+  }
+  d.normalize();
+  if (f & ANGLE) {
+    const angle = Math.acos(Math.min(1, Math.max(-1, d.z)));
+    if (angle > params.angleLimit + 1e-9 && angle > 1e-6) {
+      // bring the deviation from +Z back to the limit, along the same great circle
+      _clampQ.setFromUnitVectors(_Z, d);
+      _clampQ2.identity().slerp(_clampQ, params.angleLimit / angle);
+      d.copy(_Z).applyQuaternion(_clampQ2);
+    }
+  }
+  return turnTowards(d);
+}
+
+/**
+ * The inverse of `jiggleParams`: a `JiggleSetup` from what a compiled model carries, for the READ-ONLY inspector. Angles come back to
+ * degrees and the flags become the on/off switches. The yaw/pitch constraint friction and bounce are not used by the simulation (the
+ * solver zeroes the tip velocity at the limit); they are shown only because the model stores them, and are 0 when a source omits them.
+ */
+export function paramsToSetup(p: JiggleParams): JiggleSetup {
+  const flexible = (p.flags & FLEXIBLE) !== 0;
+  return {
+    mode: flexible ? "flexible" : "rigid",
+    length: p.length, tipMass: p.tipMass,
+    yawStiffness: p.yawStiffness, yawDamping: p.yawDamping, pitchStiffness: p.pitchStiffness, pitchDamping: p.pitchDamping,
+    allowLengthFlex: flexible && (p.flags & LENGTH) === 0, alongStiffness: p.alongStiffness, alongDamping: p.alongDamping,
+    yaw: { on: (p.flags & YAW) !== 0, min: deg(p.minYaw), max: deg(p.maxYaw), friction: p.yawFriction ?? 0, bounce: p.yawBounce ?? 0 },
+    pitch: { on: (p.flags & PITCH) !== 0, min: deg(p.minPitch), max: deg(p.maxPitch), friction: p.pitchFriction ?? 0, bounce: p.pitchBounce ?? 0 },
+    angle: { on: (p.flags & ANGLE) !== 0, limit: deg(p.angleLimit) },
+    baseSpring: {
+      on: (p.flags & BASE) !== 0, mass: p.baseMass, stiffness: p.baseStiffness, damping: p.baseDamping,
+      left: { min: p.baseMin[0], max: p.baseMax[0], friction: p.baseFriction[0] },
+      up: { min: p.baseMin[1], max: p.baseMax[1], friction: p.baseFriction[1] },
+      forward: { min: p.baseMin[2], max: p.baseMax[2], friction: p.baseFriction[2] },
+    },
+    boing: {
+      on: (p.flags & BOING) !== 0, impactSpeed: p.boingImpactSpeed,
+      // the model keeps the cosine of the impact angle; the setup keeps the angle in degrees
+      impactAngle: deg(Math.acos(Math.min(1, Math.max(-1, p.boingImpactAngle)))),
+      dampingRate: p.boingDampingRate, frequency: p.boingFrequency, amplitude: p.boingAmplitude,
+    },
   };
 }
 

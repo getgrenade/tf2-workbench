@@ -13,7 +13,7 @@ const BASE_PRESETS = ["#222226", "#20252c", "#1c2a2a", "#262224", "#161618", "#2
 type BoolKey = { [K in keyof Settings]: Settings[K] extends boolean ? K : never }[keyof Settings];
 
 /** The sections of the tab, in the order of its list. */
-const ALL_SECTIONS = [
+const SECTIONS = [
   { id: "general", label: "General" },
   { id: "interface", label: "Interface" },
   { id: "viewport", label: "Viewport" },
@@ -21,9 +21,7 @@ const ALL_SECTIONS = [
   { id: "rigs", label: "Rigs" },
   { id: "storage", label: "Storage" },
 ] as const;
-/** (the web build keeps nothing on disk: no Storage section) */
-const SECTIONS = ALL_SECTIONS.filter((s) => !(__WEB__ && (s.id === "storage" || s.id === "rigs")));
-type SectionId = (typeof ALL_SECTIONS)[number]["id"];
+type SectionId = (typeof SECTIONS)[number]["id"];
 const SECTION_KEY = "tf2workbench.settingsSection";
 
 /** One boolean setting shown in the Settings tab. Add an entry here (and a field in settings.rs) for a new toggle. */
@@ -181,10 +179,10 @@ export async function createSettingsUi(root: HTMLElement) {
 
   const builders: Record<SectionId, () => HTMLElement[]> = {
     general: () => [group("", ...toggles("general"))],
-    interface: () => [...(__WEB__ ? [] : [group("Size", scaleRow())]), createThemeSection(), group("Display", ...toggles("interface"))],
+    interface: () => [group("Size", scaleRow()), createThemeSection(), group("Display", ...toggles("interface"))],
     viewport: () => [group("Navigation", ...toggles("viewport").slice(0, 2), scrollRow()), group("Screenshots", screenshotRow(), ...toggles("viewport").slice(2))],
     hotkeys: () => [createHotkeysSection()],
-    rigs: () => (__WEB__ ? [] : [createRigSettings()]),
+    rigs: () => [createRigSettings()],
     storage: () => [cacheGroup()],
   };
 

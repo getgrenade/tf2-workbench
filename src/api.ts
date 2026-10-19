@@ -77,7 +77,7 @@ export const listUserCubemaps = () => invoke<string[]>("list_cubemaps");
 /** The path of the cubemaps folder. */
 export const cubemapsDir = () => invoke<string>("cubemaps_dir");
 export const loadOverlayFont = (path: string) => invoke<ArrayBuffer>("load_overlay_font", { path });
-export interface UnusualEffectInfo { id: number; name: string; system: string; kind: "hat" | "taunt"; file: string | null; attachment: string; root_bone: boolean; refire: number;
+export interface UnusualEffectInfo { id: number; name: string; system: string; kind: "hat" | "taunt" | "other"; file: string | null; attachment: string; root_bone: boolean; refire: number;
   /** A custom effect: the zip it came from, and when it was imported (ms). */
   custom?: string; added?: number }
 export interface CustomEffectInfo { name: string; added: number; bytes: number; pcfs: { file: string; systems: string[] }[] }
@@ -92,8 +92,8 @@ export interface NativeParticleNode {
   id: number; name: string; capacity: number; time: number; dt?: number; particles: number[][];
 }
 export const resetNativeParticles = () => invoke<number>("native_particle_reset");
-export const startNativeParticles = (cp: number[], generation: number, file: string, system: string, boxes: number[][] = [], refire = 0, slots = 1) =>
-  invoke<{ handle: number; nodes: NativeParticleNode[] } | null>("native_particle_start", { cp, generation, file, system, boxes, refire, slots });
+export const startNativeParticles = (cp: number[], generation: number, file: string, system: string, boxes: number[][] = [], refire = 0, slots = 1, seed = 273) =>
+  invoke<{ handle: number; nodes: NativeParticleNode[] } | null>("native_particle_start", { cp, generation, file, system, boxes, refire, slots, seed });
 export const stepNativeParticles = (handle: number, ticks: number, cp: number[], boxes: number[][] = [], action = 0, flame: number[] = [], colors: number[] = [], instances: number[][] = [], target: number[] = [], floor: number | null = null) =>
   invoke<ArrayBuffer>("native_particle_step", { handle, ticks, cp, boxes, action, flame, colors, instances, target, floor });
 export interface ProjectileProfile {
@@ -143,6 +143,30 @@ export const prepareWorkshopTaunt = (itemId: number, className: string) =>
 
 /** The cosmetics catalog (JSON bytes); decode with `parseItems`. */
 export const listItems = () => invoke<ArrayBuffer>("list_items");
+/** A choreography scene for playback (see viewer/faceScene.ts); null when the game has none at that path. */
+export const loadScene = (path: string) => invoke<import("./viewer/faceScene").SceneData | null>("load_scene", { path });
+/**
+ * A class's phoneme mouth shapes, two sets: `plain` drives the class model's viseme controllers (AH, EEE, OH, ...), `hwm` the facial
+ * muscles of a high quality head (JawV, Smile, ...).
+ */
+export const phonemeClasses = (className: string) =>
+  invoke<Partial<Record<"plain" | "hwm", import("./viewer/faceScene").PhonemeClasses>>>("phoneme_classes", { class: className });
+/** Of the given scenes (in order), the first that plays a sequence, or null. */
+export const scenePlaying = (paths: string[], sequence: string) => invoke<string | null>("scene_playing", { paths, sequence });
+export interface VoiceLine {
+  /** What the line is for (its response, "Cloaked spy identify"). */
+  group: string;
+  scene: string;
+  sound: { name: string; waves: string[] };
+  /** Seconds. */
+  duration: number;
+}
+/** A class's voice lines, from its response rules. */
+export const voiceLines = (className: string) => invoke<VoiceLine[]>("voice_lines", { class: className });
+/** The lip sync of a wave (the game's phoneme data for its voice lines), or null. */
+export const lipSync = (wave: string) => invoke<import("./viewer/faceScene").LipSync | null>("lip_sync", { wave });
+/** A sound file's bytes (from `sound/`). */
+export const readSound = (wave: string) => invoke<ArrayBuffer>("read_sound", { wave });
 
 /** Writes a text file (scene) the user picked with the save dialog. */
 export const writeTextFile = (path: string, contents: string) => invoke<void>("write_text_file", { path, contents });
@@ -215,9 +239,19 @@ export const rewriteModelFile = (path: string, bytes: Uint8Array) =>
 export const loadSession = () => invoke<string | null>("load_session");
 export const saveSession = (contents: string) => invoke<void>("save_session", { contents });
 
+/** The promo boards kept between runs (see viewer/promoStore.ts): a folder per board in the app's config folder. */
+export const savePromoFile = (id: string, name: string, bytes: Uint8Array) =>
+  invoke<void>("save_promo_file", bytes, { headers: { id: encodeURIComponent(id), name: encodeURIComponent(name) } });
+export const readPromoFile = (id: string, name: string) => invoke<ArrayBuffer>("read_promo_file", { id, name });
+export const listPromos = () => invoke<string[]>("list_promos");
+export const removePromo = (id: string) => invoke<void>("remove_promo", { id });
+
 /** The pose library (files in the app's config folder): names newest first, save, load and delete. */
 /** Rescans the workshop importer's zips (tf/workshop/import_source) without reindexing the game. */
 export const refreshWorkshop = () => invoke<void>("refresh_workshop");
+
+/** Takes dropped item zips to mount in place (read-only, this session only): the next workshop refresh shows them under the Workshop filter. */
+export const mountItemZips = (paths: string[]) => invoke<void>("mount_item_zips", { paths });
 /** A value that changes when those zips do. */
 export const workshopStamp = () => invoke<string>("workshop_stamp");
 export const listPoses = () => invoke<string[]>("list_poses");

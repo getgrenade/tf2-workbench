@@ -32,7 +32,7 @@ const axisVector = (axis: number, sign: number): [number, number, number] => {
 /** The ints of the GlobalSettings block that describe the axis system. */
 interface AxisSettings { UpAxis?: number; UpAxisSign?: number; FrontAxis?: number; FrontAxisSign?: number; CoordAxis?: number; CoordAxisSign?: number }
 
-function axesFrom(s: AxisSettings): FbxAxes {
+export function axesFrom(s: AxisSettings): FbxAxes {
   if (s.UpAxis === undefined) return MAYA_AXES;
   const up = axisVector(s.UpAxis, s.UpAxisSign ?? 1);
   const right = axisVector(s.CoordAxis ?? 0, s.CoordAxisSign ?? 1);
@@ -210,10 +210,17 @@ export function weldFlexes(parts: ImportedPart[], moves: FlexMoves): ImportedFle
 /** A 1x1 image for every texture the file names: the loader would otherwise try to fetch them. */
 const BLANK_IMAGE = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
 
-export function importFbx(buffer: ArrayBuffer): ImportedModel {
+/**
+ * How a model file is read. `strict`: as the game's item importer reads it (its FBX converter, dmfbxserializer, as the files it hands studiomdl
+ * show): the axis settings of the file are not looked at (the scene is taken as it is, Y up), and the armature node of Blender is a bone of the
+ * model. A file exported with the wrong axes then comes out turned, and the extra bone counts, as they will in the game.
+ */
+export interface ImportOptions { strict?: boolean }
+
+export function importFbx(buffer: ArrayBuffer, options: ImportOptions = {}): ImportedModel {
   const manager = new THREE.LoadingManager();
   manager.setURLModifier(() => BLANK_IMAGE);
-  const load = (data: ArrayBuffer) => importScene(new FBXLoader(manager).parse(data, ""), readFbxAxes(data), importerMaterialNames(buffer));
+  const load = (data: ArrayBuffer) => importScene(new FBXLoader(manager).parse(data, ""), options.strict ? MAYA_AXES : readFbxAxes(data), importerMaterialNames(buffer), options.strict === true);
   // what the loader trips on is mended (one thing at a time, as it fails on them one at a time), and the file read again
   let data = buffer;
   for (let attempt = 0; ; attempt++) {
@@ -231,7 +238,7 @@ export function importFbx(buffer: ArrayBuffer): ImportedModel {
 }
 
 /** The model of a loaded scene (the part of the import that the file format has no say in). */
-export function importScene(root: THREE.Object3D, axes: FbxAxes, materialNames = new Map<string, string>()): ImportedModel {
+export function importScene(root: THREE.Object3D, axes: FbxAxes, materialNames = new Map<string, string>(), armatureBones = false): ImportedModel {
   root.updateMatrixWorld(true);
   // p -> (p . right, p . up, p . front): the file's frame to the Y-up frame
   const toGame = new THREE.Matrix4().set(
@@ -241,19 +248,23 @@ export function importScene(root: THREE.Object3D, axes: FbxAxes, materialNames =
     0, 0, 0, 1,
   );
 
+  // (the armature nodes: what the bones hang on that is not a bone)
+  const armatureNodes = new Set<THREE.Object3D>();
+  root.traverse((o) => {
+    if (o !== root && !(o as THREE.Bone).isBone && !(o as THREE.Mesh).isMesh && o.name && o.children.some((c) => (c as THREE.Bone).isBone)) armatureNodes.add(o);
+  });
+  // the importer takes an armature node for a bone, the first of the skeleton (see ImportOptions)
+  const isBone = (o: THREE.Object3D) => (o as THREE.Bone).isBone || (armatureBones && armatureNodes.has(o));
   const skeletonOf = new Map<string, { parent: string | null; world: number[] }>();
   root.traverse((o) => {
-    if (!(o as THREE.Bone).isBone || !o.name) return;
+    if (!isBone(o) || !o.name) return;
     let parent = o.parent;
-    while (parent && !((parent as THREE.Bone).isBone && parent.name !== o.name)) parent = parent.parent;
+    while (parent && !(isBone(parent) && parent.name !== o.name)) parent = parent.parent;
     if (!skeletonOf.has(o.name)) skeletonOf.set(o.name, { parent: parent && parent.name ? parent.name : null, world: new THREE.Matrix4().multiplyMatrices(toGame, o.matrixWorld).toArray() });
   });
 
   const armatures: string[] = [];
-  root.traverse((o) => {
-    if (o === root || (o as THREE.Bone).isBone || (o as THREE.Mesh).isMesh || !o.name) return;
-    if (o.children.some((c) => (c as THREE.Bone).isBone) && !armatures.includes(o.name)) armatures.push(o.name);
-  });
+  for (const o of armatureNodes) if (!armatures.includes(o.name)) armatures.push(o.name);
 
   const accumulate = new Map<string, Builder>();
   const slotOrder: string[] = [];

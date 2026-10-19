@@ -130,3 +130,38 @@ fn a_sentry_fire_is_baked_over_its_running_sequence() {
     let drift: f32 = (0..nb).map(|b| (0..3).map(|k| (clip.pos[b * 3 + k] - rest.pos[b][k]).abs()).sum::<f32>()).sum();
     assert!(drift < 5.0, "frame 0 stays the idle pose: {drift}");
 }
+
+#[test]
+fn aiming_up_does_not_lift_the_feet() {
+    let Some(set) = load("soldier") else { return };
+    let i = set.find_sequence("stand_primary").unwrap();
+    let names = set.bone_names();
+    let foot = names.iter().position(|n| n == "bip_foot_L").unwrap();
+    let pitch = set.pose_params.iter().position(|p| p.name == "body_pitch").unwrap();
+    let foot_at = |degrees: f32| {
+        let mut params = set.default_pose_params();
+        let p = &set.pose_params[pitch];
+        params[pitch] = (degrees - p.start) / (p.end - p.start);
+        let clip = set.bake(i, &params);
+        // the first frame's foot, in model space
+        let pose = source_formats::anim::Pose { pos: (0..clip.num_bones).map(|b| [clip.pos[b * 3], clip.pos[b * 3 + 1], clip.pos[b * 3 + 2]]).collect(), quat: (0..clip.num_bones).map(|b| [clip.quat[b * 4], clip.quat[b * 4 + 1], clip.quat[b * 4 + 2], clip.quat[b * 4 + 3]]).collect() };
+        set.world_positions(&pose)[foot]
+    };
+    let level = foot_at(0.0);
+    for degrees in [45.0, 90.0, -45.0] {
+        let at = foot_at(degrees);
+        let moved = ((at[0] - level[0]).powi(2) + (at[1] - level[1]).powi(2) + (at[2] - level[2]).powi(2)).sqrt();
+        assert!(moved < 0.5, "the foot moved {moved} at pitch {degrees}: {level:?} -> {at:?}");
+    }
+}
+
+#[test]
+fn a_taunts_window_is_inside_the_blends_over_the_stand_pose() {
+    let Some(set) = load("scout") else { return };
+    let i = set.find_sequence("taunt01").unwrap();
+    // taunt01 brings its layer in over the first 5.6% of the cycle and out over the last 5.6%
+    let (lo, hi) = set.taunt_window(i).unwrap();
+    assert!((lo - 0.056).abs() < 0.02 && (hi - 0.944).abs() < 0.02, "{lo} {hi}");
+    // a sequence that is not a taunt has none
+    assert!(set.taunt_window(set.find_sequence("stand_primary").unwrap()).is_none());
+}

@@ -44,3 +44,4 @@ test("frames slower than the framerate cutoff fall back to the goal matrix", () 
   const m = bone.update(0.3, goalAt(5), down); // 300 ms gap (< 20 fps) but < 0.5 s: no re-init, goal used
   assert.ok(Math.abs(new THREE.Vector3().setFromMatrixPosition(m).x - 5) < 1e-9);
 });
+

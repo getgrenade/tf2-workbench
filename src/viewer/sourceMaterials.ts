@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { particleBlending } from "./particles/blending";
 import { eyeFragmentShader, eyeVertexShader } from "./eyeShader";
-import { parseVec, resolvePhongTint, type EyeballData, type MaterialData, type TextureData } from "./payload";
+import { parseColor, parseVec, resolvePhongTint, type EyeballData, type MaterialData, type TextureData } from "./payload";
 import { animationFrame, baseTextureAnimation, evaluateMaterialVars, hasTimeProxies, type FrameAnimation, type MaterialEffects, modulationColor, textureTransform, type Rgb } from "./proxies";
 import { fragmentShader, vertexShader } from "./sourceShader";
 import { loadTextureFrames } from "../api";
@@ -45,6 +45,8 @@ export class SourceMaterials {
     Array.from({ length: 6 }, () => makeTexture({ width: 1, height: 1, rgba: new Uint8Array([0, 0, 0, 255]) }, "linear")),
   );
   readonly white = makeTexture({ width: 1, height: 1, rgba: new Uint8Array([255, 255, 255, 255]) }, "srgb");
+  /** What a material without a diffuse texture shows (the compiler's preview before a texture is picked): 50% grey. */
+  readonly grey = makeTexture({ width: 1, height: 1, rgba: new Uint8Array([128, 128, 128, 255]) }, "srgb");
   wireframe = false;
   private dynamic: DynamicMaterial[] = [];
   /** Animated detail textures by name, once loaded (null: loading or unavailable). */
@@ -99,7 +101,7 @@ export class SourceMaterials {
     const ao = this.texture(m, "ao");
     const warp = this.texture(m, "warp");
     const cube = this.cubemap(m);
-    const [aoR, aoG, aoB] = parseVec(p["$ambientocclcolor"], [0.33, 0.33, 0.33]);
+    const [aoR, aoG, aoB] = parseColor(p["$ambientocclcolor"], [0.33, 0.33, 0.33]);
     return new THREE.ShaderMaterial({
       vertexShader: eyeVertexShader,
       fragmentShader: eyeFragmentShader,
@@ -204,7 +206,7 @@ export class SourceMaterials {
     const vars = evaluateMaterialVars(p, m?.proxies ?? [], { paint, time: now, fx });
     const modulation = modulationColor(vars);
     if (refract && p["$refracttint"]) {
-      const t = parseVec(p["$refracttint"], [1, 1, 1]);
+      const t = parseColor(p["$refracttint"], [1, 1, 1]);
       for (let i = 0; i < 3; i++) modulation[i] *= Math.pow(Math.min(Math.max(t[i] ?? t[0], 0), 1), 2.2);
     }
     const xf = textureTransform(vars);
@@ -217,12 +219,12 @@ export class SourceMaterials {
     const siBias = siMax !== 0 ? siMin / siMax : 0;
     // proxies may drive the tint (Sine on $selfillumtint pulses the glow)
     const siTintVar = vars["$selfillumtint"];
-    const siTint = siTintVar ? [siTintVar[0] ?? 1, siTintVar[1] ?? siTintVar[0] ?? 1, siTintVar[2] ?? siTintVar[0] ?? 1] : parseVec(p["$selfillumtint"], [1, 1, 1]);
+    const siTint = siTintVar ? [siTintVar[0] ?? 1, siTintVar[1] ?? siTintVar[0] ?? 1, siTintVar[2] ?? siTintVar[0] ?? 1] : parseColor(p["$selfillumtint"], [1, 1, 1]);
     const additive = flag("$additive");
     // CBaseShader::TextureIsTranslucent: the base texture's alpha is opacity only on a $translucent or $alphatest material, and not when it is the
     // self-illum mask or the envmap mask ($opaquetexture says it never is)
     const baseAlphaIsOpacity = (translucent || alphaTest) && !selfIllum && !flag("$basealphaenvmapmask") && !flag("$opaquetexture");
-    const envTint = parseVec(p["$envmaptint"], [1, 1, 1]);
+    const envTint = parseColor(p["$envmaptint"], [1, 1, 1]);
     const phong = flag("$phong") && !eyes;
     // WantsSkinShader() in vertexlitgeneric_dx9_helper.cpp: phong materials with a lightwarp (or
     // base-alpha phong mask, or a bump map) are drawn by the Skin shader, which forces half-lambert.
@@ -247,7 +249,7 @@ export class SourceMaterials {
       ...(decalModulate ? { transparent: true, blending: THREE.CustomBlending, blendEquation: THREE.AddEquation, blendSrc: THREE.DstColorFactor, blendDst: THREE.SrcColorFactor, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 } : {}),
       uniforms: {
         ...this.shared,
-        tBase: { value: base ?? this.white },
+        tBase: { value: base ?? this.grey },
         tBodyMask: { value: this.white },
         uBodyHideBits: { value: 0 },
         tBump: { value: bump ?? this.white },
@@ -307,6 +309,7 @@ export class SourceMaterials {
         uInvertPhongMask: { value: flag("$invertphongmask") },
         uModulation: { value: new THREE.Vector3(modulation[0], modulation[1], modulation[2]) },
         uUvXf: { value: new THREE.Matrix3().set(xf?.[0] ?? 1, xf?.[1] ?? 0, xf?.[2] ?? 0, xf?.[3] ?? 0, xf?.[4] ?? 1, xf?.[5] ?? 0, 0, 0, 1) },
+        uGray: { value: fx?.gray ? 1 : 0 },
         uBlendTint: { value: blendTint },
         uTintReplace: { value: num("$blendtintcoloroverbase", 0) },
         uSelfIllum: { value: selfIllum },
@@ -315,6 +318,21 @@ export class SourceMaterials {
         uSelfIllumFresnelParams: { value: new THREE.Vector4(1 - siBias, siBias, siExp, siMax) },
       },
     });
+    // Plain grey: lit by the lights alone (no normal map, specular, environment, rim or glow), the texture's alpha still cutting the shape out
+    if (fx?.gray) {
+      const u = material.uniforms;
+      u.uHasBump.value = false;
+      u.uPhong.value = false;
+      u.uHasEnv.value = false;
+      u.uRim.value = false;
+      u.uSelfIllum.value = false;
+      u.uHasIllumMask.value = false;
+      u.uHasPhongWarp.value = false;
+      u.uHasDetail.value = false;
+      u.uDetailMode.value = -1;
+      u.uHasTex2.value = false;
+      u.uBlendTint.value = false;
+    }
     // Animated base textures (the Festive lights): frame 0 is `base`, the others `base_f1`, `base_f2`, ...
     const anim = m ? baseTextureAnimation(m.proxies) : null;
     const frames: THREE.Texture[] = [];

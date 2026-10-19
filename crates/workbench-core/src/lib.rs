@@ -3,3 +3,4 @@ pub mod dispatch;
 pub mod game;
 pub mod payload;
 pub mod state;
+pub mod voice;

@@ -18,6 +18,8 @@ pub struct AppState {
     /// Encoded cosmetics catalog (parsed once per indexed install).
     items: Mutex<Option<Arc<Vec<u8>>>>,
     particles: Mutex<Option<Arc<HashMap<String, String>>>>,
+    /// The taunts' scenes and the expressions they name (see voice.rs), read on first use.
+    pub(crate) voice: Mutex<Option<Arc<crate::voice::VoiceData>>>,
 }
 
 impl AppState {
@@ -28,6 +30,7 @@ impl AppState {
         self.anims.lock().unwrap().clear();
         *self.items.lock().unwrap() = None;
         *self.particles.lock().unwrap() = None;
+        *self.voice.lock().unwrap() = None;
     }
 
     /// Forgets the models and materials that were read (a folder of loose files was mounted or built into: what it has may be newer).
@@ -55,6 +58,13 @@ impl AppState {
         self.materials.lock().unwrap().retain(|k, _| !is_workshop(k));
         self.anims.lock().unwrap().retain(|k, _| !is_workshop(k));
         *self.items.lock().unwrap() = None;
+        Ok(())
+    }
+
+    /// Takes dropped item zips to mount in place (read-only, session-only); `refresh_workshop` mounts them and forgets the caches, once
+    /// for all of them.
+    pub fn mount_item_zips(&self, paths: Vec<std::path::PathBuf>) -> Result<(), String> {
+        self.vpk()?.add_item_zips(paths);
         Ok(())
     }
 

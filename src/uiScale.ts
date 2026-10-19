@@ -24,8 +24,6 @@ async function apply(value: number): Promise<void> {
   const scale = scaleFor(value);
   if (!first && Math.abs(scale - applied) < 0.005) return;
   first = false;
-  // the browser has its own zoom: only the desktop app scales its web view
-  if (__WEB__) return;
   const { getCurrentWebview } = await import("@tauri-apps/api/webview");
   try { await getCurrentWebview().setZoom(scale); applied = scale; } catch (error) { console.error("UI scale", error); }
 }

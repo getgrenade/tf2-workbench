@@ -294,7 +294,11 @@ test("an armature node of an FBX is an extra bone for the importer: it is told o
   s.data.smartFill = false;
   await s.setLod("sniper", 0, "C:/art/hat.fbx");
   assert.deepEqual(s.model("sniper", 0)!.armatures, ["sniper_ARM"]);
-  assert.deepEqual(s.model("sniper", 0)!.skeleton.map((b) => b.name), ["bip_head"], "the node is no bone of the skeleton that is read");
+  // read as the item importer reads it, the node is a bone (the first); read leniently, it is not
+  assert.deepEqual(s.model("sniper", 0)!.skeleton.map((b) => b.name), ["sniper_ARM", "bip_head"], "the importer takes the node for a bone");
+  await s.setStrictImporter(false);
+  assert.deepEqual(s.model("sniper", 0)!.skeleton.map((b) => b.name), ["bip_head"], "read leniently, the node is no bone");
+  await s.setStrictImporter(true);
   assert.ok(s.issues().some((i) => i.key === "armature:C:/art/hat.fbx" && /sniper_ARM/.test(i.text)));
   const result = await s.removeArmatures(async (path, bytes) => { files[path] = bytes.slice().buffer as ArrayBuffer; });
   assert.deepEqual(result.written, ["C:/art/hat.fbx"]);

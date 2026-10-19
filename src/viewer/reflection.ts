@@ -15,7 +15,6 @@ export function cubemapLabel(name: string): string {
 
 /** The cubemaps of the cubemaps folder, asked for every time (a file that was put there shows up without a restart). */
 export async function listCubemaps(): Promise<string[]> {
-  if (__WEB__) return [];
   return (await listUserCubemaps()).map(userCubemapName);
 }
 

@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import type { ImportedModel, ImportedPart } from "./fbx";
 import { turnedWorld, type BoneTurn } from "./boneAxes";
+import { axesFrom } from "./fbx";
+import type { MeshFrame } from "./fbxStrip";
 
 /**
  * Writes an imported model back out as a binary FBX (version 7400, Y up) laid out the way Blender's exporter lays out a model for the item
@@ -135,10 +137,52 @@ export interface FbxOptions {
   armature?: string;
   /** For the tests: an empty node of this name that no connection mentions (as some exports have), to see that such a file still reads. */
   orphanNull?: string;
+  /**
+   * The axes and the mesh node of another file to write the mesh as it has it (see meshFrame): its vertices in that node's own space, the node's
+   * transform on the mesh node. For a LOD of an artist's LOD 0: the item importer gives a LOD the skin of LOD 0 by the vertices as the files have
+   * them, and Blender opens it with no turn left on the object.
+   */
+  frame?: MeshFrame;
+}
+
+/** The transform of the mesh node (that of the frame's, none without one). */
+function meshPlacement(frame: MeshFrame | undefined): Node[] {
+  if (!frame) return [];
+  const p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
+  frame.mesh.decompose(p, q, s);
+  const e = new THREE.Euler().setFromQuaternion(q, "ZYX"), deg = (r: number) => (r * 180) / Math.PI;
+  return [
+    P("Lcl Translation", "Lcl Translation", "", "A", D(p.x), D(p.y), D(p.z)),
+    P("Lcl Rotation", "Lcl Rotation", "", "A", D(deg(e.x)), D(deg(e.y)), D(deg(e.z))),
+    P("Lcl Scaling", "Lcl Scaling", "", "A", D(s.x), D(s.y), D(s.z)),
+  ];
+}
+
+/** The model with its vertices in the space of a frame's mesh node (they are in the game's axes: see importScene). */
+function inFrame(model: ImportedModel, frame: MeshFrame): ImportedModel {
+  const axes = axesFrom(frame.axes);
+  // p (game) = toGame * p (file): toGame's rows are the file's right, up and front
+  const toGame = new THREE.Matrix4().set(...axes.right, 0, ...axes.up, 0, ...axes.front, 0, 0, 0, 0, 1);
+  const toNode = frame.mesh.clone().invert().multiply(toGame.clone().invert());
+  const turn = new THREE.Matrix3().getNormalMatrix(toNode);
+  const p = new THREE.Vector3();
+  return {
+    ...model,
+    parts: model.parts.map((part) => {
+      const positions = new Float32Array(part.positions.length), normals = new Float32Array(part.normals.length);
+      for (let i = 0; i < positions.length; i += 3) {
+        p.fromArray(part.positions, i).applyMatrix4(toNode).toArray(positions, i);
+        p.fromArray(part.normals, i).applyMatrix3(turn).normalize().toArray(normals, i);
+      }
+      return { ...part, positions, normals };
+    }),
+  };
 }
 
 export function writeFbx(model: ImportedModel, turns: Record<string, BoneTurn> = {}, options: FbxOptions = {}): Uint8Array {
   const withSkeleton = options.skeleton !== false;
+  if (options.frame) model = inFrame(model, options.frame);
+  const axisSetting = (key: string, fallback: number) => I(options.frame?.axes[key] ?? fallback);
   let nextId = 100000;
   const id = () => (nextId += 7919);
   const connections: Node[] = [];
@@ -190,7 +234,7 @@ export function writeFbx(model: ImportedModel, turns: Record<string, BoneTurn> =
   const geometryId = id();
   objects.push(node("Model", [L(meshId), S(objectName("mesh", "Model")), S("Mesh")], [
     node("Version", [I(232)]),
-    node("Properties70", [], [P("DefaultAttributeIndex", "int", "Integer", "", I(0)), P("InheritType", "enum", "", "", I(1))]),
+    node("Properties70", [], [P("DefaultAttributeIndex", "int", "Integer", "", I(0)), P("InheritType", "enum", "", "", I(1)), ...meshPlacement(options.frame)]),
     node("MultiLayer", [I(0)]),
     node("MultiTake", [I(0)]),
     node("Shading", [{ t: "C", v: true }]),
@@ -226,7 +270,7 @@ export function writeFbx(model: ImportedModel, turns: Record<string, BoneTurn> =
     counts.Material++;
     connect(material_, meshId);
   }
-  if (withSkeleton) skinNodes(merged, geometryId, boneId, worlds, objects, connect, id, counts);
+  if (withSkeleton) skinNodes(merged, geometryId, boneId, worlds, model.skeleton, objects, connect, id, counts);
   if (withSkeleton && boneId.size) {
     // the bind pose: the mesh and each bone where they were
     const poseNodes = [[meshId, new THREE.Matrix4().elements], ...[...boneId].map(([name, bid]) => [bid, worlds.get(name)!.elements] as [number, ArrayLike<number>])];
@@ -276,9 +320,9 @@ export function writeFbx(model: ImportedModel, turns: Record<string, BoneTurn> =
     node("GlobalSettings", [], [
       node("Version", [I(1000)]),
       node("Properties70", [], [
-        P("UpAxis", "int", "Integer", "", I(1)), P("UpAxisSign", "int", "Integer", "", I(1)),
-        P("FrontAxis", "int", "Integer", "", I(2)), P("FrontAxisSign", "int", "Integer", "", I(1)),
-        P("CoordAxis", "int", "Integer", "", I(0)), P("CoordAxisSign", "int", "Integer", "", I(1)),
+        P("UpAxis", "int", "Integer", "", axisSetting("UpAxis", 1)), P("UpAxisSign", "int", "Integer", "", axisSetting("UpAxisSign", 1)),
+        P("FrontAxis", "int", "Integer", "", axisSetting("FrontAxis", 2)), P("FrontAxisSign", "int", "Integer", "", axisSetting("FrontAxisSign", 1)),
+        P("CoordAxis", "int", "Integer", "", axisSetting("CoordAxis", 0)), P("CoordAxisSign", "int", "Integer", "", axisSetting("CoordAxisSign", 1)),
         P("OriginalUpAxis", "int", "Integer", "", I(-1)), P("OriginalUpAxisSign", "int", "Integer", "", I(1)),
         P("UnitScaleFactor", "double", "Number", "", D(100)), P("OriginalUnitScaleFactor", "double", "Number", "", D(100)),
         P("AmbientColor", "ColorRGB", "Color", "", D(0), D(0), D(0)),
@@ -430,9 +474,14 @@ function blendShapeNodes(
   }
 }
 
-/** The skin of the mesh: a cluster for each bone it uses (the vertices and weights), with the bone's bind matrix. */
+/**
+ * The skin of the mesh: a cluster for each bone (the vertices and weights it moves), with the bone's bind matrix. A bone that moves nothing gets an
+ * empty cluster, as Blender writes it: the item importer only takes bones that have a cluster, and without one a bone the others hang from
+ * (`bip_head` above a hat's jiggle bones) is lost, with the attachments and the $bonetreecollapse that name it. The leaf bones Blender adds at
+ * the ends of chains (`*_end`) have none, as in Blender's files.
+ */
 function skinNodes(
-  mesh: Merged, geometry: number, boneId: Map<string, number>, worlds: Map<string, THREE.Matrix4>, objects: Node[],
+  mesh: Merged, geometry: number, boneId: Map<string, number>, worlds: Map<string, THREE.Matrix4>, skeleton: { name: string; parent: string | null }[], objects: Node[],
   connect: (child: number, parent: number) => void, id: () => number, counts: Record<string, number>,
 ) {
   const byBone = new Map<string, { indexes: number[]; weights: number[] }>();
@@ -453,11 +502,12 @@ function skinNodes(
     }
   });
   if (!byBone.size) return;
+  const parents = new Set(skeleton.map((b) => b.parent));
+  for (const b of skeleton) if (!byBone.has(b.name) && boneId.has(b.name) && !(/_end$/i.test(b.name) && !parents.has(b.name))) byBone.set(b.name, { indexes: [], weights: [] });
   const skin = id();
   objects.push(node("Deformer", [L(skin), S(objectName("skin", "Deformer")), S("Skin")], [node("Version", [I(101)]), node("Link_DeformAcuracy", [D(50)]), node("SkinningType", [S("Linear")])]));
   counts.Deformer++;
   connect(skin, geometry);
-  const identity = new THREE.Matrix4().elements;
   for (const [name, entry] of byBone) {
     const cluster = id();
     objects.push(node("Deformer", [L(cluster), S(objectName(name, "SubDeformer")), S("Cluster")], [
@@ -465,7 +515,9 @@ function skinNodes(
       node("UserData", [S(""), S("")]),
       node("Indexes", [{ t: "i", v: entry.indexes }]),
       node("Weights", [{ t: "d", v: entry.weights }]),
-      node("Transform", [{ t: "d", v: identity }]),
+      // As Blender writes it (and the item importer reads it): Transform is the bone's bind matrix undone, times the mesh's (which is the identity
+      // here), so that TransformLink * Transform is the mesh. The identity there (the mesh's matrix, as the FBX SDK has it) loses the skin in the importer.
+      node("Transform", [{ t: "d", v: worlds.get(name)!.clone().invert().elements }]),
       node("TransformLink", [{ t: "d", v: worlds.get(name)!.elements }]),
     ]));
     counts.Deformer++;

@@ -63,3 +63,51 @@ fn a_workshop_taunt_is_baked_over_its_class_stand_pose() {
     assert!(dot(q(&over, last), stand.quat[0]) > 0.99, "ends in the stand pose");
     assert!(dot(q(&alone, 0), stand.quat[0]) < 0.99, "alone, its first frame is not the stand pose");
 }
+
+/// The schema file beside the zips says what a zip cannot: in items_game's words, laid over the zip's item by import name.
+#[test]
+fn the_workshop_schema_file_lays_over_a_zip_s_item() {
+    let game = r#""items_game" { "prefabs" { "hat" { "item_slot" "head" "item_class" "tf_wearable" } } "items" {} }"#;
+    let manifest = r#""asset" { "ImportSession" { "name" "cighat"
+        "ItemSchema" { "prefab" "hat" "import_name" "cighat" "model_player" "models/workshop/player/items/pyro/cighat/cighat.mdl" "used_by_classes" { "pyro" "1" } }
+    } }"#;
+    let style = r#""asset" { "ImportSession" { "name" "cighat_style"
+        "ItemSchema" { "prefab" "hat" "import_name" "cighat_style" "model_player" "models/workshop/player/items/pyro/cighat_style/cighat_style.mdl" "used_by_classes" { "pyro" "1" } }
+    } }"#;
+    let schema = r#""items" {
+        "cighat" {
+            "item_name" "The Cigarette Hat"
+            "equip_region" "hat"
+            "capabilities" { "paintable" "1" }
+            "attributes" { "attach particle effect static" { "attribute_class" "set_attached_particle_static" "value" "28" } }
+            "visuals" {
+                "player_bodygroups" { "hat" "1" }
+                "styles" { "0" { "name" "Lit" } "1" { "name" "Unlit" "model_player" "models/workshop/player/items/pyro/cighat_style/cighat_style.mdl" } }
+                "attached_particlesystems" { "0" { "system" "headphone_notes" "attachment" "ear_L" } }
+            }
+        }
+        "nobody" { "equip_region" "hat" }
+    }"#;
+    let manifests = vec![("cighat".into(), manifest.into()), ("cighat_style".into(), style.into())];
+    let db = items::parse_with_schema(game, &HashMap::new(), &manifests, Some(schema)).unwrap();
+    let hat = db.items.iter().find(|i| i.name == "cighat").unwrap();
+    assert_eq!(hat.display_name, "The Cigarette Hat");
+    assert_eq!(hat.equip_regions, vec!["hat"]);
+    assert!(hat.paintable);
+    assert_eq!(hat.bodygroups["hat"], 1);
+    assert_eq!(hat.styles.len(), 2);
+    assert_eq!(hat.styles[1].name, "Unlit");
+    assert_eq!(hat.styles[1].model.as_deref(), Some("models/workshop/player/items/pyro/cighat_style/cighat_style.mdl"));
+    assert_eq!(hat.particles.len(), 2);
+    assert_eq!(hat.particles[0].effect, Some(28));
+    assert_eq!(hat.particles[1].system.as_deref(), Some("headphone_notes"));
+    assert_eq!(hat.particles[1].attachment.as_deref(), Some("ear_L"));
+    // what the schema does not say stays as the zip had it
+    assert_eq!(hat.model.as_deref(), Some("models/workshop/player/items/pyro/cighat/cighat.mdl"));
+    assert_eq!(hat.classes, vec!["pyro"]);
+    // the style zip is still an item of the catalog here (the interface takes it out as a style of the hat)
+    assert!(db.items.iter().any(|i| i.name == "cighat_style"));
+    // without the file, nothing changes
+    let plain = items::parse_with(game, &HashMap::new(), &manifests).unwrap();
+    assert!(plain.items.iter().find(|i| i.name == "cighat").unwrap().styles.is_empty());
+}

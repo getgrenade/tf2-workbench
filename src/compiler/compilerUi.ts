@@ -98,6 +98,7 @@ function appendAll(parent: ParentNode, ...children: Child[]) { for (const c of c
 
 export function createCompilerUi(host: CompilerHost) {
   const session = new CompilerSession(host.io);
+  if (import.meta.env.DEV) (window as unknown as { __compilerSession: unknown }).__compilerSession = session;
   let active = false;
   let loaded = false;
   let timer = 0;
@@ -124,7 +125,7 @@ export function createCompilerUi(host: CompilerHost) {
   // the compiler builds cosmetics, and (in the desktop program) props: one switch at the top says which
   type Mode = "cosmetic" | "prop";
   let mode: Mode = "cosmetic";
-  const propsAvailable = !__WEB__ && !!host.pickFolder && !!host.setPropPreview && !!host.buildProp && !!host.openPropSession;
+  const propsAvailable = !!host.pickFolder && !!host.setPropPreview && !!host.buildProp && !!host.openPropSession;
   try { if (propsAvailable && localStorage.getItem("tf2workbench.compilerMode") === "prop") mode = "prop"; } catch { /* the cosmetic side */ }
   const propUi = propsAvailable
     ? createPropCompilerUi({ io: host.io, pick: (kind, current) => host.pick(kind, current), pickFolder: (current) => host.pickFolder!(current), setPreview: (p) => host.setPropPreview!(p), build: (request) => host.buildProp!(request), openSession: (path) => host.openPropSession!(path), reveal: host.reveal ? (path) => host.reveal!(path) : undefined })
@@ -510,6 +511,7 @@ export function createCompilerUi(host: CompilerHost) {
     region.onchange = () => { d.region = region.value; changed(false); };
     const teamSwitch = checkbox("Team colours", d.teamColors, (on) => { session.setTeamColors(on); changed(true); }, "A RED and a BLU skin: each material gets a BLU diffuse texture and its own tints; the other textures are shared");
     const smartFill = checkbox("Smart fill", d.smartFill, (on) => { d.smartFill = on; changed(false); }, SMART_FILL_RULES);
+    const strict = checkbox("Strict importer", d.strictImporter, (on) => { void session.setStrictImporter(on); }, "Read the models exactly as the game's item importer does, so what would go wrong there goes wrong here too: the axis settings of an FBX are ignored (a model exported with the wrong up axis comes out turned, as in the game), and Blender's armature node is a bone of the item. Off: the axes are read from the file and the armature node is left out.");
     const tempLods = checkbox("Temporary LODs", d.tempLods, (on) => { d.tempLods = on; changed(true); }, "LOD 1 and LOD 2 that have no file are made from LOD 0: lighter copies that fit the triangle budgets and keep every material, with the skin of LOD 0. To try the item in the game before the real LODs are made; they are built into the item like real ones.");
     const bodygroups = h("div", { className: "chips" });
     for (const b of BODYGROUPS) {
@@ -638,6 +640,7 @@ Choose another .tga` : "Choose the backpack icon (.tga)" });
           teamSwitch,
           smartFill,
           tempLods,
+          strict,
           select("Compression", d.compression, [{ value: "none", label: "None" }, { value: "dxt", label: "DXT" }], (v) => { d.compression = v; changed(false); }),
           h("label", { textContent: "Hides" }), bodygroups),
         h("div", { className: "cmpIcon" },

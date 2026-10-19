@@ -112,8 +112,12 @@ struct JiggleJson {
     angle_limit: f32,
     min_yaw: f32,
     max_yaw: f32,
+    yaw_friction: f32,
+    yaw_bounce: f32,
     min_pitch: f32,
     max_pitch: f32,
+    pitch_friction: f32,
+    pitch_bounce: f32,
     base_mass: f32,
     base_stiffness: f32,
     base_damping: f32,
@@ -142,8 +146,12 @@ impl From<&source_formats::mdl::Jiggle> for JiggleJson {
             angle_limit: j.angle_limit,
             min_yaw: j.min_yaw,
             max_yaw: j.max_yaw,
+            yaw_friction: j.yaw_friction,
+            yaw_bounce: j.yaw_bounce,
             min_pitch: j.min_pitch,
             max_pitch: j.max_pitch,
+            pitch_friction: j.pitch_friction,
+            pitch_bounce: j.pitch_bounce,
             base_mass: j.base_mass,
             base_stiffness: j.base_stiffness,
             base_damping: j.base_damping,
@@ -352,6 +360,9 @@ struct SeqJson {
     hidden: bool,
     /// The authored activity (`ACT_MP_THROW`), empty for a sequence that has none.
     activity: String,
+    /// A taunt's part of the cycle (0..1) outside the blends in and out of it (see `taunt_window`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    window: Option<[f32; 2]>,
 }
 
 #[derive(Serialize)]
@@ -379,7 +390,7 @@ pub fn encode_anim_info(set: &source_formats::anim::AnimSet) -> Vec<u8> {
         sequences: set
             .sequences()
             .into_iter()
-            .map(|s| { let activity = set.activity_name(s.index); SeqJson { index: s.index, name: s.name, frames: s.frames, fps: s.fps, looping: s.looping, hidden: s.hidden, activity } })
+            .map(|s| { let activity = set.activity_name(s.index); SeqJson { index: s.index, name: s.name, frames: s.frames, fps: s.fps, looping: s.looping, hidden: s.hidden, activity, window: set.taunt_window(s.index).map(|(a, b)| [a, b]) } })
             .collect(),
         pose_params: set
             .pose_params
@@ -426,6 +437,18 @@ struct StyleJson<'a> {
     bodygroups: &'a std::collections::BTreeMap<String, i32>,
 }
 
+/// A particle effect an item always shows: by the game's effect id, or a system by name at an attachment of the item.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ParticleJson<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effect: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attachment: Option<&'a str>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ItemJson<'a> {
@@ -448,10 +471,14 @@ struct ItemJson<'a> {
     paintable: bool,
     /// Wearing the item puts the character in the zombie skin (the Voodoo-Cursed souls).
     skin_override: bool,
+    /// The particle effects the item always shows.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    particles: Vec<ParticleJson<'a>>,
     medal: bool,
     quality: &'a str,
     taunt_scenes: &'a std::collections::BTreeMap<String, String>,
     taunt_prop_scenes: &'a std::collections::BTreeMap<String, String>,
+    taunt_scene_paths: &'a std::collections::BTreeMap<String, String>,
     workshop: bool,
 }
 
@@ -495,10 +522,12 @@ fn item_json(i: &source_formats::items::Item) -> ItemJson<'_> {
         equip_regions: &i.equip_regions,
         paintable: i.paintable,
         skin_override: i.skin_override,
+        particles: i.particles.iter().map(|p| ParticleJson { effect: p.effect, system: p.system.as_deref(), attachment: p.attachment.as_deref() }).collect(),
         medal: i.is_medal(),
         quality: &i.quality,
         taunt_scenes: &i.taunt_scenes,
         taunt_prop_scenes: &i.taunt_prop_scenes,
+        taunt_scene_paths: &i.taunt_scene_paths,
         workshop: i.workshop,
         styles: i
             .styles

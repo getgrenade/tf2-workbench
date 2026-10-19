@@ -19,7 +19,6 @@ export function createReflectionUi(section: HTMLElement, host: ReflectionHost) {
   const brightness = section.querySelector<HTMLInputElement>('[data-control="reflectionBrightness"]')!;
   const status = section.querySelector<HTMLElement>(".reflectionStatus")!;
   const folder = section.querySelector<HTMLButtonElement>('[data-control="cubemapFolder"]')!;
-  folder.hidden = __WEB__;
   folder.onclick = () => void cubemapsDir().then(revealFile).catch((e) => { status.textContent = `The folder could not be opened: ${e instanceof Error ? e.message : e}`; });
 
   const sync = () => {

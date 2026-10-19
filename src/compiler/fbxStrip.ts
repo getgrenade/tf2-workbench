@@ -1,13 +1,16 @@
 import * as THREE from "three";
+import { unzlibSync } from "three/examples/jsm/libs/fflate.module.js";
 
 /**
- * Takes the armature node out of a binary FBX (7.4 and older, 32-bit offsets) by editing the file itself, and leaves the rest of it as it is: the mesh, the
- * skin, the materials, the shape keys, the bind pose, all that the exporter wrote. The armature object of Blender is written as an empty node ("Null")
- * that the bones hang on; the item importer takes it for a bone of the item. Its children go to the scene, with its transform in theirs, so they stay
- * where they were.
+ * Edits a binary FBX (7.4 and older, 32-bit offsets) in place, and leaves the rest of it as it is: the mesh, the skin, the materials, the shape keys, the
+ * bind pose, all that the exporter wrote (the item importer reads Blender's files right; a file written again from the model loses its skin there).
  *
- * What it does not do: a file with a layout it does not know (an armature with a scale that is not the same on all axes, a child that has pre-rotations or
- * another rotation order, a 64-bit file) is not touched: it throws, and says why.
+ * - stripArmatures takes the armature node out. The armature object of Blender is written as an empty node ("Null") that the bones hang on; the item
+ *   importer takes it for a bone of the item. Its children go to the scene, with its transform in theirs, so they stay where they were.
+ * - turnBones turns the axes of some bones (the adjusted copy of a model, see boneAxes.ts).
+ *
+ * What they do not do: a file with a layout they do not know (a node with a scale that is not the same on all axes where it matters, pre-rotations or
+ * another rotation order, a 64-bit file) is not touched: they throw, and say why.
  */
 
 interface RawArray { t: "f" | "d" | "l" | "i" | "b"; length: number; encoding: number; bytes: Uint8Array }
@@ -179,20 +182,8 @@ const DEG = Math.PI / 180;
  * The file without its armature nodes, or null when it has none. Throws (with the reason in the message) for a file this does not know how to edit.
  */
 export function stripArmatures(buffer: ArrayBuffer): { bytes: Uint8Array; removed: string[] } | null {
-  const b = new Uint8Array(buffer);
-  if (b.length < 40 || text.decode(b.subarray(0, MAGIC.length)) !== MAGIC) throw new Error("not a binary FBX");
-  const dv = new DataView(buffer);
-  const version = dv.getUint32(23, true);
-  if (version >= 7500) throw new Error("a 64-bit FBX (version 7.5 or newer) is not edited");
-  const top: Node[] = [];
-  let at = 27;
-  for (;;) {
-    if (at + 13 > b.length) throw new Error("the file ends inside its nodes");
-    const node = readNode(b, dv, at);
-    if (!node) break;
-    top.push(node);
-    at = dv.getUint32(at, true);
-  }
+  const file = readFile(buffer);
+  const { top } = file;
   const objects = top.find((n) => n.name === "Objects"), connections = top.find((n) => n.name === "Connections");
   if (!objects || !connections) return null;
 
@@ -266,12 +257,111 @@ export function stripArmatures(buffer: ArrayBuffer): { bytes: Uint8Array; remove
     if (all) all.props[0] = { t: "I", v: total };
   }
 
+  return { bytes: writeFile(file), removed };
+}
+
+/** The doubles of an array property (inflated when the file has it compressed). */
+function doublesOf(p: Prop): Float64Array {
+  if (p.t !== "d") throw new Error("a matrix that is not an array of doubles");
+  const raw = p.encoding === 1 ? unzlibSync(p.bytes) : p.bytes;
+  return new Float64Array(raw.buffer.slice(raw.byteOffset, raw.byteOffset + p.length * 8));
+}
+/** An array property of doubles, written plain. */
+function doublesProp(values: ArrayLike<number>): Prop {
+  const bytes = new Uint8Array(new Float64Array(values).buffer);
+  return { t: "d", length: values.length, encoding: 0, bytes };
+}
+
+/**
+ * The file with the axes of some bones turned (see boneAxes.ts: each bone's own frame, by its turn), edited in place: the bone's rotation, its
+ * children's (so that they stay where they are), its matrix in the bind poses and in the clusters of the skins. Everything else stays as the exporter
+ * wrote it (the meshes, the skins, the materials, the shape keys), which is what the item importer reads right: a file written again from the model
+ * comes out of the importer with its skin lost. Null when no bone of the file is turned. Throws (with the reason) for a file this does not edit.
+ */
+export function turnBones(buffer: ArrayBuffer, turns: Record<string, THREE.Matrix4>): Uint8Array | null {
+  const file = readFile(buffer);
+  const { top } = file;
+  const objects = top.find((n) => n.name === "Objects"), connections = top.find((n) => n.name === "Connections");
+  if (!objects || !connections) return null;
+  const idOf = (n: Node) => num(n.props[0]);
+  const models = objects.children.filter((n) => n.name === "Model");
+  const byId = new Map(models.map((m) => [idOf(m), m]));
+  const links = connections.children.filter((c) => c.name === "C" && str(c.props[0]) === "OO").map((c) => ({ child: num(c.props[1]), parent: num(c.props[2]) }));
+  const parentOf = (id: number) => links.find((l) => l.child === id && byId.has(l.parent))?.parent;
+  // the turn of each bone the file has (by its id)
+  const turnOf = new Map<number, THREE.Matrix4>();
+  for (const m of models) {
+    const turn = turns[objectName(m.props[1])];
+    if (turn && str(m.props[2]) === "LimbNode") turnOf.set(idOf(m), turn);
+  }
+  if (!turnOf.size) return null;
+
+  // the local transforms: turned bones by their turn, the children of turned bones back by their parent's
+  const p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
+  for (const m of models) {
+    const id = idOf(m), own = turnOf.get(id), up = parentOf(id), back = up !== undefined ? turnOf.get(up) : undefined;
+    if (!own && !back) continue;
+    const name = objectName(m.props[1]);
+    checkSimple(m, name);
+    const [tx, ty, tz] = vector(m, "Lcl Translation", [0, 0, 0]), [rx, ry, rz] = vector(m, "Lcl Rotation", [0, 0, 0]), [sx, sy, sz] = vector(m, "Lcl Scaling", [1, 1, 1]);
+    if (own && (Math.abs(sx - sy) > 1e-4 * Math.abs(sx) || Math.abs(sy - sz) > 1e-4 * Math.abs(sx))) throw new Error(`${name} is scaled by different amounts on different axes`);
+    const local = new THREE.Matrix4().compose(new THREE.Vector3(tx, ty, tz), new THREE.Quaternion().setFromEuler(new THREE.Euler(rx * DEG, ry * DEG, rz * DEG, "ZYX")), new THREE.Vector3(sx, sy, sz));
+    if (back) local.premultiply(back.clone().invert());
+    if (own) local.multiply(own);
+    local.decompose(p, q, s);
+    const euler = new THREE.Euler().setFromQuaternion(q, "ZYX");
+    setVector(m, "Lcl Translation", [p.x, p.y, p.z]);
+    setVector(m, "Lcl Rotation", [euler.x / DEG, euler.y / DEG, euler.z / DEG]);
+  }
+  // the bind poses: the bone's matrix (in the scene) turned
+  const matrix = new THREE.Matrix4();
+  for (const pose of objects.children.filter((n) => n.name === "Pose")) {
+    for (const entry of pose.children.filter((n) => n.name === "PoseNode")) {
+      const turn = turnOf.get(num(entry.children.find((c) => c.name === "Node")?.props[0]));
+      const field = entry.children.find((c) => c.name === "Matrix");
+      if (!turn || !field) continue;
+      field.props[0] = doublesProp(matrix.fromArray(doublesOf(field.props[0])).multiply(turn).elements);
+    }
+  }
+  // the clusters of the skins: the bone's matrix at bind time turned (the vertices and weights stay)
+  const clusterBone = new Map<number, number>();
+  for (const l of links) if (turnOf.has(l.child)) clusterBone.set(l.parent, l.child);
+  for (const d of objects.children.filter((n) => n.name === "Deformer" && str(n.props[2]) === "Cluster")) {
+    const turn = turnOf.get(clusterBone.get(idOf(d)) ?? NaN);
+    const field = d.children.find((c) => c.name === "TransformLink");
+    if (!turn || !field) continue;
+    field.props[0] = doublesProp(matrix.fromArray(doublesOf(field.props[0])).multiply(turn).elements);
+  }
+  return writeFile(file);
+}
+
+/** The top nodes of a binary FBX (7.4 and older), and what is needed to write it again. Throws for a file this does not read. */
+function readFile(buffer: ArrayBuffer): { b: Uint8Array; top: Node[]; version: number; end: number } {
+  const b = new Uint8Array(buffer);
+  if (b.length < 40 || text.decode(b.subarray(0, MAGIC.length)) !== MAGIC) throw new Error("not a binary FBX");
+  const dv = new DataView(buffer);
+  const version = dv.getUint32(23, true);
+  if (version >= 7500) throw new Error("a 64-bit FBX (version 7.5 or newer) is not edited");
+  const top: Node[] = [];
+  let at = 27;
+  for (;;) {
+    if (at + 13 > b.length) throw new Error("the file ends inside its nodes");
+    const node = readNode(b, dv, at);
+    if (!node) break;
+    top.push(node);
+    at = dv.getUint32(at, true);
+  }
+  return { b, top, version, end: at };
+}
+
+/** The file again from its (edited) top nodes, with the original's header and footer. */
+function writeFile({ b, top, version, end }: { b: Uint8Array; top: Node[]; version: number; end: number }): Uint8Array {
   const out = new Out();
   out.bytes(b.subarray(0, 27));
   for (const n of top) writeNode(out, n);
   for (let i = 0; i < 13; i++) out.u8(0);
   // the footer: what the original has after its last node, with the padding made again for the new length
-  const footerAt = at + 13;
+  const footerAt = end + 13;
   out.bytes(b.subarray(footerAt, footerAt + 16));
   for (let i = 0; i < 4; i++) out.u8(0);
   const pad = ((out.length + 15) & ~15) - out.length;
@@ -279,5 +369,54 @@ export function stripArmatures(buffer: ArrayBuffer): { bytes: Uint8Array; remove
   out.u32(version);
   for (let i = 0; i < 120; i++) out.u8(0);
   out.bytes(b.subarray(b.length - 16));
-  return { bytes: out.result(), removed };
+  return out.result();
+}
+
+/** The axis system of a file and the place of its mesh in it: what a LOD written for it copies, so that it is in the same frame (see writeFbx). */
+export interface MeshFrame {
+  /** The ints of GlobalSettings that say the axes (UpAxis, UpAxisSign, FrontAxis, FrontAxisSign, CoordAxis, CoordAxisSign). */
+  axes: Record<string, number>;
+  /** The transform of the (first) mesh node in the scene, in the file's axes. */
+  mesh: THREE.Matrix4;
+}
+
+/**
+ * The frame of the meshes of a binary FBX: its axes, and the transform of its first mesh node (Blender writes a mesh's vertices in the object's own
+ * Z-up space and the turn to Y up on the node). Null for a file this does not read, or one with a layout it does not know.
+ */
+export function meshFrame(buffer: ArrayBuffer): MeshFrame | null {
+  try {
+    const { top } = readFile(buffer);
+    const settings = top.find((n) => n.name === "GlobalSettings")?.children.find((c) => c.name === "Properties70");
+    const axes: Record<string, number> = {};
+    for (const key of ["UpAxis", "UpAxisSign", "FrontAxis", "FrontAxisSign", "CoordAxis", "CoordAxisSign"]) {
+      const p = settings?.children.find((c) => c.name === "P" && str(c.props[0]) === key);
+      if (p) axes[key] = num(p.props[4]);
+    }
+    const objects = top.find((n) => n.name === "Objects"), connections = top.find((n) => n.name === "Connections");
+    if (!objects || !connections) return null;
+    const models = objects.children.filter((n) => n.name === "Model");
+    const byId = new Map(models.map((m) => [num(m.props[0]), m]));
+    const parentOf = (id: number) => connections.children.find((c) => c.name === "C" && str(c.props[0]) === "OO" && num(c.props[1]) === id && byId.has(num(c.props[2])));
+    const mesh = models.find((m) => str(m.props[2]) === "Mesh");
+    if (!mesh) return null;
+    const matrix = new THREE.Matrix4();
+    for (let node: Node | undefined = mesh; node;) {
+      checkSimple(node, objectName(node.props[1]));
+      const [tx, ty, tz] = vector(node, "Lcl Translation", [0, 0, 0]), [rx, ry, rz] = vector(node, "Lcl Rotation", [0, 0, 0]), [sx, sy, sz] = vector(node, "Lcl Scaling", [1, 1, 1]);
+      matrix.premultiply(new THREE.Matrix4().compose(new THREE.Vector3(tx, ty, tz), new THREE.Quaternion().setFromEuler(new THREE.Euler(rx * DEG, ry * DEG, rz * DEG, "ZYX")), new THREE.Vector3(sx, sy, sz)));
+      const up = parentOf(num(node.props[0]));
+      node = up ? byId.get(num(up.props[2])) : undefined;
+    }
+    return { axes, mesh: matrix };
+  } catch {
+    return null;
+  }
+}
+
+/** For the importer tests: the file again after `edit` changes its top nodes (Objects, Connections, GlobalSettings...). */
+export function editFbx(buffer: ArrayBuffer, edit: (top: { name: string; props: unknown[]; children: unknown[] }[]) => void): Uint8Array {
+  const file = readFile(buffer);
+  edit(file.top as never);
+  return writeFile(file);
 }

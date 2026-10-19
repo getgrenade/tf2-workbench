@@ -5,9 +5,8 @@
  */
 import { thumbCacheGet, thumbCachePut } from "./api";
 
-/** A kept picture as an address the page can show, or null (none kept, or the web version, which keeps nothing). */
+/** A kept picture as an address the page can show, or null (none kept). */
 export async function keptPicture(kind: "icon" | "prop", key: string): Promise<string | null> {
-  if (__WEB__) return null;
   try {
     const bytes = await thumbCacheGet(kind, key);
     return bytes ? URL.createObjectURL(new Blob([bytes], { type: "image/webp" })) : null;
@@ -18,7 +17,6 @@ export async function keptPicture(kind: "icon" | "prop", key: string): Promise<s
 
 /** Keeps a picture drawn on a canvas (it does not matter if that fails: it is only a cache). */
 export function keepPicture(kind: "icon" | "prop", key: string, canvas: HTMLCanvasElement) {
-  if (__WEB__) return;
   canvas.toBlob((blob) => {
     if (!blob) return;
     void blob.arrayBuffer().then((buffer) => thumbCachePut(kind, key, new Uint8Array(buffer))).catch(() => {});

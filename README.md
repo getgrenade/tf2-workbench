@@ -13,11 +13,10 @@ A viewer and scene composer for Team Fortress 2 models. Reads everything from ga
 - **Scenes & Save**: Supports multiple scenes in a single session with save/load support.
 - **Capture**: PNG and layered PSD screenshots, MP4 / WebM / optimized* GIF video and a turntable.
 - **Item compiler**: real time preview for your workshop cosmetics with an option to compile it into /import_source/ folder same as in-game importer would. Real time jiggle bone editor. Custom proxies support. Reads .fbx, .smd and .dmx models, shape keys (face flexes) included.
-- **Props**: browse the game's prop models (and any folder of loose models and materials you add: an addon, `tf/custom`, what you compiled), drag them into the scene, and shoot, push and blow them about in play mode. The compiler's Prop side builds a model for a map (collision, materials, LODs) into a folder of your choice. Desktop only.
-- **A web version** without the compiler and the props that runs in a browser (see [docs/web-build.md](docs/web-build.md)).
+- **Props**: browse the game's prop models (and any folder of loose models and materials you add: an addon, `tf/custom`, what you compiled), drag them into the scene, and shoot, push and blow them about in play mode. The compiler's Prop side builds a model for a map (collision, materials, LODs) into a folder of your choice.
 
 TF2 Workbench is a fan project. It is not affiliated with or endorsed by Valve. **No game files are included in this repository**:
-the app reads them from your TF2 installation, and the web version's data is extracted from it by you with `build-webapp.bat`.
+the app reads them from your TF2 installation.
 
 ## Build your own version
 
@@ -32,7 +31,7 @@ start.bat
 installs the packages on the first run, then starts the app in development mode (compiles on the first run, reloads as the code changes).
 On first launch it finds TF2 through Steam.
 
-`build.bat` makes a compact portable build in `share/`. `build-webapp.bat` builds the web version into `dist-web/`.
+`build.bat` makes a compact portable build in `share/`.
 
 ## Develop
 
@@ -41,8 +40,7 @@ On first launch it finds TF2 through Steam.
 | `src/` | the interface (TypeScript, Three.js, Vite) |
 | `src-tauri/` | the desktop shell (Tauri 2) |
 | `crates/source-formats` | readers for the Source formats: VPK, MDL/VVD/VTX, VTF/VMT, PCF, KeyValues, animations |
-| `crates/workbench-core` | the app's backend commands, shared by the desktop app and the web build |
-| `crates/workbench-wasm`, `crates/webbake` | the web build: the backend as WebAssembly and the extraction of the game files |
+| `crates/workbench-core` | the app's backend without Tauri: reads the game's files and answers the viewer |
 | `native/particle-probe` | optional native particle helper built from the Source SDK |
 | `docs/` | notes on how individual features work |
 

@@ -156,6 +156,12 @@ export const BODY_GROUP_DATA = {
       "bit": 3
     },
     {
+      "id": "belt",
+      "label": "Belt",
+      "category": "torso",
+      "bit": 10
+    },
+    {
       "id": "arms",
       "label": "Arms",
       "category": "arms",

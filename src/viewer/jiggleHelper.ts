@@ -28,7 +28,7 @@ function arc(point: (angle: number) => THREE.Vector3, min: number, max: number, 
   return [line(points, color), line([new THREE.Vector3(), points[0], new THREE.Vector3(), points[points.length - 1]], color, 0.7, false)];
 }
 
-export function buildJiggleHelper(setup: JiggleSetup | null, axisLength = 6): THREE.Group {
+export function buildJiggleHelper(setup: JiggleSetup | null, axisLength = 6, hideTip = false): THREE.Group {
   const group = new THREE.Group();
   const length = setup?.length ?? axisLength;
   const o = new THREE.Vector3();
@@ -39,12 +39,14 @@ export function buildJiggleHelper(setup: JiggleSetup | null, axisLength = 6): TH
     line([o, new THREE.Vector3(0, 0, reach)], 0x5588ff),
   );
   if (!setup) return group;
-  // the spring: from the bone along Z to where its tip rests
-  group.add(line([o, new THREE.Vector3(0, 0, length)], 0xffffff, 0.9));
-  const tip = new THREE.Mesh(new THREE.SphereGeometry(Math.max(0.4, length * 0.05), 10, 8), new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true, opacity: 0.9 }));
-  tip.position.set(0, 0, length);
-  tip.renderOrder = 1000;
-  group.add(tip);
+  // the spring: from the bone along Z to where its tip rests (left out when a draggable aim handle stands in for the tip)
+  if (!hideTip) {
+    group.add(line([o, new THREE.Vector3(0, 0, length)], 0xffffff, 0.9));
+    const tip = new THREE.Mesh(new THREE.SphereGeometry(Math.max(0.4, length * 0.05), 10, 8), new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true, opacity: 0.9 }));
+    tip.position.set(0, 0, length);
+    tip.renderOrder = 1000;
+    group.add(tip);
+  }
   if (setup.yaw.on) group.add(...arc((a) => new THREE.Vector3(Math.sin(a) * length, 0, Math.cos(a) * length), rad(setup.yaw.min), rad(setup.yaw.max), 0x44dd88));
   if (setup.pitch.on) group.add(...arc((a) => new THREE.Vector3(0, Math.sin(a) * length, Math.cos(a) * length), rad(setup.pitch.min), rad(setup.pitch.max), 0xff7744));
   if (setup.angle.on) {

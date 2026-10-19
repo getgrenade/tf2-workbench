@@ -56,6 +56,10 @@ impl Helper {
     }
     /// `extra` is a folder with more of the game's tree (the unpacked files of a custom effect), searched after the game's own files.
     fn start_extra(executable: &Path, game: &Path, extra: Option<&Path>, file: &str, system: &str, refire: f64, slots: u32) -> Result<Self, String> {
+        Self::start_seeded(executable, game, extra, file, system, refire, slots, 273)
+    }
+    /// `seed` is the collections' random seed: the same seed, control points and ticks give the same particles every time.
+    fn start_seeded(executable: &Path, game: &Path, extra: Option<&Path>, file: &str, system: &str, refire: f64, slots: u32, seed: u32) -> Result<Self, String> {
         if !(1..=32).contains(&slots) {return Err("Invalid particle slot count".into());}
         if !refire.is_finite() || refire < 0.0 || refire > 600.0 { return Err("Invalid particle refire interval".into()); }
         if !file.starts_with("particles/") || !file.ends_with(".pcf") || file.contains("..")
@@ -66,7 +70,7 @@ impl Helper {
         let mut paths = vec![bin];
         if let Some(path) = std::env::var_os("PATH") { paths.extend(std::env::split_paths(&path)); }
         let mut command = Command::new(executable);
-        command.args([file, system, "-stdio", "-slots", &slots.to_string(), "-refire", &refire.to_string(), "-game"])
+        command.args([file, system, "-stdio", "-slots", &slots.to_string(), "-refire", &refire.to_string(), "-seed", &(seed & 0x7fff_ffff).to_string(), "-game"])
             .arg(game);
         if let Some(extra) = extra { command.arg("-extra").arg(extra); }
         command.env("PATH", std::env::join_paths(paths).map_err(|e| e.to_string())?)
@@ -261,7 +265,7 @@ pub async fn native_particle_reset(native: State<'_, NativeParticles>) -> Result
 
 #[tauri::command]
 pub async fn native_particle_start(app: tauri::AppHandle, state: State<'_, AppState>, native: State<'_, NativeParticles>,
-    cp: [f64; 12], generation: u64, file: String, system: String, boxes: Vec<[f64; 18]>, refire: f64, slots: Option<u32>) -> Result<Option<NativeStart>, String> {
+    cp: [f64; 12], generation: u64, file: String, system: String, boxes: Vec<[f64; 18]>, refire: f64, slots: Option<u32>, seed: Option<u32>) -> Result<Option<NativeStart>, String> {
     let Some(executable) = executable() else { return Ok(None); };
     let vpk = state.vpk()?;
     let game = vpk.game_root().ok_or("No mounted TF2 folder")?.to_owned();
@@ -280,7 +284,7 @@ pub async fn native_particle_start(app: tauri::AppHandle, state: State<'_, AppSt
         }
         // the slow part (a process that loads the effect) runs without the pool
         let started = (|| -> Result<(Helper, Vec<NativeNode>), String> {
-            let mut helper = Helper::start_extra(&executable, &game, extra.as_deref(), &file, &system, refire, slots.unwrap_or(1))?;
+            let mut helper = Helper::start_seeded(&executable, &game, extra.as_deref(), &file, &system, refire, slots.unwrap_or(1), seed.unwrap_or(273))?;
             helper.frame(Duration::from_secs(15))?;
             let nodes = helper.step(0, &cp, &boxes)?;
             Ok((helper, nodes))

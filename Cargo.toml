@@ -1,8 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/source-formats", "crates/workbench-core", "crates/workbench-wasm", "crates/webbake", "src-tauri"]
-# the WebAssembly backend only builds for its own target (build-webapp.bat), so plain cargo commands leave it out
-default-members = ["crates/source-formats", "crates/workbench-core", "crates/webbake", "src-tauri"]
+members = ["crates/source-formats", "crates/workbench-core", "src-tauri"]
 
 [profile.dev.package."*"]
 opt-level = 2

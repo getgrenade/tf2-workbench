@@ -119,3 +119,28 @@ test("animation curves on a property the loader does not know are dropped, not f
   const file = fs.readFileSync(path);
   assert.equal(importFbx(file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength) as ArrayBuffer).parts.length, 2);
 });
+
+test("every bone gets a skin cluster, also the ones that move nothing (the importer only takes bones that have one)", () => {
+  // bip_head moves nothing; the jiggle bone that hangs from it moves the whole mesh (a hat that jiggles, the head hidden)
+  const smd = [
+    "version 1", "nodes", '  0 "bip_pelvis" -1', '  1 "bip_head" 0', '  2 "jiggle_1" 1', "end", "skeleton", "time 0", "  0 0 0 0 0 0 0", "  1 0 0 60 0 0 0", "  2 0 0 4 0 0 0", "end", "triangles",
+    "skull", "  2  0 0 64  0 0 1  0 0  1 2 1.0", "  2  5 0 64  0 0 1  1 0  1 2 1.0", "  2  0 5 64  0 0 1  0 1  1 2 1.0", "end", "",
+  ].join("\n");
+  const model = importModel("skull.smd", new TextEncoder().encode(smd).buffer as ArrayBuffer);
+  const text = Buffer.from(writeFbx(model)).toString("latin1");
+  for (const name of ["bip_pelvis", "bip_head", "jiggle_1"]) assert.ok(text.includes(`${name}\x00\x01SubDeformer`), `a cluster for ${name}`);
+});
+
+test("a LOD written in another file's frame stores its vertices in that file's mesh space, and reads back where it was", async () => {
+  const { meshFrame } = await import("../src/compiler/fbxStrip.ts");
+  const model = read();
+  // a frame like Blender's: right -X, front -Z, and the mesh node turned from Z up to Y up
+  const frame = { axes: { UpAxis: 1, UpAxisSign: 1, FrontAxis: 2, FrontAxisSign: -1, CoordAxis: 0, CoordAxisSign: -1 }, mesh: new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(Math.PI / 2, 0, Math.PI, "ZYX")) };
+  const bytes = writeFbx(model, {}, { skeleton: false, frame });
+  const back = importFbx(bytes.slice().buffer as ArrayBuffer);
+  const box = (m: typeof model) => { const b = new THREE.Box3(); for (const p of m.parts) for (let k = 0; k < p.positions.length; k += 3) b.expandByPoint(new THREE.Vector3().fromArray(p.positions, k)); return b; };
+  assert.ok(box(back).min.distanceTo(box(model).min) < 1e-4 && box(back).max.distanceTo(box(model).max) < 1e-4, "where it was");
+  const read2 = meshFrame(bytes.slice().buffer as ArrayBuffer)!;
+  assert.deepEqual(read2.axes, frame.axes);
+  assert.ok(read2.mesh.elements.every((v, i) => Math.abs(v - frame.mesh.elements[i]) < 1e-6), "the mesh node carries the frame's transform");
+});

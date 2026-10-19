@@ -1,5 +1,5 @@
 import {
-  HOTKEYS, HOTKEY_GROUPS, bindingOfKey, conflictsOf, displayBinding, formatBinding, hotkeyDef, hotkeyOverrides, isModifierCode, validFor,
+  HOTKEYS, HOTKEY_GROUPS, HOTKEY_LAYOUTS, LAYOUT_ACTIONS, bindingOfKey, conflictsOf, currentLayout, displayBinding, formatBinding, hotkeyDef, hotkeyOverrides, isModifierCode, layoutOverrides, validFor,
   binding as bindingOf, type HotkeyDef, type HotkeyId,
 } from "./hotkeys";
 import { onSettingsChange, settings, updateSettings } from "./settingsStore";
@@ -12,7 +12,13 @@ import { onSettingsChange, settings, updateSettings } from "./settingsStore";
 export function createHotkeysSection(): HTMLElement {
   const section = document.createElement("div");
   section.className = "hotkeys";
-  section.innerHTML = `<div class="hkTop"><span class="dim hkNote">Click a binding, then press the new key. Esc cancels; Backspace or Delete clears it.</span><button type="button" data-action="reset" title="Put every key and button back to its default">Reset all</button></div><div class="hkBody"></div><div class="hkStatus dim" role="status" aria-live="polite"></div>`;
+  section.innerHTML = `<div class="hkLayout"><label>Layout <select data-control="layout" title="The keys of the tools and the buttons of the mouse in the view, set together. Ctrl with the left button turns the directional light in all of them."></select></label><span class="dim hkLayoutHint"></span></div><div class="hkTop"><span class="dim hkNote">Click a binding, then press the new key. Esc cancels; Backspace or Delete clears it.</span><button type="button" data-action="reset" title="Put every key and button back to its default">Reset all</button></div><div class="hkBody"></div><div class="hkStatus dim" role="status" aria-live="polite"></div>`;
+  const layoutSelect = section.querySelector<HTMLSelectElement>('[data-control="layout"]')!;
+  const layoutHint = section.querySelector<HTMLElement>(".hkLayoutHint")!;
+  for (const l of HOTKEY_LAYOUTS) layoutSelect.append(new Option(l.label, l.id));
+  const custom = new Option("Custom", "custom");
+  custom.disabled = true;
+  layoutSelect.append(custom);
   const body = section.querySelector<HTMLElement>(".hkBody")!;
   const status = section.querySelector<HTMLElement>(".hkStatus")!;
   const cards = new Map<string, { card: HTMLElement; value: HTMLElement; reset: HTMLButtonElement }>();
@@ -28,6 +34,26 @@ export function createHotkeysSection(): HTMLElement {
     }
     try { await updateSettings({ hotkeys: next }); } catch (error) { note(`Could not save the settings: ${String(error)}`); }
   }
+
+  /** Sets a layout: the keys of the tools and the buttons of the mouse together (the other keys stay as they are, but lose one a layout key now is). */
+  async function applyLayout(layoutId: string) {
+    const layout = HOTKEY_LAYOUTS.find((l) => l.id === layoutId);
+    if (!layout) return;
+    stopListening();
+    const next = layoutOverrides(layout, hotkeyOverrides());
+    // another action that had one of the layout's keys has none now (it would answer to the same key)
+    const moved: string[] = [];
+    for (const id of LAYOUT_ACTIONS) {
+      for (const other of conflictsOf(id, layout.bindings[id])) {
+        if ((LAYOUT_ACTIONS as readonly string[]).includes(other)) continue;
+        next[other] = "";
+        moved.push(hotkeyDef(other).label);
+      }
+    }
+    try { await updateSettings({ hotkeys: next }); } catch (error) { note(`Could not save the settings: ${String(error)}`); return; }
+    note(moved.length ? `${layout.label}: ${[...new Set(moved)].join(", ")} had a key the layout uses and has none now.` : "");
+  }
+  layoutSelect.onchange = () => { void applyLayout(layoutSelect.value); };
 
   /** Gives `id` the binding `text` ("" for none), taking it from the action that had it. */
   async function assign(id: HotkeyId, text: string) {
@@ -121,6 +147,9 @@ export function createHotkeysSection(): HTMLElement {
   }
 
   function refresh() {
+    const layout = currentLayout();
+    layoutSelect.value = layout?.id ?? "custom";
+    layoutHint.textContent = layout?.hint ?? "Some of the tool keys or mouse buttons are set by hand.";
     const changed = hotkeyOverrides();
     for (const def of HOTKEYS as readonly HotkeyDef[]) {
       const entry = cards.get(def.id)!;

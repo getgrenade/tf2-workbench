@@ -8,8 +8,6 @@ src-tauri/gen/
 *.vtx
 *.vtf
 share/
-web-assets/
-dist-web/
 .claude/
 
 # rigs made by other people (personal use): exported rig files and the Blender results the solver is tested against

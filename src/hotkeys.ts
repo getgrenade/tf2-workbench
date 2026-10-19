@@ -35,9 +35,9 @@ export const HOTKEYS = [
   { id: "outliner.rename", label: "Rename", group: "Outliner", hint: "Renames the selected row of the outliner.", default: "F2", kind: "key" },
   { id: "outliner.delete", label: "Delete", group: "Outliner", hint: "Removes the selected rows of the outliner.", default: "Delete", kind: "key" },
   { id: "outliner.toggle", label: "Show / hide", group: "Outliner", hint: "Turns the selected rows of the outliner on or off.", default: "Space", kind: "key" },
-  { id: "nav.orbit", label: "Orbit", group: "Mouse navigation", hint: "Turns the view about what it looks at. (Ctrl or Shift with the left button pans.)", default: "Mouse0", kind: "mouse" },
-  { id: "nav.zoom", label: "Zoom (drag)", group: "Mouse navigation", hint: "Dragging moves the view in and out. The wheel always zooms.", default: "Mouse1", kind: "mouse" },
-  { id: "nav.pan", label: "Pan", group: "Mouse navigation", hint: "Slides the view sideways and up and down.", default: "Mouse2", kind: "mouse" },
+  { id: "nav.orbit", label: "Orbit", group: "Mouse navigation", hint: "Turns the view about what it looks at. Shift with the left button pans; Ctrl with it turns the directional light, as in hlmv.", default: "Mouse0", kind: "mouse" },
+  { id: "nav.zoom", label: "Zoom (drag)", group: "Mouse navigation", hint: "Dragging moves the view in and out (the right button, as in hlmv). The wheel always zooms.", default: "Mouse2", kind: "mouse" },
+  { id: "nav.pan", label: "Pan", group: "Mouse navigation", hint: "Slides the view sideways and up and down (the middle button; Shift with the left button too).", default: "Mouse1", kind: "mouse" },
 ] as const satisfies readonly HotkeyDef[];
 
 export type HotkeyId = (typeof HOTKEYS)[number]["id"];
@@ -179,3 +179,52 @@ export function conflictsOf(id: HotkeyId, text: string): HotkeyId[] {
 }
 
 rebuild();
+
+// ---- Layouts: a few ways to set the keys of the tools and the buttons of the mouse at once -----------------------------------------------
+
+/** The actions a layout sets: the keys of the three gizmo tools, and what the three mouse buttons do in the view. */
+export const LAYOUT_ACTIONS = ["tool.move", "tool.rotate", "tool.scale", "nav.orbit", "nav.zoom", "nav.pan"] as const;
+export type LayoutAction = (typeof LAYOUT_ACTIONS)[number];
+
+export interface HotkeyLayout {
+  id: "hlmv" | "blender" | "industry";
+  label: string;
+  hint: string;
+  bindings: Record<LayoutAction, string>;
+}
+
+/**
+ * The layouts. HLMV is the default (see HOTKEYS): W, E and R for the tools, the left button orbits, the right zooms and the middle one pans, as
+ * in hlmv. Industry keeps the tool keys and puts the middle button on the zoom and the right one on the pan (the way the app had it before). Blender
+ * has the same mouse as Industry and the tool keys of Blender: G (move), R (rotate), S (scale).
+ * What the layouts do not set stays as it is: Ctrl with the left button turns the directional light in all of them.
+ */
+export const HOTKEY_LAYOUTS: readonly HotkeyLayout[] = [
+  {
+    id: "hlmv", label: "HLMV", hint: "W, E, R for the tools; left button orbits, right button zooms, middle button pans (as in hlmv).",
+    bindings: { "tool.move": "KeyW", "tool.rotate": "KeyE", "tool.scale": "KeyR", "nav.orbit": "Mouse0", "nav.zoom": "Mouse2", "nav.pan": "Mouse1" },
+  },
+  {
+    id: "blender", label: "Blender", hint: "G, R, S for the tools (move, rotate, scale); left button orbits, middle button zooms, right button pans.",
+    bindings: { "tool.move": "KeyG", "tool.rotate": "KeyR", "tool.scale": "KeyS", "nav.orbit": "Mouse0", "nav.zoom": "Mouse1", "nav.pan": "Mouse2" },
+  },
+  {
+    id: "industry", label: "Industry", hint: "W, E, R for the tools; left button orbits, middle button zooms, right button pans.",
+    bindings: { "tool.move": "KeyW", "tool.rotate": "KeyE", "tool.scale": "KeyR", "nav.orbit": "Mouse0", "nav.zoom": "Mouse1", "nav.pan": "Mouse2" },
+  },
+];
+
+/** The bindings to store so that a layout is the one in use: those of its actions that are not the default (the other actions are not touched). */
+export function layoutOverrides(layout: HotkeyLayout, current: Record<string, string>): Record<string, string> {
+  const next = { ...current };
+  for (const id of LAYOUT_ACTIONS) {
+    if (layout.bindings[id] === defs.get(id)!.default) delete next[id];
+    else next[id] = layout.bindings[id];
+  }
+  return next;
+}
+
+/** The layout the keys and buttons are set to now, or null when they are a mix (changed by hand). */
+export function currentLayout(): HotkeyLayout | null {
+  return HOTKEY_LAYOUTS.find((l) => LAYOUT_ACTIONS.every((id) => binding(id) === l.bindings[id])) ?? null;
+}

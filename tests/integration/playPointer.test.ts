@@ -18,7 +18,7 @@ test("minigun barrel rotates around its local axis and returns to bind pose on r
   const parent = new THREE.Matrix4().makeTranslation(10, 0, 0);
   const local = new THREE.Matrix4().makeTranslation(0, 2, 0);
   const world = [parent.clone(), new THREE.Matrix4()];
-  Object.assign(actor, { ctx: { jiggle: () => false }, rig: { boneWorld: [parent] }, cosmetics: [{
+  Object.assign(actor, { ctx: { jiggle: () => false }, rig: { boneWorld: [parent] }, boneAims: new Map(), boneOverride: new Set(), cosmetics: [{
     rig: { boneWorld: world, parents: [-1, 0], bindWorld: [parent, parent.clone().multiply(local)] },
     bones: [new THREE.Bone(), barrel], bindLocal: [parent, local], map: [0, -1], jiggles: [null, null], own: null,
   }] });

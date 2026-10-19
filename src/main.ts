@@ -21,13 +21,9 @@ import { applyTheme } from "./theme";
 import { installSliderWheel } from "./sliderWheel";
 import { installNoNativeMenu } from "./noNativeMenu";
 
-// the web build (see vite.config.ts) is the same app without what needs the desktop: the style sheet hides those controls under this class
-if (__WEB__) document.documentElement.classList.add("web");
-else {
-  // files dropped from the file explorer go to the rows that take them; the page's own drags are made with the pointer (see dnd.ts)
-  installPointerDnd();
-  void installFileDrop().catch((error) => console.error("File drop is not available", error));
-}
+// files dropped from the file explorer go to the rows that take them; the page's own drags are made with the pointer (see dnd.ts)
+installPointerDnd();
+void installFileDrop().catch((error) => console.error("File drop is not available", error));
 const app = document.getElementById("app")!;
 app.innerHTML = `
   <header>
@@ -45,6 +41,7 @@ app.innerHTML = `
     <button id="pick">Choose TF2 folder…</button>
   </header>
   <div id="settings" hidden></div>
+  <div id="promoPage" hidden></div>
   <div id="view" hidden>
     <aside id="dockLeft" class="panel dock" data-dock="left">
       <section id="panelOutliner" class="dockSection">
@@ -57,19 +54,23 @@ app.innerHTML = `
       <div id="propEmpty" class="propEmpty dim" hidden>Nothing is selected. Click something in the view or in the outliner.</div>
       <div id="propChar">
       <div id="buildPanel" class="buildPanel" hidden></div>
-      <div id="classBlock"><label>Class</label>
-      <div id="cls" class="classes"></div></div>
-      <div class="teams"><button id="teamRed" class="team red">RED</button><button id="teamBlu" class="team blu">BLU</button></div>
+      <div id="classBlock">
+      <div id="cls" class="classes" role="group" aria-label="Class"></div></div>
+      <div class="teams"><button id="teamRed" class="team red">RED</button><button id="teamBlu" class="team blu">BLU</button><button id="teamGray" class="team gray" title="Plain 50% grey instead of the character's own colours and shine (on top of the team): for icons in the grey clay style" aria-pressed="false">GRAY</button></div>
       <div class="teams propSkins" id="propSkins" hidden></div>
       <label hidden><input type="checkbox" id="wire" /> Wireframe</label>
       <div id="bodyBlock">
-      <h3 class="bgHead">Bodygroups <button id="bodyReset" title="Back to what the cosmetics set (or the default)">Reset</button></h3>
+      <h3 class="bgHead" title="The model's own bodygroups (bold: which of their models shows, and whether they are drawn), then the parts of the body that can be hidden">Bodygroups <span class="bgBtns"><button id="bodyAll" title="Show every part">All</button><button id="bodyNone" title="Hide every part (an item alone)">None</button><button id="bodyReset" title="The model's own switches back to what the cosmetics set (or the default)">Reset</button></span></h3>
       <div id="bodyGroups" class="bodyGroups"></div>
       <div id="lodBar" class="lodBar" hidden></div>
       </div>
       <div id="effectsBlock">
       <h3 class="bgHead">Effects <button id="condReset" title="Clear every effect on the selected character">Clear</button></h3>
       <div id="conditions" class="conditions"></div>
+      </div>
+      <div id="jiggleBlock" hidden>
+      <h3 class="bgHead">Jiggle bones <span class="dim" style="font-weight:400">read-only</span></h3>
+      <div id="jiggleList" class="jiggleList"></div>
       </div>
       <div id="info"></div>
       </div>
@@ -87,13 +88,23 @@ app.innerHTML = `
         </section>
         <section class="lightCol" data-effect="fog" hidden>
           <h3>Fog <button id="fogReset" title="Reset the fog settings">Reset</button></h3>
-          <div class="checks"><label title="A fog in the scene, measured from the floor in character heights: it keeps its place when the camera moves or zooms, and shows in screenshots"><input type="checkbox" id="fogOn" /> Gradient fog</label></div>
+          <div class="checks"><label title="A fog in the scene, measured from the floor in character heights: it keeps its place when the camera moves or zooms, and shows in screenshots"><input type="checkbox" id="fogOn" /> Fog</label></div>
+          <label class="colorRow" title="Gradient: the fog is its gradient alone. Animated: the gradient says where it lies, and a noise that drifts says how thick it is there: banks of haze with depth, glowing toward the light">Style <select id="fogStyle"><option value="gradient">Gradient</option><option value="mist">Animated</option></select></label>
           <div class="checks"><label title="Off: the fog lies in the world, measured from the floor. On: it lies over the picture, from its bottom edge to its top edge, and stays put as the camera moves"><input type="checkbox" id="fogView" /> Follow the view</label></div>
           <label class="colorRow">Colour <input type="color" id="fogColor" value="#bdbdbd" /></label>
           <label class="slider">Floor density <output></output><input type="range" id="fogBottom" min="0" max="1" step="0.01" value="0.28" /></label>
           <label class="slider">High density <output></output><input type="range" id="fogTop" min="0" max="1" step="0.01" value="0" /></label>
           <label class="slider">Height <output></output><input type="range" id="fogMid" min="0" max="2" step="0.01" value="0" /></label>
           <label class="slider">Softness <output></output><input type="range" id="fogSoft" min="0.02" max="1" step="0.01" value="0.76" /></label>
+          <div id="fogMistBox" hidden>
+            <label class="slider" title="How big the banks of mist are, in character heights">Bank size <output></output><input type="range" id="fogScale" min="0.2" max="6" step="0.05" value="2.5" /></label>
+            <label class="slider" title="How much of the noise is mist: low is knots of it with clear air between, high is nearly a blanket">Coverage <output></output><input type="range" id="fogCoverage" min="0" max="1" step="0.01" value="0.45" /></label>
+            <label class="slider" title="Layers of finer noise riding on the banks">Detail <output></output><input type="range" id="fogDetail" min="1" max="4" step="1" value="3" /></label>
+            <label class="slider" title="How fast the mist drifts">Drift speed <output></output><input type="range" id="fogSpeed" min="0" max="2" step="0.01" value="0.12" /></label>
+            <label class="slider" title="The way it drifts, in degrees about the vertical">Drift direction <output></output><input type="range" id="fogWind" min="0" max="360" step="1" value="40" /></label>
+            <label class="slider" title="How strongly the mist glows when you look toward the main light: shafts of haze">Light glow <output></output><input type="range" id="fogShafts" min="0" max="1" step="0.01" value="0.6" /></label>
+            <label class="slider" title="0: smooth. 2 and more: the mist's thickness in flat steps, a cel-shaded fog">Cel bands <output></output><input type="range" id="fogBands" min="0" max="8" step="1" value="0" /></label>
+          </div>
           <div class="dim hint">The fog button on a character's row in the list keeps it clear of the fog.</div>
         </section>
         <section class="lightCol" data-effect="ao" hidden>
@@ -156,6 +167,8 @@ app.innerHTML = `
         <button id="modeShaded" title="Shaded: the materials as lit in the game" aria-label="Shaded"></button>
         <button id="modeDiffuse" title="Diffuse: just the base texture colour, unlit" aria-label="Diffuse"></button>
         <button id="modeGray" title="Grayscale: the lit picture without colour, to read the values" aria-label="Grayscale"></button>
+        <span class="sep"></span>
+        <button id="hudMute" title="Sound: mutes and unmutes the voice lines" aria-label="Mute sound"></button>
       </div>
       </div>
       <div id="viewActions" hidden></div>
@@ -165,8 +178,8 @@ app.innerHTML = `
       <div id="viewToolbar">
       <div id="viewSelect"><button id="boxSelect" title="Box select: stays on until you switch it off. The Q key does one box and switches itself off. Drag in the view to select what the box covers. Shift adds, Ctrl takes away. Alt + drag still orbits" aria-label="Box select" aria-pressed="false"></button></div>
       <div id="gizmoParts"><button id="gizMove" title="Move gizmo (W); edit by mouse (Shift+W); reset position (Alt+W)" aria-label="Move gizmo"></button><button id="gizRotate" title="Rotation gizmo (E); edit by mouse (Shift+E); reset rotation (Alt+E)" aria-label="Rotation gizmo"></button><button id="gizScale" title="Scale gizmo (R); edit by mouse (Shift+R); reset scale (Alt+R)" aria-label="Scale gizmo"></button><button id="gizView" title="View Rotation Gizmo: a ring that turns the control about your line of sight, with a dot in the middle to drag the control around in the view plane" aria-label="View Rotation Gizmo"></button><button id="gizOrient" title="" aria-label="Gizmo orientation"></button></div>
-      <div id="viewFocus"><button id="focusFace" title="Focus on the selected character's face" aria-label="Focus face"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V3h5M16 3h5v5M21 16v5h-5M8 21H3v-5"/><path fill="currentColor" stroke="none" d="M12 6.5c2.7 0 4 2.1 4 4.8 0 3.2-1.7 5.7-4 5.7s-4-2.5-4-5.7c0-2.7 1.3-4.8 4-4.8z"/></svg></button><button id="focusBody" title="Frame the selected character" aria-label="Frame character"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V3h5M16 3h5v5M21 16v5h-5M8 21H3v-5"/><path fill="currentColor" stroke="none" d="M12 6a2.2 2.2 0 1 1 0 4.4A2.2 2.2 0 0 1 12 6zM7 18l.5-4.3c.2-1.7 1.8-2.9 4.5-2.9s4.3 1.2 4.5 2.9L17 18h-2.5v-3.5L14 18h-4l-.5-3.5V18z"/></svg></button><button id="focusAll" title="Frame all characters" aria-label="Frame all characters"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V3h5M16 3h5v5M21 16v5h-5M8 21H3v-5"/><path d="m8.5 17 3.5-9.5 3.5 9.5M9.8 13.8h4.4"/></svg></button></div>
-      <div id="viewCapture"><button id="shot" title="Screenshot: saves a PNG of the view (size and transparency are in Settings)" aria-label="Screenshot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l1.500-2.500h7L17 8h3v11H4z"/><circle cx="12" cy="13" r="3.500"/></svg></button><button id="shotPsd" title="Layered PSD: saves a Photoshop file with the post-processing effects on layers of their own, with the blend modes that put them back (size is in Settings)" aria-label="Layered PSD"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-9 5 9 5 9-5z"/><path d="m3 12 9 5 9-5"/><path d="m3 16 9 5 9-5"/></svg></button><button id="shotVideo" title="Video: records the view or a turntable round the character as MP4, WebM or an optimized GIF (never larger than the view)" aria-label="Video"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10.500 5-3v9l-5-3"/></svg></button><button id="paintChart" title="Paint chart: one picture of the inspected cosmetic per paint, laid out in an editor (open a paintable cosmetic with Inspect first)" aria-label="Paint chart"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 11-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2c.8.8 2 .8 2.8 0L19 11Z"/><path d="m5 2 5 5"/><path d="M2 13h15"/><path d="M22 20a2 2 0 1 1-4 0c0-1.6 1.7-2.4 2-4 .3 1.6 2 2.4 2 4Z"/></svg></button></div>
+      <div id="viewFocus"><button id="focusFace" title="Focus on the selected character's face" aria-label="Focus face"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V3h5M16 3h5v5M21 16v5h-5M8 21H3v-5"/><path fill="currentColor" stroke="none" d="M12 6.5c2.7 0 4 2.1 4 4.8 0 3.2-1.7 5.7-4 5.7s-4-2.5-4-5.7c0-2.7 1.3-4.8 4-4.8z"/></svg><span class="btnLabel">Focus face</span></button><button id="focusBody" title="Frame the selected character" aria-label="Frame character"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V3h5M16 3h5v5M21 16v5h-5M8 21H3v-5"/><path fill="currentColor" stroke="none" d="M12 6a2.2 2.2 0 1 1 0 4.4A2.2 2.2 0 0 1 12 6zM7 18l.5-4.3c.2-1.7 1.8-2.9 4.5-2.9s4.3 1.2 4.5 2.9L17 18h-2.5v-3.5L14 18h-4l-.5-3.5V18z"/></svg><span class="btnLabel">Frame character</span></button><button id="focusAll" title="Frame all characters" aria-label="Frame all characters"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V3h5M16 3h5v5M21 16v5h-5M8 21H3v-5"/><path d="m8.5 17 3.5-9.5 3.5 9.5M9.8 13.8h4.4"/></svg><span class="btnLabel">Frame all</span></button></div>
+      <div id="viewCapture"><button id="shot" title="Screenshot: saves a PNG of the view (size and transparency are in Settings)" aria-label="Screenshot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l1.500-2.500h7L17 8h3v11H4z"/><circle cx="12" cy="13" r="3.500"/></svg><span class="btnLabel">Screenshot</span></button><button id="shotPsd" title="Layered PSD: saves a Photoshop file with the post-processing effects on layers of their own, with the blend modes that put them back (size is in Settings)" aria-label="Layered PSD"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-9 5 9 5 9-5z"/><path d="m3 12 9 5 9-5"/><path d="m3 16 9 5 9-5"/></svg><span class="btnLabel">PSD</span></button><button id="shotVideo" title="Video: records the view or a turntable round the character as MP4, WebM or an optimized GIF (never larger than the view)" aria-label="Video"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10.500 5-3v9l-5-3"/></svg><span class="btnLabel">Video</span></button><button id="paintChart" title="Paint chart: the selected character's paintable cosmetic in every paint at once, all orbiting together; lay it out and save it as a PNG" aria-label="Paint chart"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 11-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2c.8.8 2 .8 2.8 0L19 11Z"/><path d="m5 2 5 5"/><path d="M2 13h15"/><path d="M22 20a2 2 0 1 1-4 0c0-1.6 1.7-2.4 2-4 .3 1.6 2 2.4 2 4Z"/></svg><span class="btnLabel">Paint chart</span></button><button id="randomLoadout" title="Random loadout: rolls cosmetics (and poses) by your rules, as often as you like; up to five characters at once" aria-label="Random loadout"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.2" fill="currentColor"/><circle cx="16" cy="8" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="8" cy="16" r="1.2" fill="currentColor"/><circle cx="16" cy="16" r="1.2" fill="currentColor"/></svg><span class="btnLabel">Random loadout</span></button><button id="promo" title="Promo images: a set of items (one or more) pictured every way (main pictures, paint charts, styles, loadouts, thumbnails), to tweak and export in the Promo tab" aria-label="Promo images"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="m3 15 5-5 4 4 3-3 6 6"/><circle cx="16" cy="8.5" r="1.5"/><path d="M7 21h10"/></svg><span class="btnLabel">Promo</span></button></div>
       </div>
       <div id="dockFolds">
         <button id="foldL" class="foldBtn" title="Fold the left panel" aria-label="Fold the left panel"></button>
@@ -189,7 +202,7 @@ app.innerHTML = `
       <div id="itemTools" class="row2"><button id="itemSelectAll" title="Select every equipped cosmetic, then pick one paint for all of them">Select all</button></div>
       <div id="itemEquipped" class="chips"></div>
       <div id="itemList" class="itemlist"></div>
-      <div class="itemFoot" id="itemFoot"><button id="itemMedals" class="iconBtn" title="Show medals &amp; badges" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M6.500 2h4l1.500 6.500-3 1.500zM17.500 2h-4L12 8.500l3 1.500z"/><circle cx="12" cy="15.500" r="6"/></svg></button><button id="itemWorkshopRefresh" class="iconBtn" title="Reload the workshop cosmetics from tf/workshop/import_source (this also happens when you come back to this window and the zips changed)" aria-label="Reload workshop cosmetics"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.5-5.800M20 4v5h-5"/></svg></button><span id="itemCount" class="dim hint"></span></div>
+      <div class="itemFoot" id="itemFoot"><button id="itemMedals" class="iconBtn" title="Show medals &amp; badges" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M6.500 2h4l1.500 6.500-3 1.500zM17.500 2h-4L12 8.500l3 1.500z"/><circle cx="12" cy="15.500" r="6"/></svg></button><button id="itemWorkshopStyles" class="iconBtn" title="Workshop styles: which workshop items are styles of another (by their names, or linked by hand)" aria-label="Workshop styles"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/><path d="M11 7h4a2 2 0 0 1 2 2v4"/></svg></button><button id="itemWorkshopRefresh" class="iconBtn" title="Reload the workshop cosmetics from tf/workshop/import_source (this also happens when you come back to this window and the zips changed)" aria-label="Reload workshop cosmetics"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.5-5.800M20 4v5h-5"/></svg></button><span id="itemCount" class="dim hint"></span></div>
       </section>
       <section id="weaponsPane" class="dockSection">
         <h3 class="first">Weapons</h3>
@@ -222,6 +235,7 @@ app.innerHTML = `
       <div class="animCol">
         <div class="row2"><button id="play">Pause</button> <button id="rewind" title="Back to frame 0 (Ctrl+click: every character)" aria-label="Back to frame 0">⏮</button> <select id="speed"><option value="0.1">0.1x</option><option value="0.25">0.25x</option><option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="2">2x</option></select> <label class="inline"><input type="checkbox" id="loopAll" checked /> Loop</label> <label class="inline" title="Play taunts over the weapon pose, as the game does, so they blend in and out. Off: the animation exactly as its file holds it."><input type="checkbox" id="blendTaunts" checked /> Blend taunts</label><div id="frameLabel" class="dim hint"></div></div>
         <input type="range" id="scrub" min="0" max="1" step="0.01" value="0" />
+        <div class="row2 faceRow"><label class="inline" title="The face of the scene that goes with the animation (a taunt's expressions, as the game plays them)"><input type="checkbox" id="sceneFaces" checked /> Scene face</label> <button id="voiceMute" title="Hear the lines the taunt's scene says (the selected character's)">🔊 Sound on</button> <select id="voicePick" title="Which line plays, for a sound the game picks at random from several" hidden></select> <button id="voiceLines" title="Voice lines: the class's lines, played on the selected character with their face and lip sync; scrub one for a face">Voice lines…</button> <button id="faceKeep" title="Put the face of this moment on the flex sliders, where it stays when the animation changes" disabled>Keep face</button> <span id="faceInfo" class="dim hint"></span></div>
         <h3>Pose parameters <span><button id="paramsReset" title="Engine defaults: zero state where the range spans zero, else the middle">Defaults</button> <button id="paramsZero" title="All parameters at the low end of their range, which is how hlmv starts">hlmv 0</button></span></h3>
         <div id="poseParams"></div>
       </div>
@@ -247,7 +261,7 @@ app.innerHTML = `
         <section class="lightCol worldView" id="worldView">
           <h3>Scene</h3>
           <label class="colorRow" title="The colour behind the scene; a skybox covers it"><span>Background</span> <input type="color" id="bgColor" value="#404040" /></label>
-          <label class="slider" title="How far apart the characters stand">Spacing <output></output><input type="range" id="entSpacing" min="30" max="200" step="1" value="72" /></label>
+          <label class="slider" title="How far apart the characters stand">Spacing <output></output><input type="range" id="entSpacing" min="30" max="200" step="1" value="37" /></label>
           <label class="slider" title="Horizontal field of view in degrees, as a camera's own setting">Field of view <output></output><input type="range" id="fov" min="10" max="100" step="1" value="30" /></label>
           <div class="checks"><label title="The hair, scarves and other loose parts of the characters swing with their movement"><input type="checkbox" id="jiggle" checked /> Jiggle bones</label></div>
         </section>
@@ -346,6 +360,14 @@ const viewTab = createViewTab({
     middle: $<HTMLInputElement>("fogMid"),
     softness: $<HTMLInputElement>("fogSoft"),
     view: $<HTMLInputElement>("fogView"),
+    style: $<HTMLSelectElement>("fogStyle"),
+    scale: $<HTMLInputElement>("fogScale"),
+    coverage: $<HTMLInputElement>("fogCoverage"),
+    detail: $<HTMLInputElement>("fogDetail"),
+    speed: $<HTMLInputElement>("fogSpeed"),
+    wind: $<HTMLInputElement>("fogWind"),
+    shafts: $<HTMLInputElement>("fogShafts"),
+    bands: $<HTMLInputElement>("fogBands"),
     reset: $<HTMLButtonElement>("fogReset"),
   },
   shadow: {
@@ -389,6 +411,8 @@ const viewTab = createViewTab({
     status: $("shotStatus"),
     menu: $<HTMLButtonElement>("sceneMenu"),
     paintChart: $<HTMLButtonElement>("paintChart"),
+    randomLoadout: $<HTMLButtonElement>("randomLoadout"),
+    promo: $<HTMLButtonElement>("promo"),
   },
   entities: {
     list: $("entList"),
@@ -403,6 +427,7 @@ const viewTab = createViewTab({
     medals: $<HTMLButtonElement>("itemMedals"),
     selectAll: $<HTMLButtonElement>("itemSelectAll"),
     refresh: $<HTMLButtonElement>("itemWorkshopRefresh"),
+    workshopStyles: $<HTMLButtonElement>("itemWorkshopStyles"),
     list: $("itemList"),
     equipped: $("itemEquipped"),
     count: $("itemCount"),
@@ -424,6 +449,7 @@ const viewTab = createViewTab({
     paramsReset: $<HTMLButtonElement>("paramsReset"),
     paramsZero: $<HTMLButtonElement>("paramsZero"),
   },
+  face: { scene: $<HTMLInputElement>("sceneFaces"), mute: $<HTMLButtonElement>("voiceMute"), pick: $<HTMLSelectElement>("voicePick"), keep: $<HTMLButtonElement>("faceKeep"), lines: $<HTMLButtonElement>("voiceLines"), info: $("faceInfo") },
   flex: { list: $("flexList"), reset: $<HTMLButtonElement>("flexReset") },
   teams: [$<HTMLButtonElement>("teamRed"), $<HTMLButtonElement>("teamBlu")],
   weapons: {
@@ -445,6 +471,7 @@ const viewTab = createViewTab({
 // The sections of the side panels fold, and so do the panels themselves (the handles at the edges of the 3D view).
 document.querySelectorAll<HTMLElement>("#lightPane .lightCol, #lightSetupsPane .lightCol").forEach((section) => accordify(section, "light"));
 accordify(document.querySelector<HTMLElement>(".animCol:last-child")!, "anim");
+for (const id of ["bodyBlock", "effectsBlock", "jiggleBlock"]) accordify(document.getElementById(id)!, "props");
 
 // The panels (outliner, properties, the browsers, the animation and lighting tabs ...) sit in three docks that are always there; they can be
 // dragged from one dock to another, split off into groups and tabbed together, hidden and brought back from the Layout menu.
@@ -452,12 +479,11 @@ const docks = createDocks({
   view: $("view"),
   docks: { left: $("dockLeft"), right: $("dockRight"), bottom: $("dockBottom") },
   folds: { left: $("foldL"), right: $("foldR"), bottom: $("foldB") },
-  panels: PANEL_DEFS.filter((d) => !(__WEB__ && d.id === "props")).map((d) => ({ id: d.id, title: d.title, el: $(d.element) })),
-  defaults: defaultLayout({ props: !__WEB__ }),
+  panels: PANEL_DEFS.map((d) => ({ id: d.id, title: d.title, el: $(d.element) })),
+  defaults: defaultLayout({ props: true }),
   storageKey: "tf2workbench.layout",
 });
 poseHud.library.onclick = () => docks.reveal("poses"); // the library icon in the pose toolbar
-if (__WEB__) document.getElementById("propsPane")?.remove();
 // the Add menu of the outliner opens the prop browser
 document.addEventListener("workbench:reveal-panel", (e) => { const id = (e as CustomEvent<string>).detail; if (docks.panels().some((p) => p.id === id)) docks.reveal(id); });
 $("viewOverlaysMore").onclick = () => openOverlaySettings($("viewOverlaysMore"));
@@ -521,9 +547,11 @@ $("layoutMenu").onclick = () => {
   grip.ondblclick = () => { setWidth(DEFAULT_WIDTH); try { localStorage.removeItem(WIDTH_KEY); } catch { /* ok */ } };
 }
 
+
 function showTab(which: "view" | "compiler" | "settings") {
   const inView = which === "view" || which === "compiler";
   $("view").hidden = !inView;
+  $("promoPage").hidden = !inView; // (the scene tab strip then shows the view or the board in front)
   $("viewerStats").hidden = !inView;
   $("sceneBar").hidden = !inView;
   $("sceneMenu").hidden = !inView;

@@ -431,3 +431,8 @@ test("each finger gets a base control on its first bone, in the Fingers group", 
   assert.equal(c[1].aim, "bip_index_1_R");
   assert.equal(mirrorId("base:index_R"), "base:index_L");
 });
+
+test("a phong tint in braces is 0-255, as the engine reads it (the Blast Bowl's visor)", () => {
+  const [r, g, b] = resolvePhongTint({ "$phongtint": "{255 24 20}" }, false);
+  assert.ok(Math.abs(r - 1) < 1e-9 && Math.abs(g - 24 / 255) < 1e-9 && Math.abs(b - 20 / 255) < 1e-9);
+});

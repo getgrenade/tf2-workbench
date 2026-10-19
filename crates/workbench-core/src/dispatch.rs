@@ -1,13 +1,5 @@
-//! The backend's questions and answers in one place: the web build asks them by name (see `call`), the desktop commands call the same functions.
-use serde_json::Value;
-
-use crate::{game, payload, state::AppState};
-
-/// What a command answers: raw bytes (models, pixels, clips) or JSON.
-pub enum Reply {
-    Bytes(Vec<u8>),
-    Json(Value),
-}
+//! The animation questions of the backend: baking a sequence and posing live (play mode).
+use crate::{payload, state::AppState};
 
 /// The class model of a compiled Workshop taunt's animation (`models/workshop/workbench/<key>/<class folder>/animation.mdl`).
 fn workshop_taunt_class(path: &str) -> Option<String> {
@@ -77,64 +69,4 @@ pub fn eval_poses(state: &AppState, path: &str, requests: Vec<PoseRequest>, para
         }
     }
     Ok(out)
-}
-
-fn text<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
-    args.get(key).and_then(Value::as_str).ok_or_else(|| format!("missing argument: {key}"))
-}
-fn floats(args: &Value, key: &str) -> Vec<f32> {
-    args.get(key).and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect()).unwrap_or_default()
-}
-
-/// Answers a command of the web build: the name and arguments are the ones of the desktop command (arguments as a JSON object).
-pub fn call(state: &AppState, command: &str, args: &Value) -> Result<Reply, String> {
-    let vpk = || state.vpk();
-    Ok(match command {
-        "load_model" => {
-            let lod = args.get("lod").and_then(Value::as_u64).unwrap_or(0) as usize;
-            Reply::Bytes(payload::encode(&*state.model_lod(text(args, "path")?, lod)?))
-        }
-        "load_material" => Reply::Bytes(state.material_payload(text(args, "path")?)?.as_ref().clone()),
-        "load_texture_frames" => {
-            let max = args.get("maxFrames").and_then(Value::as_u64).unwrap_or(128) as usize;
-            Reply::Bytes(source_formats::material::texture_frames(&*vpk()?, text(args, "path")?, max).map_err(|e| e.to_string())?)
-        }
-        "load_particle_asset" => Reply::Bytes(game::read_particle_asset(&*vpk()?, text(args, "path")?)?),
-        "load_overlay_font" => Reply::Bytes(game::read_overlay_font(&*vpk()?, text(args, "path")?)?),
-        "list_sequences" => Reply::Bytes(payload::encode_anim_info(&*state.anim_set(text(args, "path")?)?)),
-        "bake_sequence" => Reply::Bytes(bake_sequence(
-            state,
-            text(args, "path")?,
-            args.get("sequence").and_then(Value::as_u64).ok_or("missing argument: sequence")? as usize,
-            &floats(args, "params"),
-            args.get("targetPath").and_then(Value::as_str),
-            args.get("blend").and_then(Value::as_bool),
-        )?),
-        "eval_poses" => {
-            let requests: Vec<PoseRequest> = serde_json::from_value(args.get("requests").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?;
-            let pin = args.get("pinParams").filter(|v| !v.is_null()).map(|_| floats(args, "pinParams"));
-            Reply::Bytes(eval_poses(state, text(args, "path")?, requests, &floats(args, "params"), pin.as_deref())?)
-        }
-        "get_weapon_profile" => Reply::Json(game::weapon_profile(
-            &*vpk()?,
-            args.get("itemId").and_then(Value::as_u64).ok_or("missing argument: itemId")? as u32,
-            text(args, "class")?,
-            args.get("team").and_then(Value::as_u64).unwrap_or(0) as u32,
-        )?),
-        "player_gibs" => Reply::Json(game::gib_definitions(&*vpk()?, text(args, "path")?)?),
-        "model_physics" => Reply::Json(game::model_physics(&*vpk()?, text(args, "path")?)?),
-        "list_items" => Reply::Bytes(state.items_payload()?.as_ref().clone()),
-        "list_unusual_effects" => Reply::Json(serde_json::to_value(game::unusual_effects(&*vpk()?)?).map_err(|e| e.to_string())?),
-        "particle_system_file" => {
-            let system = text(args, "system")?;
-            let files = state.particle_files()?;
-            let file = files.get(system).cloned().or_else(|| files.iter().find(|(name, _)| name.eq_ignore_ascii_case(system)).map(|(_, file)| file.clone()));
-            Reply::Json(Value::String(file.ok_or_else(|| format!("Particle system not installed: {system}"))?))
-        }
-        "search_paths" => {
-            let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(100) as usize;
-            Reply::Json(Value::Array(vpk()?.search(text(args, "query")?, limit).into_iter().map(|p| Value::String(p.to_owned())).collect()))
-        }
-        other => return Err(format!("unknown command: {other}")),
-    })
 }

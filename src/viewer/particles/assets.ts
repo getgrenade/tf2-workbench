@@ -8,7 +8,18 @@ export const UNUSUALS = {
   arctic: { label: "Arctic Delight", file: "particles/smissmas2023_unusuals.pcf", system: "utaunt_innerblizzard_purple_parent" },
 } as const;
 export type UnusualId = keyof typeof UNUSUALS;
-export interface UnusualSettings { silver: boolean; arctic: boolean; hatItem: number | null; hatEffect?: number; tauntEffect?: number }
+export interface UnusualSettings {
+  silver: boolean;
+  arctic: boolean;
+  hatItem: number | null;
+  hatEffect?: number;
+  tauntEffect?: number;
+  /**
+   * The effects the worn items always show, each on its own item (`item` null: on the character's own model, the Spy's cigarette): by
+   * effect id, or a system by name at an attachment. Not kept: worked out from what is worn.
+   */
+  items?: { item: number | null; effect?: number; system?: string; attachment?: string }[];
+}
 export const blankUnusuals = (): UnusualSettings => ({ silver: false, arctic: false, hatItem: null });
 export function parseUnusualSettings(value: unknown): UnusualSettings {
   const v = value as Partial<UnusualSettings> | null;

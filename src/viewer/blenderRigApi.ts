@@ -2,7 +2,7 @@ import type * as THREE from "three";
 import type { Actor } from "./actor";
 import type { LimbId, RigSession } from "../rig/rigSession";
 
-/** What the viewer and the panel use of a Blender rig's controls. The web build gets `BlenderRigNone`, which does nothing (the rig code is not part of it). */
+/** What the viewer and the panel use of a Blender rig's controls. */
 export interface BlenderRigApi {
   onSelect: (name: string | null) => void;
   onEdit: () => void;
@@ -29,32 +29,4 @@ export interface BlenderRigApi {
   sliders(): { name: string; value: number; min: number; max: number; step: number }[];
   setFingers(on: boolean): void;
   setMisc(on: boolean): void;
-}
-
-export class BlenderRigNone implements BlenderRigApi {
-  onSelect: (name: string | null) => void = () => {};
-  onEdit: () => void = () => {};
-  onModal: (text: string | null) => void = () => {};
-  groups = { fingers: false, misc: true };
-  readonly objects: THREE.Object3D[] = [];
-  readonly gizmoHot = false;
-  readonly actor = null;
-  readonly active = false;
-  readonly rigSession = null;
-  readonly selected = null;
-  setLocal() {}
-  setShown() {}
-  setGizmoParts() {}
-  setActor() { return false; }
-  snap() {}
-  afterExternalChange() {}
-  update() {}
-  pick() { return null; }
-  hover() { return false; }
-  select() {}
-  setIk() {}
-  setSlider() {}
-  sliders() { return []; }
-  setFingers() {}
-  setMisc() {}
 }

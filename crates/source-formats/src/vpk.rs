@@ -2,11 +2,11 @@
 //! case-insensitive virtual file system.
 
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::HashMap,
     fs::File,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, RwLock},
+    sync::RwLock,
 };
 
 use crate::zipfs::ZipFile;
@@ -86,14 +86,7 @@ pub struct DirListing {
     pub files: Vec<FileItem>,
 }
 
-/// Where the files come from in the web build: a function that returns the bytes of a file (by its lowercase path) or nothing.
-pub type RemoteRead = Arc<dyn Fn(&str) -> Option<Vec<u8>> + Send + Sync>;
-
 pub struct VpkSet {
-    /// The web build has no game folder: files are fetched one by one by this reader, and `sorted` is the list of what exists.
-    remote: Option<RemoteRead>,
-    /// While the web bake runs: the paths that were read or asked for, to be copied out of the game.
-    recorded: Mutex<Option<BTreeSet<String>>>,
     /// Game folder (`tf`) searched for loose files before the VPKs, like the engine's search path.
     loose_root: Option<PathBuf>,
     dirs: Vec<DirInfo>,
@@ -110,6 +103,8 @@ pub struct VpkSet {
     /// Folders of loose files the user mounted (an addon, a map's content, the output of the prop compiler): what the game's archives do not
     /// have is read from them. The game's own files win over them, so an addon cannot change the game's props.
     custom: RwLock<Vec<CustomMount>>,
+    /// Item zips the user dropped onto the view, mounted in place for this session (read-only; nothing is copied into the game folder).
+    extra_item_zips: RwLock<Vec<PathBuf>>,
 }
 
 /// A folder of loose files with a `models/` and a `materials/` folder in it, indexed by the paths the game would ask for.
@@ -220,11 +215,6 @@ impl VpkSet {
         Self::open_folder_with(folder, true)
     }
 
-    /// The game's own files only, without the workshop zips of the item importer (what the web build is made from).
-    pub fn open_folder_game_only(folder: &Path) -> Result<Self, VpkError> {
-        Self::open_folder_with(folder, false)
-    }
-
     fn open_folder_with(folder: &Path, user_files: bool) -> Result<Self, VpkError> {
         let mut dirs: Vec<PathBuf> = std::fs::read_dir(folder)
             .map_err(io_err(folder))?
@@ -269,6 +259,8 @@ impl VpkSet {
         if let Some(dir) = &self.workshop_dir {
             workshop_zips(dir, &mut found, 0);
         }
+        // then the item zips dropped onto the view: mounted in place like the importer's own, so their cosmetics show up under Workshop
+        found.extend(self.extra_item_zips.read().unwrap().iter().cloned());
         let mut mount = Mount::default();
         for path in found {
             let Ok(zip) = ZipFile::open(&path) else { continue };
@@ -296,6 +288,15 @@ impl VpkSet {
             }
         }
         *self.workshop.write().unwrap() = mount;
+    }
+
+    /// Adds item zips to be mounted in place (read-only) by their paths on disk: the next `rescan_workshop` mounts them, and their
+    /// cosmetics show under Workshop. Session-only: nothing is copied into the game folder, and the mounts are gone on the next launch.
+    pub fn add_item_zips(&self, paths: impl IntoIterator<Item = PathBuf>) {
+        let mut extra = self.extra_item_zips.write().unwrap();
+        for path in paths {
+            if !extra.contains(&path) { extra.push(path); }
+        }
     }
 
     /// Sets the folder of the custom effect zips and mounts them.
@@ -332,6 +333,13 @@ impl VpkSet {
         h
     }
 
+    /// The workshop schema file beside the zips (`items_game.txt`, or `workbench_items.txt`, in `tf/workshop/import_source`): what the
+    /// zips cannot say about their items, in items_game's own words. None without one.
+    pub fn workshop_schema(&self) -> Option<String> {
+        let dir = self.workshop_dir.as_ref()?;
+        ["items_game.txt", "workbench_items.txt"].iter().find_map(|name| std::fs::read(dir.join(name)).ok()).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+    }
+
     /// The manifests (`manifest.txt`) of the mounted workshop zips, with the zip's file name.
     pub fn workshop_manifests(&self) -> Vec<(String, String)> {
         self.workshop
@@ -351,37 +359,8 @@ impl VpkSet {
         p.is_file().then_some(p)
     }
 
-    /// A set of files that are fetched on demand (the web build): `index` lists every path there is, `read` returns a file's bytes.
-    pub fn remote(index: Vec<String>, read: RemoteRead) -> Self {
-        let mut set = VpkSet { loose_root: None, dirs: Vec::new(), files: HashMap::new(), sorted: Vec::new(), workshop: RwLock::new(Mount::default()), workshop_dir: None, effects_dir: RwLock::new(None), custom: RwLock::new(Vec::new()), remote: Some(read), recorded: Mutex::new(None) };
-        set.sorted = index.into_iter().map(|p| Self::norm(&p)).collect();
-        set.sorted.sort_unstable();
-        set.sorted.dedup();
-        set
-    }
-
-    /// Starts (or, with `false`, stops and forgets) keeping the paths that are read or asked for.
-    pub fn record(&self, on: bool) {
-        *self.recorded.lock().unwrap() = on.then(BTreeSet::new);
-    }
-
-    /// The paths read or asked for (and found) since [`record`](Self::record) was switched on.
-    pub fn recorded(&self) -> Vec<String> {
-        self.recorded.lock().unwrap().as_ref().map(|s| s.iter().cloned().collect()).unwrap_or_default()
-    }
-
-    fn note(&self, path: &str) {
-        if let Some(set) = self.recorded.lock().unwrap().as_mut() {
-            set.insert(Self::norm(path));
-        }
-    }
-
-    fn remote_has(&self, key: &str) -> bool {
-        self.remote.is_some() && self.sorted.binary_search_by(|p| p.as_str().cmp(key)).is_ok()
-    }
-
     pub fn open_dirs(paths: &[PathBuf]) -> Result<Self, VpkError> {
-        let mut set = VpkSet { loose_root: None, dirs: Vec::new(), files: HashMap::new(), sorted: Vec::new(), workshop: RwLock::new(Mount::default()), workshop_dir: None, effects_dir: RwLock::new(None), custom: RwLock::new(Vec::new()), remote: None, recorded: Mutex::new(None) };
+        let mut set = VpkSet { loose_root: None, dirs: Vec::new(), files: HashMap::new(), sorted: Vec::new(), workshop: RwLock::new(Mount::default()), workshop_dir: None, effects_dir: RwLock::new(None), custom: RwLock::new(Vec::new()), extra_item_zips: RwLock::new(Vec::new()) };
         for p in paths {
             set.add_dir(p, false)?;
         }
@@ -591,9 +570,7 @@ impl VpkSet {
     }
 
     pub fn contains(&self, path: &str) -> bool {
-        let found = self.compiled_path(path).is_some() || self.files.contains_key(&Self::norm(path)) || self.loose_path(path).is_some() || self.workshop.read().unwrap().files.contains_key(&Self::norm(path)) || self.remote_has(&Self::norm(path)) || self.custom_path(&Self::norm(path)).is_some();
-        if found { self.note(path); }
-        found
+        self.compiled_path(path).is_some() || self.files.contains_key(&Self::norm(path)) || self.loose_path(path).is_some() || self.workshop.read().unwrap().files.contains_key(&Self::norm(path)) || self.custom_path(&Self::norm(path)).is_some()
     }
 
     pub fn size_of(&self, path: &str) -> Option<u64> {
@@ -606,10 +583,6 @@ impl VpkSet {
             if let Some(&z) = mount.files.get(&key) {
                 return mount.zips[z].size_of(&key);
             }
-        }
-        if self.remote_has(&key) {
-            // (a site's file has no size in its index: ask for the file, which the caller is about to want anyway)
-            return self.read(path).ok().map(|b| b.len() as u64);
         }
         self.files.get(&key).map(Entry::size).or_else(|| self.custom_path(&key).and_then(|p| std::fs::metadata(p).ok()).map(|m| m.len()))
     }
@@ -654,9 +627,7 @@ impl VpkSet {
 
     /// Reads at most `max` bytes from the start of the file.
     pub fn read_prefix(&self, path: &str, max: usize) -> Result<Vec<u8>, VpkError> {
-        let out = self.read_prefix_inner(path, max);
-        if out.is_ok() { self.note(path); }
-        out
+        self.read_prefix_inner(path, max)
     }
 
     fn read_prefix_inner(&self, path: &str, max: usize) -> Result<Vec<u8>, VpkError> {
@@ -681,23 +652,13 @@ impl VpkSet {
                 }
             }
         }
-        if let Some(remote) = &self.remote {
-            let key = Self::norm(path);
-            if !self.remote_has(&key) { return Err(VpkError::NotFound(path.to_string())); }
-            return match remote(&key) {
-                Some(mut bytes) => { bytes.truncate(max); Ok(bytes) }
-                None => Err(VpkError::NotFound(path.to_string())),
-            };
-        }
         self.read_archived_inner(path, max, true)
     }
 
     /// The file as the game's archives have it: a loose file of the game folder (a texture the user extracted over one of the game's, say)
     /// does not replace it. For what must look the same on every machine.
     pub fn read_archived(&self, path: &str) -> Result<Vec<u8>, VpkError> {
-        let out = self.read_archived_inner(path, usize::MAX, false);
-        if out.is_ok() { self.note(path); }
-        out
+        self.read_archived_inner(path, usize::MAX, false)
     }
 
     fn read_archived_inner(&self, path: &str, max: usize, custom: bool) -> Result<Vec<u8>, VpkError> {

@@ -31,7 +31,7 @@ for (const file of files) {
   try {
     await build({
       entryPoints: [file], outfile: target, bundle: true, platform: "node", format: "esm", logLevel: "silent", sourcemap: "inline",
-      define: { "import.meta.env.DEV": "false", "import.meta.env.BASE_URL": '"/"', "import.meta.env": "{}", __WEB__: "false" },
+      define: { "import.meta.env.DEV": "false", "import.meta.env.BASE_URL": '"/"', "import.meta.env": "{}" },
       banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url); globalThis.requestAnimationFrame ??= (f) => setTimeout(() => f(performance.now()), 16); globalThis.cancelAnimationFrame ??= clearTimeout;" },
       nodePaths: [join(root, "node_modules")],
     });

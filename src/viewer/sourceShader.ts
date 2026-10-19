@@ -63,6 +63,7 @@ uniform sampler2D tDetail;      // $detail, blend mode 6: the fire layer of a bu
 uniform bool uHasDetail;
 uniform float uDetailScale;
 uniform float uDetailBlend;
+uniform float uGray;                    // plain 50% grey instead of the texture (the alpha of the texture still cuts the shape out)
 uniform sampler2D tDetailMat;    // $detail of blend mode 0 / 1 / 8, mixed into the base colour
 uniform int uDetailMode;         // -1: none
 uniform mat3 uDetailXf;          // $detailtexturetransform after proxies
@@ -240,6 +241,7 @@ ${bodyMaskDiscard}
     albedo *= second.rgb * (uMod2x > 0.5 ? 2.0 : 1.0);
     baseTex.a *= second.a;
   }
+  if (uGray > 0.5) albedo = vec3(0.2158);   // sRGB 128
   vec3 diffuseComponent = uUnlit ? albedo : albedo * diffuseLighting;
 
   // Environment mask texture (non-skin paths): scales the reflection per channel

@@ -4,7 +4,8 @@ import { decimateModel } from "./decimate";
 import { transferSkin } from "./skinTransfer";
 import { applyBoneRemap, boneRemap, lodCommandLines, lodCommands } from "./lodBones";
 import { writeFbx } from "./fbxWrite";
-import { stripArmatures } from "./fbxStrip";
+import { meshFrame, stripArmatures, turnBones } from "./fbxStrip";
+import { isIdentityTurn, turnMatrix } from "./boneAxes";
 import { importModel } from "./importModel";
 import { decodeTga, iconProblem, textureProblem, type TextureKind, type TgaImage } from "./tga";
 import { buildPreviewMaterial, buildPreviewModel, type PreviewBone, type PreviewTextures } from "./preview";
@@ -84,6 +85,8 @@ export interface CompilerData {
   smartFill: boolean;
   /** LOD 1 and 2 that are not given are made from LOD 0 (lighter copies that fit the budgets), to try the item in the game before the real ones exist. */
   tempLods: boolean;
+  /** The models are read as the game's item importer reads them (see ImportOptions): what would go wrong in the game goes wrong here too. */
+  strictImporter: boolean;
   icon: string;
   /** How the textures are stored: DXT as the importer makes them, or exact pixels (to see whether the game takes them). */
   compression: "dxt" | "none";
@@ -92,7 +95,7 @@ export interface CompilerData {
 export const blankMaterial = (): CompilerMaterial => ({ color: "", blueColor: "", blueTint: null, normal: "", phongexponent: "", illum: "", settings: { ...DEFAULT_MATERIAL, customProxies: [] } });
 
 export const blankData = (): CompilerData => ({
-  name: "", displayName: "", prefab: "hat", region: "hat", bodygroups: ["hat"], classes: {}, materials: {}, teamColors: false, smartFill: true, tempLods: false, jiggles: {}, turns: {}, icon: "", compression: "dxt",
+  name: "", displayName: "", prefab: "hat", region: "hat", bodygroups: ["hat"], classes: {}, materials: {}, teamColors: false, smartFill: true, tempLods: false, strictImporter: true, jiggles: {}, turns: {}, icon: "", compression: "dxt",
 });
 
 export interface Issue { key: string; level: "error" | "warning"; text: string }
@@ -173,13 +176,22 @@ export class CompilerSession {
     const path = this.lods(cls)[index];
     try {
       const stamp = (await this.io.stamp(path)) ?? 0;
-      const model = importModel(path, await this.io.read(path));
+      const model = importModel(path, await this.io.read(path), { strict: this.data.strictImporter });
       this.loaded(cls)[index] = { path, stamp, model };
       this.failures.delete(path);
     } catch (error) {
       this.loaded(cls)[index] = null;
       this.failures.set(path, error instanceof Error ? error.message : String(error));
     }
+  }
+
+  /** Reads the models as the game's item importer does (or not), and reads them all again. */
+  async setStrictImporter(on: boolean) {
+    if (this.data.strictImporter === on) return;
+    this.data.strictImporter = on;
+    for (const cls of Object.keys(this.data.classes)) for (let i = 0; i < NUM_LODS; i++) if (this.lods(cls)[i]) await this.loadModel(cls, i);
+    this.syncMaterials();
+    this.onChange();
   }
 
   /** LOD 1 and 2 of a class are the files of the same name that say so (body_lod0 -> body_lod1, body_lod2). */
@@ -315,7 +327,9 @@ export class CompilerSession {
   /**
    * Writes each model file of the item as an FBX beside the original, named `adjusted_<name>.fbx`, with the turned axes of the bones in it
    * (what the item importer builds from), then makes those files the item's models and takes the turns off (they are in the files now).
-   * Nothing changes when a file cannot be written. Returns the paths written.
+   * An FBX is the artist's own file with only the turned bones edited (see turnBones): written again from the model, its skin does not come
+   * through the item importer (the weights are lost, and with them the bones the item hangs on). Other files, or an FBX that cannot be edited,
+   * are written from the model. Nothing changes when a file cannot be written. Returns the paths written.
    */
   async exportAdjusted(write: (path: string, bytes: Uint8Array) => Promise<void>): Promise<string[]> {
     const jobs: { cls: string; index: number; from: string; to: string; bytes: Uint8Array }[] = [];
@@ -326,8 +340,20 @@ export class CompilerSession {
         const slash = Math.max(from.lastIndexOf("/"), from.lastIndexOf("\\"));
         const file = from.slice(slash + 1).replace(/\.[^.]*$/, "");
         const to = `${from.slice(0, slash + 1)}${/^adjusted_/i.test(file) ? file : `adjusted_${file}`}.fbx`;
-        jobs.push({ cls, index, from, to, bytes: writeFbx(loaded.model, this.data.turns) });
+        jobs.push({ cls, index, from, to, bytes: new Uint8Array() });
       });
+    }
+    const turns = Object.fromEntries(Object.entries(this.data.turns).filter(([, turn]) => !isIdentityTurn(turn)).map(([name, turn]) => [name, turnMatrix(turn)]));
+    for (const job of jobs) {
+      const model = this.models.get(job.cls)![job.index]!.model;
+      if (/.fbx$/i.test(job.from)) {
+        try {
+          const original = await this.io.read(job.from);
+          job.bytes = turnBones(original, turns) ?? new Uint8Array(original);
+          continue;
+        } catch { /* a file this does not edit is written from the model */ }
+      }
+      job.bytes = writeFbx(model, this.data.turns);
     }
     for (const job of jobs) await write(job.to, job.bytes);
     for (const job of jobs) { this.data.classes[job.cls][job.index] = job.to; this.loaded(job.cls)[job.index] = null; this.failures.delete(job.from); }
@@ -385,7 +411,9 @@ export class CompilerSession {
   /**
    * Writes the temporary LODs (see `tempLods`) as FBX files in the folder of the class's LOD 0, named `temp_<name of LOD 0>_lod1.fbx`, so that
    * what the item's session file names exists on disk and the item opens again from it. They are the lighter copies as they are made (the
-   * turned axes are not in them: they are in LOD 0 when it is the adjusted copy). A file is written again each time.
+   * turned axes are not in them: they are in LOD 0 when it is the adjusted copy). They have no skin (the item importer gives a LOD the skin of
+   * LOD 0) and are written in the frame of LOD 0's file (its axes and its mesh node, see meshFrame), as the artist's own LODs are: the importer
+   * matches a LOD to LOD 0 by the vertices as the files store them, and a LOD in another frame came out turned. A file is written again each time.
    */
   async writeTempLods(write: (path: string, bytes: Uint8Array) => Promise<void>): Promise<string[]> {
     const written: string[] = [];
@@ -394,12 +422,16 @@ export class CompilerSession {
       if (!from) continue;
       const slash = Math.max(from.lastIndexOf("/"), from.lastIndexOf("\\"));
       const base = from.slice(slash + 1).replace(/\.[^.]*$/, "").replace(/^temp_/i, "").replace(/[_. -]?lod0$/i, ""); // hat_lod0 -> hat_lod1: the name without its LOD number
+      let frame: ReturnType<typeof meshFrame> = null;
+      if (/\.fbx$/i.test(from) && [1, 2].some((i) => this.isTemp(cls, i))) {
+        try { frame = meshFrame(await this.io.read(from)); } catch { /* the LODs are written in their own frame */ }
+      }
       for (let i = 1; i < NUM_LODS; i++) {
         if (!this.isTemp(cls, i)) { this.tempFiles.delete(`${cls}:${i}`); continue; }
         const model = this.model(cls, i);
         if (!model || model.flexes?.length) continue; // (a lighter copy of a model with shape keys does not keep them)
         const to = `${from.slice(0, slash + 1)}temp_${base}_lod${i}.fbx`;
-        await write(to, writeFbx(model, {}, { skeleton: false }));
+        await write(to, writeFbx(model, {}, { skeleton: false, ...(frame ? { frame } : {}) }));
         this.tempFiles.set(`${cls}:${i}`, to);
         written.push(to);
       }
@@ -768,7 +800,7 @@ export class CompilerSession {
       prefab: PREFABS.includes(s.prefab as Prefab) ? (s.prefab as Prefab) : blank.prefab,
       region: str(s.region, blank.region),
       bodygroups: Array.isArray(s.bodygroups) ? s.bodygroups.filter((b): b is string => BODYGROUPS.includes(b as string)) : blank.bodygroups,
-      classes, materials: {}, teamColors: s.teamColors === true, smartFill: s.smartFill !== false, tempLods: s.tempLods === true, icon: str(s.icon, ""), compression: s.compression === "none" ? "none" : "dxt",
+      classes, materials: {}, teamColors: s.teamColors === true, smartFill: s.smartFill !== false, tempLods: s.tempLods === true, strictImporter: s.strictImporter !== false, icon: str(s.icon, ""), compression: s.compression === "none" ? "none" : "dxt",
       jiggles: Object.fromEntries(Object.entries(s.jiggles && typeof s.jiggles === "object" ? s.jiggles : {}).map(([bone, setup]) => [bone, readJiggle(setup)])),
       turns: Object.fromEntries(Object.entries(s.turns && typeof s.turns === "object" ? s.turns : {}).flatMap(([bone, turn]): [string, BoneTurn][] => (Array.isArray(turn) && turn.length === 3 && turn.every((v) => typeof v === "number" && Number.isFinite(v)) ? [[bone, [turn[0], turn[1], turn[2]]]] : []))),
     };

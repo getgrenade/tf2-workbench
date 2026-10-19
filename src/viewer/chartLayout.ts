@@ -12,6 +12,8 @@ export interface ChartOptions {
   padding: number;
   /** Columns; 0 picks the count that makes the cells biggest. */
   cols: number;
+  /** How each row sits across the width: centred (default) or pushed to the left edge (at `padding`). */
+  align?: "center" | "left";
 }
 
 export interface ChartLayout {
@@ -42,7 +44,8 @@ export function layoutChart(count: number, cellAspect: number, o: ChartOptions):
       const row = Math.floor(i / cols);
       const inRow = Math.min(cols, count - row * cols);
       const rowW = inRow * cellW + (inRow - 1) * o.gapX;
-      rects.push({ x: (o.width - rowW) / 2 + (i - row * cols) * (cellW + o.gapX), y: top + row * (cellH + o.gapY), w: cellW, h: cellH });
+      const rowStart = o.align === "left" ? o.padding : (o.width - rowW) / 2;
+      rects.push({ x: rowStart + (i - row * cols) * (cellW + o.gapX), y: top + row * (cellH + o.gapY), w: cellW, h: cellH });
     }
     return { cols, rows, cellW, cellH, width: o.width, height: o.height, rects };
   };

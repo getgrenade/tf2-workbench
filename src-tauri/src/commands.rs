@@ -183,6 +183,13 @@ pub fn refresh_workshop(state: State<'_, AppState>) -> Result<(), String> {
     state.refresh_workshop()
 }
 
+/// Takes dropped item zips to mount in place (read-only, this session only): the next workshop refresh mounts them, and their cosmetics
+/// show under Workshop without copying into the game folder.
+#[tauri::command]
+pub fn mount_item_zips(state: State<'_, AppState>, paths: Vec<String>) -> Result<(), String> {
+    state.mount_item_zips(paths.into_iter().map(PathBuf::from).collect())
+}
+
 /// A value that changes when the importer's zips do, so the interface can tell when a refresh is due.
 #[tauri::command]
 pub fn workshop_stamp(state: State<'_, AppState>) -> Result<String, String> {
@@ -616,6 +623,42 @@ pub async fn prepare_workshop_taunt(app: tauri::AppHandle, state: State<'_, AppS
     Ok(serde_json::json!({ "animation": ready.animation, "sequence": ready.sequence, "prop": ready.prop }))
 }
 
+/// A choreography scene for playback (its events, the expressions they name and the waves its speak events play); null when the game has none.
+#[tauri::command]
+pub async fn load_scene(state: State<'_, AppState>, path: String) -> Result<serde_json::Value, String> {
+    workbench_core::voice::scene(&state, &path)
+}
+
+/// Of the given scenes, the first that plays a sequence, or null.
+#[tauri::command]
+pub async fn scene_playing(state: State<'_, AppState>, paths: Vec<String>, sequence: String) -> Result<Option<String>, String> {
+    workbench_core::voice::scene_playing(&state, &paths, &sequence)
+}
+
+/// A class's voice lines, from its response rules.
+#[tauri::command]
+pub async fn voice_lines(state: State<'_, AppState>, class: String) -> Result<serde_json::Value, String> {
+    workbench_core::voice::voice_lines(&state, &class)
+}
+
+/// A class's phoneme mouth shapes (two sets, `plain` and `hwm`: phoneme code -> controller weights).
+#[tauri::command]
+pub async fn phoneme_classes(state: State<'_, AppState>, class: String) -> Result<serde_json::Value, String> {
+    workbench_core::voice::phoneme_classes(&state, &class)
+}
+
+/// The lip sync of a wave, when the game has one (null otherwise).
+#[tauri::command]
+pub async fn lip_sync(state: State<'_, AppState>, wave: String) -> Result<serde_json::Value, String> {
+    workbench_core::voice::lip_sync(&state, &wave)
+}
+
+/// A sound file's bytes (from `sound/`).
+#[tauri::command]
+pub async fn read_sound(state: State<'_, AppState>, wave: String) -> Result<tauri::ipc::Response, String> {
+    Ok(tauri::ipc::Response::new(workbench_core::voice::read_sound(&state, &wave)?))
+}
+
 /// The cosmetics catalog (JSON bytes), from `items_game.txt` and `tf_english.txt`.
 #[tauri::command]
 pub async fn list_items(state: State<'_, AppState>) -> Result<tauri::ipc::Response, String> {
@@ -832,6 +875,53 @@ pub fn save_session(app: tauri::AppHandle, contents: String) -> Result<(), Strin
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
     std::fs::write(p, contents).map_err(|e| e.to_string())
+}
+
+/// The folder of a kept promo board (`promos/<id>` in the config folder); `id` and `name` are plain names, not paths.
+fn promo_path(app: &tauri::AppHandle, id: &str, name: Option<&str>) -> Result<PathBuf, String> {
+    let plain = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.') && !s.starts_with('.');
+    if !plain(id) || name.is_some_and(|n| !plain(n)) {
+        return Err("a promo board's id and file names are plain names".into());
+    }
+    let dir = config_dir(app)?.join("promos").join(id);
+    Ok(match name { Some(n) => dir.join(n), None => dir })
+}
+
+/// Writes a file of a kept promo board: the raw body to `<name>` (the `name` header) in the board's folder (the `id` header).
+#[tauri::command]
+pub fn save_promo_file(app: tauri::AppHandle, request: tauri::ipc::Request<'_>) -> Result<(), String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else { return Err("expected a raw body".into()) };
+    let header = |k: &str| request.headers().get(k).and_then(|v| v.to_str().ok()).map(percent_decode).ok_or(format!("missing {k} header"));
+    let p = promo_path(&app, &header("id")?, Some(&header("name")?))?;
+    if let Some(dir) = p.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(p, bytes).map_err(|e| e.to_string())
+}
+
+/// A file of a kept promo board (its bytes).
+#[tauri::command]
+pub fn read_promo_file(app: tauri::AppHandle, id: String, name: String) -> Result<tauri::ipc::Response, String> {
+    let p = promo_path(&app, &id, Some(&name))?;
+    Ok(tauri::ipc::Response::new(std::fs::read(p).map_err(|e| e.to_string())?))
+}
+
+/// The ids of the kept promo boards (the folders with a `board.json`).
+#[tauri::command]
+pub fn list_promos(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let dir = config_dir(&app)?.join("promos");
+    let Ok(entries) = std::fs::read_dir(&dir) else { return Ok(Vec::new()) };
+    Ok(entries.flatten().filter(|e| e.path().join("board.json").is_file()).filter_map(|e| e.file_name().to_str().map(String::from)).collect())
+}
+
+/// Forgets a kept promo board (its folder, with its images).
+#[tauri::command]
+pub fn remove_promo(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let dir = promo_path(&app, &id, None)?;
+    if dir.is_dir() {
+        std::fs::remove_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// The folder of the saved poses: `poses` next to the program, so the folder travels with the app and poses can be shared by copying

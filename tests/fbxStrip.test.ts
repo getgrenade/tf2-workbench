@@ -5,7 +5,9 @@ import { test } from "node:test";
 import { importFbx } from "../src/compiler/fbx.ts";
 import { importModel } from "../src/compiler/importModel.ts";
 import { writeFbx } from "../src/compiler/fbxWrite.ts";
-import { stripArmatures } from "../src/compiler/fbxStrip.ts";
+import { stripArmatures, turnBones } from "../src/compiler/fbxStrip.ts";
+import * as THREE from "three";
+import { turnMatrix, turnedWorld } from "../src/compiler/boneAxes.ts";
 
 const sample = () => {
   const lines = ["version 1", "nodes", '  0 "bip_head" -1', '  1 "prop_bone" 0', "end", "skeleton", "time 0", "  0 0 0 0 0 0 0", "  1 0 0 5 0 0 0", "end", "triangles"];
@@ -74,4 +76,31 @@ test("a file whose materials are not in the order the importer lists them says s
   assert.deepEqual(back.fileMaterialOrder, ["z_glass", "a_hat"]);
   const inOrder = importFbx(asBuffer(writeFbx({ ...model, parts: [other, first], materials: ["a_hat", "z_glass"] })));
   assert.equal(inOrder.fileMaterialOrder, undefined);
+});
+
+test("turning a bone in the file turns its axes and nothing else: its children, the mesh and the skin stay where they were", () => {
+  const model = sample();
+  const turn: [number, number, number] = [30, -20, 45];
+  const out = turnBones(asBuffer(writeFbx(model)), { bip_head: turnMatrix(turn) })!;
+  const back = importFbx(asBuffer(out));
+  const world = (m: typeof model, name: string) => new THREE.Matrix4().fromArray(m.skeleton.find((b) => b.name === name)!.world);
+  const far = (a: THREE.Matrix4, b: THREE.Matrix4) => Math.max(...a.elements.map((v, i) => Math.abs(v - b.elements[i])));
+  assert.ok(far(world(back, "bip_head"), turnedWorld(world(model, "bip_head"), turn)) < 1e-4, "the bone is turned");
+  assert.ok(far(world(back, "prop_bone"), world(model, "prop_bone")) < 1e-4, "its child stays");
+  assert.deepEqual(Array.from(back.parts[0].positions, (v) => +v.toFixed(4)), Array.from(model.parts[0].positions, (v) => +v.toFixed(4)));
+  assert.equal(turnBones(asBuffer(writeFbx(model)), { not_a_bone: turnMatrix(turn) }), null, "nothing to turn");
+});
+
+test("read strictly, as the item importer reads it, a file's axis settings are ignored; read leniently, they turn the model", async () => {
+  const { editFbx } = await import("../src/compiler/fbxStrip.ts");
+  const model = sample();
+  const plain = writeFbx(model);
+  const zUp = editFbx(asBuffer(plain), (top) => {
+    const settings = (top.find((n) => n.name === "GlobalSettings")!.children as { name: string; children: { name: string; props: { t: string; v: unknown }[] }[] }[]).find((c) => c.name === "Properties70")!;
+    const set = (key: string, v: number) => { const p = settings.children.find((c) => c.name === "P" && new TextDecoder().decode(c.props[0].v as Uint8Array) === key)!; p.props[4] = { t: "I", v }; };
+    set("UpAxis", 2); set("FrontAxis", 1); set("FrontAxisSign", -1);
+  });
+  const positions = (m: ReturnType<typeof importFbx>) => Array.from(m.parts[0].positions, (v) => +v.toFixed(4));
+  assert.deepEqual(positions(importFbx(asBuffer(zUp), { strict: true })), positions(importFbx(asBuffer(plain), { strict: true })), "strict: as if the settings were not there");
+  assert.notDeepEqual(positions(importFbx(asBuffer(zUp))), positions(importFbx(asBuffer(plain))), "lenient: the settings turn it");
 });

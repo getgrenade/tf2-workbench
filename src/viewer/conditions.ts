@@ -65,7 +65,12 @@ export function conditionParticles(c: Readonly<Conditions>, team: number): Condi
   if (c.crit) systems.push({ system: team === BLUE ? "critgun_weaponmodel_blu" : "critgun_weaponmodel_red", weapon: true });
   // a Bonked Scout (TF_COND_PHASE): the warp haze while he stands still (UpdatePhaseEffects)
   if (c.phase) systems.push({ system: "warp_version", weapon: false });
-  // the Spy's cigarette: the smoke and the glow of the cherry, at the "cig_smoke" attachment of his model
-  if (c.cig) systems.push({ system: "cig_smoke", weapon: false, attachment: "cig_smoke" }, { system: "cig_burn", weapon: false, attachment: "cig_smoke" });
+  // (the Spy's cigarette, `cig`, is not a lane: its smoke and the glow of the cherry play as the effects of what he wears do, at the
+  // "cig_smoke" attachment of his model, so that they run on the fallback simulator too; see `cigaretteEffects`)
   return systems;
+}
+
+/** The Spy's cigarette (`cig`): the smoke and the glow of the cherry, at the "cig_smoke" attachment of his model. */
+export function cigaretteEffects(c: Readonly<Conditions>): { item: null; system: string; attachment: string }[] {
+  return c.cig ? [{ item: null, system: "cig_smoke", attachment: "cig_smoke" }, { item: null, system: "cig_burn", attachment: "cig_smoke" }] : [];
 }
