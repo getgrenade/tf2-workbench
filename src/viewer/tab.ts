@@ -5174,7 +5174,7 @@ export function createViewTab(els: Els) {
   }
 
   /** The promo shot being edited in the 3D view, and what to do when the board is shown again. */
-  let promoEditing: { spec: ShotSpec; /** the characters edited: the shot's one, or a composition's all */ ents: Entity[]; done: (set: boolean) => void; bar: HTMLElement; locked: number[] } | null = null;
+  let promoEditing: { spec: ShotSpec; /** the characters edited: the shot's one, or a composition's all */ ents: Entity[]; done: (set: boolean) => void; bar: HTMLElement; locked: number[]; /** puts the scene's own lights and effects back (the shot's were shown for the edit) */ restoreLook?: () => void } | null = null;
 
   /**
    * Puts the view's camera where the shot's is: the view has the picture's lens (as tall a view as the picture's, whatever the shape of the
@@ -5190,6 +5190,20 @@ export function createViewTab(els: Els) {
     const target = slideCamera(cam, spec.w / spec.h, lens, spec);
     const away = cam.position.clone().sub(target).multiplyScalar(Math.max(1, spec.w / spec.h / aspect));
     v.restoreCamera(target.clone().add(away).toArray() as [number, number, number], target.toArray() as [number, number, number]);
+  }
+
+  /**
+   * A shot that is lit by the hat set shows its lights, rim light and ambient occlusion in the view while it is edited (they can be moved
+   * there, but the shot is taken with the set again). Returns what puts the scene's own back.
+   */
+  function showHatLook(spec: ShotSpec, e: Entity): (() => void) | undefined {
+    const head = spec.hatLook && !spec.group ? e.actor.headOrigin() : null;
+    if (!head) return undefined;
+    const v = ensureViewer();
+    const light = v.getLight(), point = v.getPointLight(), items = postItems;
+    applyLights(hatLight(light, [head.x, head.y, head.z], spec.yaw), point);
+    setPostItems(postItemsOf({ ...capturePost(), rimLights: [HAT_RIM], aos: [HAT_AO] }));
+    return () => { applyLights(light, point); setPostItems(items); };
   }
 
   /** Opens a shot's character in the 3D view as the shot has it (see BoardHost.editIn3D). */
@@ -5220,7 +5234,7 @@ export function createViewTab(els: Els) {
       document.getElementById("canvasWrap")?.appendChild(bar);
       // the promoted items it wears stay on (a line-up's one, a main picture's set)
       const locked = spec.loadout.map((x) => x.item).filter((id) => promo().ids.has(id) || id === spec.reroll?.item);
-      promoEditing = { spec, ents, done: resolve, bar, locked };
+      promoEditing = { spec, ents, done: resolve, bar, locked, restoreLook: showHatLook(spec, ents[0]) };
       (bar.querySelector(".promoEditDone") as HTMLButtonElement).onclick = () => finishShotEdit(true);
       (bar.querySelector(".promoEditCancel") as HTMLButtonElement).onclick = () => finishShotEdit(false);
       hideBoardTab(); // the role's scene shows, in the board's place
@@ -5238,6 +5252,7 @@ export function createViewTab(els: Els) {
     if (!ed) return;
     promoEditing = null;
     ed.bar.remove();
+    ed.restoreLook?.();
     viewer?.setFov(+els.fov.value); // the view's own lens again
     hidePromoTab(promo().roles.get(ed.spec.role));
     const { spec, ents } = ed;
@@ -5289,8 +5304,8 @@ export function createViewTab(els: Els) {
     // (an item shown alone casts no shadow: it would float over one)
     const effects = spec.effects && spec.regions ? { ...spec.effects, shadow: { ...spec.effects.shadow, on: false } } : spec.effects;
     const shoot = () => promoShot(e, new THREE.Vector3(...aimDirection(spec)), Math.round(spec.w * res), Math.round(spec.h * res), spec.fill, spec.scaleDistance, spec, true, effects);
-    // an item shown alone (a hat) is lit by the hat set, standing at the head bone
-    return spec.regions && !spec.group ? withHatLook(e as Entity, spec.yaw, shoot) : shoot();
+    // the thumbnail is lit by the hat set, standing at the head bone
+    return spec.hatLook && !spec.group ? withHatLook(e as Entity, spec.yaw, shoot) : shoot();
   }
 
   /**
@@ -5619,7 +5634,7 @@ export function createViewTab(els: Els) {
       ]);
 
       say(`${item.displayName}: thumbnail…`);
-      picture(item, `${name}_thumb`, "Thumbnail", 512, 512, [await shot(item.displayName, aloneSpec(512, 512, 0.92), 0, 0, 512, 512, true)]);
+      picture(item, `${name}_thumb`, "Thumbnail", 512, 512, [await shot(item.displayName, aloneSpec(512, 512, 0.92, { hatLook: true }), 0, 0, 512, 512, true)]);
 
       // the styles side by side, and a paint chart of each (of the item itself when it has one look)
       const styles = item.styles.length > 1 ? item.styles.slice(0, MAX_PROMO_STYLES) : [];
@@ -5674,6 +5689,9 @@ export function createViewTab(els: Els) {
         const slotW = width / (1 + 2 * PROMO_MARGIN.x), slotH = height / (1 + 2 * PROMO_MARGIN.y);
         return { picture: p.kind, layer: l.name, widthShare: +((x1 - x0 + 1) / slotW).toFixed(2), heightShare: +((y1 - y0 + 1) / slotH).toFixed(2) };
       })),
+      /** Opens the thumbnail's shot in 3D (and back out, dropping the edit): a test of the lights shown there. */
+      editThumb: () => void editShotIn3D(session!.pictures.find((p) => p.kind === "Thumbnail")!.layers.find((l) => l.shot)!.shot!),
+      leaveEdit: () => finishShotEdit(false),
       generate: async (names: string[], only?: "lineup") => {
         const db = await loadItemDb();
         const set = names.map((n) => db.items.find((i) => i.displayName === n)).filter((i): i is ItemInfo => !!i);
