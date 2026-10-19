@@ -98,6 +98,7 @@ import { PART_LABEL, PART_SUFFIX, parseLightsFile, parsePostFile, partFilter, pa
 import { LOOK_KINDS, defaultLook, parseLook, type LookKind, type LookStates } from "./look";
 import { createLookEditors } from "./lookUi";
 import { DEFAULT_RIM_LIGHT, parseRimLight, type RimLightState } from "./rimLight";
+import { HAT_AO, HAT_RIM, hatLight } from "./hatLook";
 
 /** Label, model file name under models/player, and the class name items_game.txt uses. */
 const CLASSES: [label: string, mdl: string, gameClass: string][] = [
@@ -5287,7 +5288,29 @@ export function createViewTab(els: Els) {
     const res = spec.resolution ?? 1;
     // (an item shown alone casts no shadow: it would float over one)
     const effects = spec.effects && spec.regions ? { ...spec.effects, shadow: { ...spec.effects.shadow, on: false } } : spec.effects;
-    return promoShot(e, new THREE.Vector3(...aimDirection(spec)), Math.round(spec.w * res), Math.round(spec.h * res), spec.fill, spec.scaleDistance, spec, true, effects);
+    const shoot = () => promoShot(e, new THREE.Vector3(...aimDirection(spec)), Math.round(spec.w * res), Math.round(spec.h * res), spec.fill, spec.scaleDistance, spec, true, effects);
+    // an item shown alone (a hat) is lit by the hat set, standing at the head bone
+    return spec.regions && !spec.group ? withHatLook(e as Entity, spec.yaw, shoot) : shoot();
+  }
+
+  /**
+   * Runs `job` with the hat set's lights (see hatLook.ts) round the character's head, with its rim light, ambient occlusion and ambient: the
+   * scene's own lights and effects are put back after.
+   */
+  async function withHatLook<T>(e: Entity, cameraYaw: number, job: () => Promise<T>): Promise<T> {
+    const v = ensureViewer();
+    const head = e.actor.headOrigin();
+    if (!head) return job();
+    const was = v.getLight();
+    v.setLight(hatLight(was, [head.x, head.y, head.z], cameraYaw));
+    v.setRimLights([HAT_RIM]);
+    v.setAo(HAT_AO);
+    try {
+      return await job();
+    } finally {
+      v.setLight(was);
+      pushPost();
+    }
   }
 
   /**

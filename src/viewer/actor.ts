@@ -1162,6 +1162,15 @@ export class Actor {
     return out.applyMatrix4(root);
   }
 
+  /** Where the head bone (bip_head) is in the scene, as posed; null when the model has none. */
+  headOrigin(out = new THREE.Vector3()): THREE.Vector3 | null {
+    const head = this.boneNames.findIndex((n) => n.toLowerCase() === "bip_head");
+    const world = head >= 0 ? this.rig?.boneWorld[head] : undefined;
+    const root = this.modelGroup?.matrix;
+    if (!world || !root) return null;
+    return out.setFromMatrixPosition(world).applyMatrix4(root);
+  }
+
   /** Bone-to-model matrices of the current pose (Source space). */
   get boneWorlds(): THREE.Matrix4[] | null {
     return this.rig?.boneWorld ?? null;
