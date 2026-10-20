@@ -288,7 +288,26 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     return pictures.flatMap((q) => q.layers.map((x) => [q, x] as const))
       .filter(([, x]) => x !== l && x.chart && x.chart !== c && x.chart.sync !== false && x.chart.item === c.item && x.chart.role === c.role);
   };
+  /** The picture's other shots of the same items in other styles (the Styles picture): linked unless one was unlinked. */
+  const styleSiblings = (p: PromoPicture, l: PromoLayer) => {
+    const s = l.shot;
+    if (!s || s.sync === false || s.group) return [];
+    const items = (x: ShotSpec) => x.loadout.map((w) => w.item).sort().join(",");
+    const styles = (x: ShotSpec) => x.loadout.map((w) => `${w.item}:${w.style}`).sort().join(",");
+    return p.layers.filter((x) => x !== l && x.shot && x.shot !== s && x.shot.sync !== false && !x.shot.group && x.shot.role === s.role && items(x.shot) === items(s) && styles(x.shot) !== styles(s));
+  };
   function retake(p: PromoPicture, l: PromoLayer, before?: () => Promise<void>) {
+    // a style shot's camera goes to the other styles' shots (each keeps its style)
+    if (l.shot && !before) {
+      const s = l.shot;
+      const aim = (x: ShotSpec) => JSON.stringify([x.yaw, x.pitch, x.fill, x.panX, x.panY, x.light, x.particles, x.scaleDistance]);
+      for (const x of styleSiblings(p, l)) {
+        const o = x.shot!;
+        if (aim(o) === aim(s)) continue;
+        Object.assign(o, { yaw: s.yaw, pitch: s.pitch, fill: s.fill, panX: s.panX, panY: s.panY, light: s.light ? { ...s.light } : undefined, particles: s.particles ? { ...s.particles } : undefined, scaleDistance: s.scaleDistance });
+        queueRetake(p, x);
+      }
+    }
     // a chart's change goes to its other styles' charts too (the camera, the paints, the layout; each keeps its style)
     if (l.chart && !before) {
       const c = l.chart;
@@ -1387,6 +1406,19 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
         reseed.title = "Another seed for the effects' chances: where each particle is, which way it went";
         reseed.onclick = () => { particles.seed = Math.floor(Math.random() * 0x7fffffff); retake(p, l); };
         layerBox.appendChild(reseed);
+        // the picture's shots of the item's other styles: linked (camera, light, effects and scale) unless unlinked here
+        const others = styleSiblings(p, { ...l, shot: { ...spec, sync: true } });
+        if (others.length || spec.sync === false) {
+          const sync = document.createElement("input");
+          sync.type = "checkbox";
+          sync.checked = spec.sync !== false;
+          sync.title = "Camera, light, effects and scale shared with this picture's shots of the other styles";
+          sync.onchange = () => {
+            spec.sync = sync.checked;
+            if (sync.checked) retake(p, l); // linked again: the others take this one's camera
+          };
+          field(layerBox, "Linked styles", sync);
+        }
       }
       if (aim.light) {
         const back = document.createElement("button");
@@ -1407,13 +1439,12 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
         const sync = document.createElement("input");
         sync.type = "checkbox";
         sync.checked = chart.sync !== false;
-        sync.title = "Its camera, paints and layout are the same as the charts of this item's other styles: a change here changes them too";
+        sync.title = "Camera, paints and layout shared with the charts of the other styles";
         sync.onchange = () => {
           chart.sync = sync.checked;
-          // put back in step: the others take this one's settings
-          if (sync.checked) retake(p, l);
+          if (sync.checked) retake(p, l); // linked again: the others take this one's settings
         };
-        field(layerBox, `In step with ${others.length === 1 ? "the other style's chart" : `the ${others.length} other styles' charts`}`, sync);
+        field(layerBox, "Linked charts", sync);
       }
       const ph = document.createElement("h3");
       ph.textContent = "Paints";

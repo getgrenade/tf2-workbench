@@ -1301,13 +1301,31 @@ body.dndActive.dndRefused * { cursor: no-drop !important; }
 .promoEditBar { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); z-index: 30; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 32px); padding: 6px 8px 6px 12px; border-radius: var(--ui-radius-l); background: var(--panel); border: 1px solid var(--accent); box-shadow: 0 6px 20px var(--ui-shade-3); }
 .promoEditBar span { flex: 1; min-width: 0; }
 .promoEditBar .primary { border-color: var(--accent); color: var(--accent); }
-/* the Workshop styles window */
-.workshopStylesWindow .wsList { display: flex; flex-direction: column; gap: 4px; }
-.workshopStylesWindow .wsRow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 6px; align-items: center; }
-.workshopStylesWindow .wsRow input, .workshopStylesWindow .wsAdd input { min-width: 0; background: var(--bg); color: var(--fg); border: 1px solid var(--line); padding: 3px 6px; border-radius: var(--ui-radius); }
-.workshopStylesWindow .wsAdd { display: flex; gap: 6px; }
-.workshopStylesWindow .wsAdd input { flex: 1; }
-.workshopStylesWindow .wsBase { min-width: 0; max-width: 220px; }
+/* the Styles panel of a workshop item (the right-click menu of the item) */
+.stylesPop { position: fixed; z-index: 60; width: 320px; max-height: calc(100vh - 40px); display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--ui-line-strong); border-radius: var(--ui-radius-l); box-shadow: 0 10px 28px var(--ui-shade-3); font-size: var(--ui-fs-body); }
+.stylesPop .chartHead { padding: 5px 6px 5px 10px; }
+.stylesPop .spTitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stylesPop .spRows { display: flex; flex-direction: column; gap: 2px; padding: 6px; overflow: auto; }
+.stylesPop .spRow { display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 2px 4px; border-radius: var(--ui-radius); position: relative; }
+.stylesPop .spRow[draggable="true"] { cursor: grab; }
+.stylesPop .spRow.dragging { opacity: .4; }
+.stylesPop .spRow.before::before, .stylesPop .spRow.after::after { content: ""; position: absolute; left: 4px; right: 4px; height: 2px; background: var(--accent); }
+.stylesPop .spRow.before::before { top: -2px; }
+.stylesPop .spRow.after::after { bottom: -2px; }
+.stylesPop .spIcon { flex: 0 0 auto; width: 28px; height: 28px; border-radius: var(--ui-radius-s); background: var(--ui-canvas) no-repeat center / contain; }
+.stylesPop .spNum { flex: 0 0 auto; width: 14px; text-align: right; }
+.stylesPop .spOwn, .stylesPop .spName { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stylesPop .spName { background: var(--bg); color: var(--fg); border: 1px solid var(--line); padding: 3px 6px; border-radius: var(--ui-radius); font: inherit; }
+.stylesPop .spTag { flex: 0 0 auto; font-size: var(--ui-fs-small); }
+.stylesPop .spGrip { flex: 0 0 auto; letter-spacing: -2px; cursor: grab; }
+.stylesPop .spRemove { flex: 0 0 auto; padding: 0 7px; }
+.stylesPop .spFoot { display: flex; align-items: center; gap: 8px; padding: 6px; border-top: 1px solid var(--line); }
+.stylesPop .spFoot .chartInfo { margin: 0; flex: 1; min-width: 0; }
+.stylesPop.picking .spAdd { background: var(--accent); color: var(--ui-on-accent); border-color: var(--accent); }
+/* pick mode: the list is a picker for the Styles panel (the items that can be picked are lit, the others dimmed) */
+#itemList.picking .tile { cursor: default; }
+#itemList.picking .tile.pickable { cursor: copy; border-color: var(--ui-accent-line); }
+#itemList.picking .tile.unpickable { opacity: .35; }
 .promoTextArea { width: 100%; min-width: 0; resize: vertical; background: var(--bg); color: var(--fg); border: 1px solid var(--line); padding: 3px 6px; border-radius: var(--ui-radius); font: inherit; }
 .promoStackRow.border { color: var(--dim); font-style: italic; }
 .promoEditNote.warn { color: #ffb45a; }
