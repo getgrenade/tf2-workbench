@@ -98,8 +98,6 @@ export interface ShotSpec extends ShotAim {
    * This spec is then the picture's: its camera, its size and its effects.
    */
   group?: ShotSpec[];
-  /** Lit by the hat light set standing at the head bone (the thumbnail), not by the scene's own lights. */
-  hatLook?: boolean;
   /** The camera's lens (vertical field of view, degrees); absent: the promo's 30. */
   fov?: number;
   /** In a group: how far the character is turned from facing the camera, in degrees. */
