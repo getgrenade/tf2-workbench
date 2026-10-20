@@ -57,7 +57,7 @@ import type { ClipData, MaterialData, ModelData } from "./payload";
 import { DEFAULT_SHADOW, type ShadowParams } from "./shadowMath";
 import { SourceMaterials, type SharedUniforms } from "./sourceMaterials";
 import { FOG_GLSL, MAX_FOGS, applyFogUniforms, type FogState } from "./fog";
-import { DEFAULT_AO, type AoState } from "./aoMath";
+import { AO_APPLY_GLSL, DEFAULT_AO, aoTintRgb, type AoState } from "./aoMath";
 import { AoPass } from "./aoPass";
 import { BloomPass, LOOK_GLSL, applyLookUniforms, createLookUniforms, type LookStates } from "./look";
 import { DofPass, MotionAccumulator, subframeOffsets } from "./lookPasses";
@@ -618,7 +618,7 @@ export class Viewer {
   /** Ambient occlusion over the finished picture (post effect), measured from the depth of the scene. */
   private ao: AoState = { ...DEFAULT_AO };
   private aoPass: AoPass | null = null;
-  private readonly aoUniforms = { tAo: { value: null as THREE.Texture | null }, uAoOn: { value: 0 }, uAoStrength: { value: 0.8 }, uAoPower: { value: 1.5 } };
+  private readonly aoUniforms = { tAo: { value: null as THREE.Texture | null }, uAoOn: { value: 0 }, uAoStrength: { value: 0.8 }, uAoPower: { value: 1.5 }, uAoTint: { value: new THREE.Vector3() }, uAoBleed: { value: 0 } };
   /** The look effects (vignette, chromatic aberration, grain, colour grading, bloom) over the finished picture. */
   private look: LookStates = {};
   private readonly lookRes = new THREE.Vector2(1, 1);
@@ -714,13 +714,16 @@ uniform sampler2D tAo;
 uniform float uAoOn;
 uniform float uAoStrength;
 uniform float uAoPower;
+uniform vec3 uAoTint;
+uniform float uAoBleed;
+${AO_APPLY_GLSL}
 ${FOG_GLSL}
 ${LOOK_GLSL}
 varying vec2 vUv;
 void main() {
   vec2 su = lookDistort(vUv);
   vec3 c = lookScene(tScene, vUv).rgb;
-  if (uAoOn > 0.5) c *= mix(1.0, pow(texture2D(tAo, su).r, uAoPower), uAoStrength);
+  c = aoApply(c, su);
   vec3 fogOver;
   float fogA = fogLayers(su, fogOver) * (1.0 - fogFree(su));
   c = c * (1.0 - fogA) + fogOver * (1.0 - fogFree(su));
@@ -2710,6 +2713,8 @@ void main() {
     this.ao = { ...a };
     this.aoUniforms.uAoStrength.value = a.strength;
     this.aoUniforms.uAoPower.value = a.power;
+    this.aoUniforms.uAoTint.value.set(...aoTintRgb(a.tint));
+    this.aoUniforms.uAoBleed.value = a.bleed;
   }
 
   getAo(): AoState {
@@ -3529,7 +3534,7 @@ void main() {
     let captureDof: DofPass | null = null;
     let captureMotion: MotionAccumulator | null = null;
     const material = new THREE.ShaderMaterial({
-      uniforms: { tScene: { value: sceneRT.texture }, tDepth: { value: sceneRT.depthTexture }, uInvViewProj: { value: cam.matrixWorld.clone().multiply(cam.projectionMatrixInverse) }, uCamPos: { value: cam.getWorldPosition(new THREE.Vector3()) }, uCamForward: { value: cam.getWorldDirection(new THREE.Vector3()) }, uBackDist: { value: Math.max(1, this.camera.position.distanceTo(this.controls.target)) }, uTransparent: { value: transparent }, ...this.fogUniforms, ...(withLook ? this.lookUniforms : createLookUniforms()), uLookFrame: { value: new THREE.Vector4(0, 0, 1, 1) }, uFogFrame: { value: new THREE.Vector4(0, 0, 1, 1) }, uLookRes: { value: new THREE.Vector2(w, h) }, tBloom: { value: null }, uFogCount: { value: opts?.camera && !opts.fullScene ? 0 : this.fogUniforms.uFogCount.value }, tAo: { value: aoTexture }, uAoOn: { value: aoTexture ? 1 : 0 }, uAoStrength: { value: this.ao.strength }, uAoPower: { value: this.ao.power }, tFogMask: { value: maskRT?.texture ?? this.fogMaskTarget.texture }, uFogMaskOn: { value: maskRT ? 1 : 0 }, uLayer: { value: 0 }, uLayerAlt: { value: 0 } },
+      uniforms: { tScene: { value: sceneRT.texture }, tDepth: { value: sceneRT.depthTexture }, uInvViewProj: { value: cam.matrixWorld.clone().multiply(cam.projectionMatrixInverse) }, uCamPos: { value: cam.getWorldPosition(new THREE.Vector3()) }, uCamForward: { value: cam.getWorldDirection(new THREE.Vector3()) }, uBackDist: { value: Math.max(1, this.camera.position.distanceTo(this.controls.target)) }, uTransparent: { value: transparent }, ...this.fogUniforms, ...(withLook ? this.lookUniforms : createLookUniforms()), uLookFrame: { value: new THREE.Vector4(0, 0, 1, 1) }, uFogFrame: { value: new THREE.Vector4(0, 0, 1, 1) }, uLookRes: { value: new THREE.Vector2(w, h) }, tBloom: { value: null }, uFogCount: { value: opts?.camera && !opts.fullScene ? 0 : this.fogUniforms.uFogCount.value }, tAo: { value: aoTexture }, uAoOn: { value: aoTexture ? 1 : 0 }, uAoStrength: { value: this.ao.strength }, uAoPower: { value: this.ao.power }, uAoTint: { value: new THREE.Vector3(...aoTintRgb(this.ao.tint)) }, uAoBleed: { value: this.ao.bleed }, tFogMask: { value: maskRT?.texture ?? this.fogMaskTarget.texture }, uFogMaskOn: { value: maskRT ? 1 : 0 }, uLayer: { value: 0 }, uLayerAlt: { value: 0 } },
       vertexShader: "varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }",
       // Preserve all light, including emission at zero alpha. Resolve PNG coverage after readback.
       fragmentShader: `uniform sampler2D tScene;
@@ -3538,6 +3543,9 @@ uniform sampler2D tAo;
 uniform float uAoOn;
 uniform float uAoStrength;
 uniform float uAoPower;
+uniform vec3 uAoTint;
+uniform float uAoBleed;
+${AO_APPLY_GLSL}
 ${FOG_GLSL}
 ${LOOK_GLSL}
 ${LAYER_GLSL}
@@ -3548,7 +3556,7 @@ void main() {
   if (uLayer > 0) { gl_FragColor = lookLayer(c, su, vUv); return; }
   vec3 rgb = c.rgb;
   float a = uTransparent ? clamp(c.a, 0.0, 1.0) : 1.0;
-  if (uAoOn > 0.5) rgb *= mix(1.0, pow(texture2D(tAo, su).r, uAoPower), uAoStrength);
+  rgb = aoApply(rgb, su);
   // the fog lies over the picture: over a transparent background it becomes part of the picture's coverage
   vec3 fogOver;
   float f = fogLayers(su, fogOver) * (1.0 - fogFree(su));

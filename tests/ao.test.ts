@@ -1,7 +1,7 @@
 // Run with: node --test "tests/*.test.ts"
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DEFAULT_AO, aoKernel, parseAo } from "../src/viewer/aoMath.ts";
+import { DEFAULT_AO, aoKernel, aoTintRgb, parseAo } from "../src/viewer/aoMath.ts";
 
 test("a scene without occlusion gives none, and bad values are replaced", () => {
   assert.equal(parseAo(undefined), undefined);
@@ -20,4 +20,15 @@ test("the kernel points into the hemisphere and stays inside the unit ball", () 
     assert.ok(Math.hypot(x, y, z) <= 1);
   }
   assert.deepEqual(aoKernel(16), k);
+});
+
+test("the tint is a colour (black by default) and the bleed stays in range", () => {
+  const plain = parseAo({ enabled: true })!;
+  assert.equal(plain.tint, "#000000");
+  assert.equal(plain.bleed, 0);
+  const tinted = parseAo({ enabled: true, tint: "#1A2A66", bleed: 7 })!;
+  assert.equal(tinted.tint, "#1a2a66");
+  assert.equal(tinted.bleed, 1);
+  assert.equal(parseAo({ enabled: true, tint: "blue" })!.tint, "#000000");
+  assert.deepEqual(aoTintRgb("#ff8000"), [1, 128 / 255, 0]);
 });

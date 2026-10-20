@@ -133,6 +133,8 @@ interface Els {
     strength: HTMLInputElement;
     radius: HTMLInputElement;
     power: HTMLInputElement;
+    tint: HTMLInputElement;
+    bleed: HTMLInputElement;
     reset: HTMLButtonElement;
   };
   rimLight: {
@@ -7038,7 +7040,7 @@ export function createViewTab(els: Els) {
   // --- ambient occlusion ---
   function applyAo() {
     const a = els.ao;
-    editedPost("ao", { enabled: a.on.checked, strength: +a.strength.value, radius: +a.radius.value, power: +a.power.value });
+    editedPost("ao", { enabled: a.on.checked, strength: +a.strength.value, radius: +a.radius.value, power: +a.power.value, tint: a.tint.value, bleed: +a.bleed.value });
     const label = (el: HTMLInputElement, text: string) => {
       const out = el.parentElement?.querySelector("output");
       if (out) out.textContent = text;
@@ -7046,6 +7048,7 @@ export function createViewTab(els: Els) {
     label(a.strength, (+a.strength.value).toFixed(2));
     label(a.radius, (+a.radius.value).toFixed(2));
     label(a.power, (+a.power.value).toFixed(2));
+    label(a.bleed, (+a.bleed.value).toFixed(2));
   }
   function showAo(a: AoState) {
     const e = els.ao;
@@ -7053,9 +7056,11 @@ export function createViewTab(els: Els) {
     e.strength.value = String(a.strength);
     e.radius.value = String(a.radius);
     e.power.value = String(a.power);
+    e.tint.value = a.tint;
+    e.bleed.value = String(a.bleed);
     applyAo();
   }
-  for (const el of [els.ao.on, els.ao.strength, els.ao.radius, els.ao.power]) el.oninput = applyAo;
+  for (const el of [els.ao.on, els.ao.strength, els.ao.radius, els.ao.power, els.ao.tint, els.ao.bleed]) el.oninput = applyAo;
   els.ao.reset.onclick = () => showAo({ ...DEFAULT_AO, enabled: els.ao.on.checked });
   applyAo();
 

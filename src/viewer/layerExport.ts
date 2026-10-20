@@ -143,8 +143,8 @@ vec4 lookLayer(vec4 scene, vec2 su, vec2 uv) {
   float cover = uTransparent ? clamp(f + sceneCover * (1.0 - f), 0.0, 1.0) : 1.0;
   // the picture as it is built up, layer by layer: the occlusion, the fog, bloom (and then the colour work, which is part of the Scene layer
   // but works on all of that), the vignette, the scanlines, the grain and the light leaks
-  float aoK = uAoOn > 0.5 ? mix(1.0, pow(texture2D(tAo, su).r, uAoPower), uAoStrength) : 1.0;
-  vec3 u0 = scene.rgb * aoK;
+  vec3 u0 = aoApply(scene.rgb, su);
+  vec3 aoK = u0 / max(scene.rgb, vec3(0.0001)); // (as a multiplication: what the occlusion layer shows)
   vec3 u1 = fogOver * (1.0 - ff) + u0 * (1.0 - f);
   vec3 bloom = uBloomK > 0.0 ? clamp(texture2D(tBloom, uv).rgb * uBloomK, 0.0, 1.0) : vec3(0.0);
   vec3 u2 = u1 + bloom;
@@ -172,7 +172,7 @@ vec4 lookLayer(vec4 scene, vec2 su, vec2 uv) {
   float dustMix = uDust.x > 0.0 ? lookDustMarks(uv) * uDust.w * cover : 0.0;
 
   vec3 fogColor = lookTone(clamp(fogOver / max(fRaw, 1e-4), 0.0, 1.0), cover);
-  if (uLayer == ${LAYER_SHADER.ao}) return vec4(layerLinear(layerMultiply(t0, t1, vec3(aoK))), sceneCover);
+  if (uLayer == ${LAYER_SHADER.ao}) return vec4(layerLinear(layerMultiply(t0, t1, aoK)), sceneCover);
   if (uLayer == ${LAYER_SHADER.fog}) return vec4(fogColor, mix(f, layerAlpha(t1, fogColor, t2), sceneCover));
   if (uLayer == ${LAYER_SHADER.bloom}) return vec4(layerLinear(layerScreen(t2, t3)), uTransparent ? max(bloom.r, max(bloom.g, bloom.b)) : 1.0);
   if (uLayer == ${LAYER_SHADER.vignette}) return uLayerAlt > 0.5 ? vec4(uVigColor, layerAlpha(t3, uVigColor, u3)) : vec4(layerLinear(layerMultiply(t3, u3, mix(vec3(1.0), uVigColor, vig))), cover);

@@ -113,6 +113,8 @@ app.innerHTML = `
           <label class="slider">Strength <output></output><input type="range" id="aoStrength" min="0" max="1" step="0.01" value="0.8" /></label>
           <label class="slider">Radius <output></output><input type="range" id="aoRadius" min="0.01" max="0.5" step="0.01" value="0.12" /></label>
           <label class="slider">Contrast <output></output><input type="range" id="aoPower" min="0.5" max="4" step="0.05" value="1.5" /></label>
+          <label class="colorRow" title="The colour that what is occluded goes toward: black darkens plainly, a colour tints the creases (a dark blue or brown looks softer than black)">Tint <input type="color" id="aoTint" value="#000000" /></label>
+          <label class="slider" title="How much the creases keep the surface's own colour, deeper and more saturated, instead of going to the tint: a red wall is dark red there, not grey">Colour bleed <output></output><input type="range" id="aoBleed" min="0" max="1" step="0.01" value="0" /></label>
           <div class="dim hint">Radius is in character heights.</div>
         </section>
         <section class="lightCol" data-effect="rim" hidden>
@@ -345,6 +347,8 @@ const viewTab = createViewTab({
     strength: $<HTMLInputElement>("aoStrength"),
     radius: $<HTMLInputElement>("aoRadius"),
     power: $<HTMLInputElement>("aoPower"),
+    tint: $<HTMLInputElement>("aoTint"),
+    bleed: $<HTMLInputElement>("aoBleed"),
     reset: $<HTMLButtonElement>("aoReset"),
   },
   rimLight: {
