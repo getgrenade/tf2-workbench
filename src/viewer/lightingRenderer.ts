@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { bodyMaskPass } from "./bodyMaskPass";
-import { lightColor, worldDirection, lightDirection, DEFAULT_SHADOW_QUALITY, MAX_LIGHTS, type LightingRig, type RigLight, type ShadowQuality } from "./lighting";
+import { lightColor, worldDirection, lightDirection, spotLightRotation, DEFAULT_SHADOW_QUALITY, MAX_LIGHTS, type LightingRig, type RigLight, type ShadowQuality } from "./lighting";
 import type { SharedUniforms } from "./sourceMaterials";
 /** The most pixels the shadow atlas may have (it is a texture of four bytes a pixel, so this is a few hundred megabytes at most). */
 const MAX_ATLAS_PIXELS = 48e6;
@@ -50,6 +50,7 @@ gl_FragColor = vec4(enc, 1.0); }`,
       tRigShadow: { value: null }, uRigShadowSlot: { value: new Array(MAX_LIGHTS).fill(0) }, uRigShadowGrid: { value: new THREE.Vector2(1, 1) }, uRigShadowTile: { value: 1024 },
       uRigShadowStrength: { value: new Array(MAX_LIGHTS).fill(1) }, uRigShadowFilter: { value: 6 }, uRigShadowCube: { value: new Array(MAX_LIGHTS).fill(0) }, uRigShadowJitter: { value: 0 }, uRigShadowTint: { value: new THREE.Vector3() },
       uRigShadowSoft: { value: new Array(MAX_LIGHTS).fill(1) },
+      uRigAxisU: { value: Array.from({ length: MAX_LIGHTS }, () => new THREE.Vector3(1, 0, 0)) }, uRigAxisV: { value: Array.from({ length: MAX_LIGHTS }, () => new THREE.Vector3(0, 1, 0)) },
       uRigCurve: { value: new Array(MAX_LIGHTS).fill(1) },
     });
     const uploadMask = this.depth.onBeforeRender.bind(this.depth);
@@ -88,7 +89,13 @@ gl_FragColor = vec4(enc, 1.0); }`,
         continue;
       this.shared.uRigDirection.value[i].copy(worldDirection(light, camera.quaternion));
       this.shared.uRigPosition.value[i].fromArray(light.position);
-      this.shared.uRigParams.value[i].set(light.type === "directional" ? 0 : light.type === "point" ? 1 : 2, light.range, light.falloff, Math.cos(light.cone * Math.PI / 180));
+      if (light.type === "area") {
+        // the panel's edges from its middle, turned as the light is
+        const turn = spotLightRotation(light);
+        this.shared.uRigAxisU.value[i].set(1, 0, 0).applyQuaternion(turn).multiplyScalar((light.width ?? 80) / 2);
+        this.shared.uRigAxisV.value[i].set(0, 1, 0).applyQuaternion(turn).multiplyScalar((light.height ?? 20) / 2);
+      }
+      this.shared.uRigParams.value[i].set(light.type === "directional" ? 0 : light.type === "point" ? 1 : light.type === "spot" ? 2 : 3, light.range, light.falloff, Math.cos(light.cone * Math.PI / 180));
     }
   }
   render(renderer: THREE.WebGLRenderer, scene: THREE.Scene, center: THREE.Vector3, radius: number, exclude: THREE.Object3D[], moved: boolean) {

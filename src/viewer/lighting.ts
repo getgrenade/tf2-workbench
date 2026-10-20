@@ -3,11 +3,14 @@ export const MAX_LIGHTS = 8;
 export interface RigLight {
   id: string;
   name: string;
-  type: "directional" | "point" | "spot";
+  type: "directional" | "point" | "spot" | "area";
   enabled: boolean;
   azimuth: number;
   elevation: number;
-  /** Spotlight orientation: local +Z is the emitted beam, including roll. */
+  /** Area lights only: the panel's size (local X by local Y, in scene units); it faces the way a spot light does (local +Z, with its roll). */
+  width?: number;
+  height?: number;
+  /** Spot and area lights: the orientation, local +Z being the emitted beam, including roll. */
   rotation?: [number, number, number, number];
   intensity: number;
   color: string;
@@ -64,13 +67,15 @@ export interface LightingRig {
 }
 /** How far a new light reaches: a point light starts small (a fifth of a spot's reach) so it lights what is near it. */
 export const defaultLightRange = (type: RigLight["type"]) => type === "point" ? 50 : 250;
+/** The size a new area light has: a wide strip, as one lit from behind for a rim. */
+export const DEFAULT_AREA_SIZE = { width: 80, height: 20 };
 export function newRigLight(id: string, type: RigLight["type"] = "point", position: [
   number,
   number,
   number
 ] = [60, 100, 100]): RigLight {
   // a directional light turns with the camera unless it is told not to, as in hlmv
-  return { id, name: `${type[0].toUpperCase() + type.slice(1)} light`, type, enabled: true, azimuth: 0, elevation: 20, intensity: 1, color: "#ffffff", position: [...position], range: defaultLightRange(type), falloff: 1.5, cone: 45, shadows: false, ...(type === "directional" ? { followCamera: true } : {}) };
+  return { id, name: `${type[0].toUpperCase() + type.slice(1)} light`, type, enabled: true, azimuth: 0, elevation: 20, intensity: 1, color: "#ffffff", position: [...position], range: defaultLightRange(type), falloff: 1.5, cone: 45, shadows: false, ...(type === "directional" ? { followCamera: true } : {}), ...(type === "area" ? { ...DEFAULT_AREA_SIZE } : {}) };
 }
 export function defaultLightingRig(primary?: {
   azimuth: number;
@@ -95,7 +100,7 @@ export function parseLightingRig(value: unknown, primary?: Parameters<typeof def
     const parsed: RigLight = {
     ...fallback, id: typeof value.id === "string" ? value.id : fallback.id,
     name: typeof value.name === "string" ? value.name.slice(0, 80) : fallback.name,
-    type: value.type === "point" || value.type === "spot" ? value.type : "directional",
+    type: value.type === "point" || value.type === "spot" || value.type === "area" ? value.type : "directional",
     enabled: typeof value.enabled === "boolean" ? value.enabled : fallback.enabled, shadows: value.shadows === true,
     color: typeof value.color === "string" && /^#[\da-f]{6}$/i.test(value.color) ? value.color : fallback.color,
     azimuth: (number(value.azimuth, fallback.azimuth, -360, 360) % 360 + 360) % 360, elevation: number(value.elevation, fallback.elevation, -90, 90),
@@ -107,12 +112,18 @@ export function parseLightingRig(value: unknown, primary?: Parameters<typeof def
       number
     ] : [...fallback.position],
     };
+    if (parsed.type === "area") {
+      // a panel has no shadow of its own (the maps are made for point and spot lights)
+      parsed.shadows = false;
+      parsed.width = number(value.width, fallback.width ?? DEFAULT_AREA_SIZE.width, 1, 2000);
+      parsed.height = number(value.height, fallback.height ?? DEFAULT_AREA_SIZE.height, 1, 2000);
+    }
     if (typeof value.group === "string" && value.group) parsed.group = value.group.slice(0, 64);
     if (typeof value.shadowStrength === "number" && value.shadowStrength < 1) parsed.shadowStrength = number(value.shadowStrength, 1, 0, 1);
     if (typeof value.shadowSoftness === "number" && value.shadowSoftness !== 1) parsed.shadowSoftness = number(value.shadowSoftness, 1, 0, 4);
     if (typeof value.curve === "number" && value.curve !== 1) parsed.curve = number(value.curve, 1, .25, 4);
     if (parsed.type === "directional" && Array.isArray(value.pivot) && value.pivot.length === 3 && value.pivot.every(n => typeof n === "number" && Number.isFinite(n))) parsed.pivot = value.pivot.map(n => Math.min(10000, Math.max(-10000, n))) as [number, number, number];
-    if (parsed.type === "spot" && Array.isArray(value.rotation) && value.rotation.length === 4 && value.rotation.every(n => typeof n === "number" && Number.isFinite(n))) {
+    if ((parsed.type === "spot" || parsed.type === "area") && Array.isArray(value.rotation) && value.rotation.length === 4 && value.rotation.every(n => typeof n === "number" && Number.isFinite(n))) {
       const q = new THREE.Quaternion().fromArray(value.rotation);
       if (q.lengthSq() > 1e-12) {
         q.normalize();

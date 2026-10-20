@@ -21,6 +21,9 @@ export class LightGizmos {
   /** The line from where a directional light turns to the bulb it comes from (local space: the way to the light is -Z). */
   private readonly ray = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ transparent: true, opacity: .6, depthWrite: false }));
   private rayLength = -1;
+  /** An area light's panel: its outline (local X by local Y) and the way it shines. */
+  private readonly panel = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ transparent: true, opacity: .8, depthWrite: false }));
+  private panelSize = "";
   /** Where a directional light's gizmo sits unless it was moved, and how far its bulb is from there: the viewer says (the middle of the scene). */
   anchor: () => THREE.Vector3 = () => new THREE.Vector3();
   reach: () => number = () => 100;
@@ -48,14 +51,14 @@ export class LightGizmos {
     });
     this.gizmos.on("mouseUp", () => { this.before = null; orbit.enabled = this.orbitEnabled; this.sync(); });
     this.gizmos.exclusiveDrag(() => this.sync());
-    this.marker.add(this.bulb, this.sphere, this.cone, this.ray);
+    this.marker.add(this.bulb, this.sphere, this.cone, this.ray, this.panel);
     this.objects = [this.marker, this.others, ...this.gizmos.objects];
     scene.add(this.pivot, this.marker, this.others);
     this.marker.visible = false;
     this.installInput();
   }
   get active() { const l = this.selected(); return this.available() && !!l?.enabled; }
-  get rotatable() { const type = this.selected()?.type; return type === "spot" || type === "directional"; }
+  get rotatable() { const type = this.selected()?.type; return type === "spot" || type === "directional" || type === "area"; }
   /** Where the gizmo of a light sits: at the light; for a directional one (which has no place) where it was put, or else in the middle of the scene. */
   private placeOf(light: RigLight) { return light.type === "directional" ? (light.pivot ? new THREE.Vector3().fromArray(light.pivot) : this.anchor().clone()) : new THREE.Vector3().fromArray(light.position); }
   /** The turn that points the gizmo's +Z the way a directional light shines (its direction is relative to the view when the light follows the camera). */
@@ -137,7 +140,7 @@ export class LightGizmos {
     // the marker of a point light is not turned, so the camera's own turn makes the ring face the viewer
     if (this.marker.visible) this.sphere.quaternion.copy(this.camera.quaternion);
     const light = this.selected();
-    const key = [this.available(), this.indicators(), light?.id, light?.enabled, light?.type, light?.azimuth, light?.elevation, light?.type === "directional" ? this.camera.quaternion.toArray().join(",") + this.anchor().toArray().join(",") : "", this.highlighted.join(), this.all().map((x) => x.position.join(",")).join(";")].join("|");
+    const key = [this.available(), this.indicators(), light?.id, light?.enabled, light?.type, light?.azimuth, light?.elevation, light?.width, light?.height, light?.rotation?.join(), light?.type === "directional" ? this.camera.quaternion.toArray().join(",") + this.anchor().toArray().join(",") : "", this.highlighted.join(), this.all().map((x) => x.position.join(",")).join(";")].join("|");
     if (key === this.seen) return;
     this.seen = key;
     this.sync();
@@ -153,7 +156,7 @@ export class LightGizmos {
     const marked = !!light && light.enabled && this.indicators() && (directional ? active : true);
     this.marker.visible = marked;
     if (light && (marked || active)) {
-      const quaternion = light.type === "spot" ? spotLightRotation(light) : directional ? this.directionalRotation(light) : new THREE.Quaternion();
+      const quaternion = light.type === "spot" || light.type === "area" ? spotLightRotation(light) : directional ? this.directionalRotation(light) : new THREE.Quaternion();
       const place = this.placeOf(light);
       if (!this.modal && !this.controls.some(c => c.dragging)) {
         this.pivot.position.copy(place); this.pivot.quaternion.copy(quaternion); this.pivot.scale.setScalar(1);
@@ -172,6 +175,17 @@ export class LightGizmos {
       this.ray.material.color.set(light.color);
       this.bulb.material.color.set(light.color); this.sphere.material.color.set(light.color); this.cone.material.color.set(light.color);
       this.sphere.visible = light.type === "point"; this.sphere.scale.setScalar(light.range);
+      this.panel.visible = light.type === "area"; this.panel.material.color.set(light.color);
+      if (light.type === "area") {
+        const w = (light.width ?? 80) / 2, h = (light.height ?? 20) / 2, size = `${w},${h}`;
+        if (this.panelSize !== size) {
+          this.panelSize = size;
+          // the outline, its diagonals, and a line out of the middle the way it shines
+          const v = [-w, -h, 0, w, -h, 0, w, -h, 0, w, h, 0, w, h, 0, -w, h, 0, -w, h, 0, -w, -h, 0, -w, -h, 0, w, h, 0, -w, h, 0, w, -h, 0, 0, 0, 0, 0, 0, Math.max(w, h) * .6];
+          this.panel.geometry.setAttribute("position", new THREE.Float32BufferAttribute(v, 3));
+          this.panel.geometry.computeBoundingSphere();
+        }
+      }
       this.cone.visible = light.type === "spot"; this.cone.scale.setScalar(light.range);
       if (light.type === "spot" && this.coneAngle !== light.cone) {
         this.coneAngle = light.cone;
@@ -269,6 +283,6 @@ export class LightGizmos {
     this.finish(false); this.events.abort(); this.gizmos.dispose();
     this.scene.remove(this.pivot, this.marker, this.others);
     for (const bulb of this.otherBulbs) { bulb.geometry.dispose(); bulb.material.dispose(); }
-    for (const visual of [this.bulb, this.sphere, this.cone, this.ray]) { visual.geometry.dispose(); visual.material.dispose(); }
+    for (const visual of [this.bulb, this.sphere, this.cone, this.ray, this.panel]) { visual.geometry.dispose(); visual.material.dispose(); }
   }
 }

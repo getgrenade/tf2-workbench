@@ -6661,6 +6661,7 @@ export function createViewTab(els: Els) {
     sun: "M9 6a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM9 1.500v2M9 14.500v2M1.500 9h2M14.500 9h2M3.700 3.700l1.400 1.400M12.900 12.900l1.400 1.400M3.700 14.300l1.400-1.400M12.900 5.100l1.400-1.400",
     point: "M9 2.500a6.500 6.500 0 1 0 0 13 6.500 6.500 0 0 0 0-13zM9 7.500a1.500 1.500 0 1 0 0 3 1.500 1.500 0 0 0 0-3z",
     spot: "M7 2.500h4v3H7zM8 5.500 3.500 15.500M10 5.500l4.500 10M3.500 15.500h11",
+    area: "M2 3.500h14v4H2zM4 7.500 2.500 15.500M9 7.500v8M14 7.500l1.500 8",
     folder: "M2 5h5l2-2h7v12H2zM2 7h14",
   };
   const propsRoot = document.getElementById("propsPane");
@@ -6686,6 +6687,7 @@ export function createViewTab(els: Els) {
           { label: "Directional", icon: ICON.sun, run: () => addLightFromMenu("directional") },
           { label: "Point", icon: ICON.point, run: () => addLightFromMenu("point") },
           { label: "Spot", icon: ICON.spot, run: () => addLightFromMenu("spot") },
+          { label: "Area", icon: ICON.area, run: () => addLightFromMenu("area") },
         ],
       },
       { label: "Camera", icon: ICON.camera, run: () => addCameraFromView() },
@@ -6711,7 +6713,7 @@ export function createViewTab(els: Els) {
   }
 
   /** Adds a light of a type and makes it the selection. */
-  function addLightFromMenu(type: "directional" | "point" | "spot") {
+  function addLightFromMenu(type: "directional" | "point" | "spot" | "area") {
     ensureViewer();
     lightingUi?.add(type);
     const made = currentLights().lights.at(-1);

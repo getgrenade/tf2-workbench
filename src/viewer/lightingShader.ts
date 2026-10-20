@@ -3,7 +3,9 @@ uniform int uRigCount;
 uniform vec3 uRigDirection[8];
 uniform vec3 uRigPosition[8];
 uniform vec3 uRigColor[8];
-uniform vec4 uRigParams[8]; // type, range, falloff, cone cosine
+uniform vec4 uRigParams[8]; // type (0 directional, 1 point, 2 spot, 3 area), range, falloff, cone cosine
+uniform vec3 uRigAxisU[8];   // an area light's panel: its right and up edges from the middle (their lengths are the half width and half height)
+uniform vec3 uRigAxisV[8];
 uniform float uRigShadow[8];
 uniform mat4 uRigShadowMatrix[48];
 uniform sampler2D tRigShadow;
@@ -76,7 +78,19 @@ void rigLight(int index, vec3 world, out vec3 direction, out vec3 color) {
   vec4 params = uRigParams[index];
   direction = uRigDirection[index];
   float attenuation = 1.0;
-  if (params.x > 0.5) {
+  if (params.x > 2.5) {
+    // an area light: the nearest point of the panel to the surface lights it, as a point light would from there, and only the side the panel faces gets light
+    vec3 u = uRigAxisU[index], v = uRigAxisV[index];
+    float halfU = length(u), halfV = length(v);
+    vec3 un = u / max(halfU, 0.0001), vn = v / max(halfV, 0.0001);
+    vec3 relative = world - uRigPosition[index];
+    vec3 nearest = uRigPosition[index] + un * clamp(dot(relative, un), -halfU, halfU) + vn * clamp(dot(relative, vn), -halfV, halfV);
+    vec3 delta = nearest - world;
+    float distance = length(delta);
+    direction = delta / max(distance, 0.0001);
+    attenuation = pow(clamp(1.0 - distance * distance / (params.y * params.y), 0.0, 1.0), params.z);
+    attenuation *= clamp(dot(direction, uRigDirection[index]), 0.0, 1.0);
+  } else if (params.x > 0.5) {
     vec3 delta = uRigPosition[index] - world;
     float distance = length(delta);
     direction = delta / max(distance, 0.0001);

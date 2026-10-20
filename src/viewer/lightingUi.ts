@@ -83,6 +83,8 @@ export function createLightingUi(pane: HTMLElement, host: LightingHost) {
   addField(fields, "range", "Radius", 1, 1000, 1);
   addField(fields, "falloff", "Falloff", .2, 6, .1);
   addField(fields, "cone", "Cone", 5, 85, 1);
+  addField(fields, "width", "Width", 1, 400, 1);
+  addField(fields, "height", "Height", 1, 400, 1);
   // the settings of a light's shadows: shown while it casts them, 1 when it has not got its own
   const shadowFields = new Set(["shadowStrength", "shadowSoftness", "curve"]);
   addField(fields, "shadowStrength", "Shadow strength", 0, 1, .01);
@@ -160,6 +162,7 @@ export function createLightingUi(pane: HTMLElement, host: LightingHost) {
     const point = light.type === "point";
     query(".lightBall").hidden = point;
     query<HTMLInputElement>('[data-control="shadows"]').checked = light.shadows;
+    query(".lightShadows").hidden = light.type === "area";
     query(".lightFollow").hidden = light.type !== "directional";
     query<HTMLInputElement>('[data-control="followCamera"]').checked = light.followCamera === true;
     query<HTMLInputElement>('[data-control="color"]').value = light.color;
@@ -168,7 +171,7 @@ export function createLightingUi(pane: HTMLElement, host: LightingHost) {
       input.value = String(value);
       const number = numbers.get(key)!;
       if (document.activeElement !== number) number.value = key === "intensity" || key === "falloff" || shadowFields.has(key) ? value.toFixed(2) : String(Math.round(value * 100) / 100);
-      input.parentElement!.hidden = (key === "range" || key === "falloff") ? light.type === "directional" : key === "cone" ? light.type !== "spot" : shadowFields.has(key) ? !light.shadows : key === "azimuth" || key === "elevation" ? point : false;
+      input.parentElement!.hidden = (key === "range" || key === "falloff") ? light.type === "directional" : key === "cone" ? light.type !== "spot" : key === "width" || key === "height" ? light.type !== "area" : shadowFields.has(key) ? !light.shadows : key === "azimuth" || key === "elevation" ? point : false;
     }
     position.hidden = light.type === "directional";
     coordinates.forEach((input, i) => { if (document.activeElement !== input)
