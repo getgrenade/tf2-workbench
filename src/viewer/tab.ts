@@ -20,7 +20,7 @@ import type { LipSync, PhonemeClasses, SceneData } from "./faceScene";
 import { loadVoice, setVoiceMuted, stopAll as stopVoices, voiceMuted } from "./voicePlayer";
 import { listSequences, loadMaterial, loadModel, loadSession, prepareWorkshopTaunt, readTextFile, saveSession, rewriteModelFile, writeAdjustedModel, writeBinaryFile, writeTextFile, type WorkshopTaunt } from "../api";
 import { loadItemDb, workshopItemsAsZipped } from "./itemCatalog";
-import { openWorkshopStyles } from "./workshopStyles";
+import { openItemStyles } from "./workshopStyles";
 import { parseScene, type SceneEntity, type SceneFile } from "./scene";
 import { deletePoseFile, openPosesFolder, readPoses, refreshWorkshop as refreshWorkshopCommand, savePoseFile, workshopStamp as workshopStampCommand } from "../api";
 import { applyHandFile, parsePoseFile, poseForSkeleton, toHandFile, toPoseFile, type PoseData, type PoseFile } from "./poseRig";
@@ -75,7 +75,7 @@ import type { PoseHud } from "./poseHud";
 import { createRigControls, type RigControls } from "../rig/rigControls";
 import type { LimbId } from "./poseRig";
 import { PLAY_ACTIONS, PLAY_DAMAGE_ACTIONS, PLAY_SLOTS, encodeParam, setsOf, type PlaySlot } from "./playLogic";
-import { itemImageFor, itemModelFor, slotForClass, weaponCategory, itemSkinFor, itemUsableBy, parseAnimInfo, parseMaterial, parsePayload, tauntPropSequence, tauntSequence, weaponIdleSequences, type ClipData, type ItemInfo, type PaintInfo, type MaterialData, type ModelData } from "./payload";
+import { itemImageFor, itemModelFor, slotForClass, weaponCategory, itemSkinFor, itemUsableBy, parseAnimInfo, parseMaterial, parsePayload, tauntPropSequence, tauntSequence, weaponIdleSequences, type ClipData, type ItemDb, type ItemInfo, type PaintInfo, type MaterialData, type ModelData } from "./payload";
 import { createWeaponsUi, type WeaponsEls } from "./weaponsUi";
 import { loadSettings, onSettingsChange, settings, updateSetting } from "../settingsStore";
 import { accentHex } from "../theme";
@@ -988,7 +988,7 @@ export function createViewTab(els: Els) {
     },
     apply: (loadout) => (selected ? applyLoadout(selected, loadout) : Promise.resolve()),
     inspect: (item) => void inspectItem(item, false),
-    workshopStyles: (item) => openWorkshopStyles(workshopStylesHost, item.name),
+    workshopStyles: (item, x, y) => openItemStyles(itemStylesHost, item.name, { x, y }),
     allowOverlap: () => settings().allowOverlappingCosmetics,
     temporary: () => (compilerPreview && selected && selected === compilerTarget && compilerPreview.cls === selected.cls ? { name: compilerPreview.name } : null),
     removeTemporary: () => showCompilerItem(null),
@@ -1103,29 +1103,63 @@ export function createViewTab(els: Els) {
    * Reloads the workshop cosmetics. One reload runs at a time: a call made while one runs waits for it and then reloads again, since
    * a zip may have been mounted after that one read the list (dropping a zip focuses the window, which starts a reload of its own).
    */
-  function refreshWorkshopItems(quiet = false): Promise<void> {
+  /** `changed`: the zips are known to have changed (dropped on the app): what was loaded from them is forgotten even if the stamp says otherwise. */
+  function refreshWorkshopItems(quiet = false, changed = false): Promise<void> {
     const before = refreshRun;
     const run = (async () => {
       await before;
-      await reloadWorkshopItems(quiet);
+      await reloadWorkshopItems(quiet, changed);
     })();
     refreshRun = run;
     void run.finally(() => { if (refreshRun === run) refreshRun = null; });
     return run;
   }
 
-  async function reloadWorkshopItems(quiet: boolean) {
+  /**
+   * What the importer's items (and nothing else) were loaded from: their models (at every LOD), the materials of those models and their
+   * icons, plus the app's own compiled copies of workshop taunts. Not by path: Valve's community items live under models/workshop and
+   * backpack/workshop too, and are not to be forgotten (they would be drawn again, grey while their icons come back).
+   */
+  function workshopLoaded(db: ItemDb) {
+    const modelPaths = new Set<string>(), images = new Set<string>();
+    for (const i of [...db.items, ...db.weapons, ...db.taunts]) {
+      if (!i.workshop) continue;
+      for (const s of [i, ...i.styles]) {
+        if (s.model) modelPaths.add(s.model);
+        for (const m of Object.values(s.perClass)) modelPaths.add(m);
+        if (s.image) images.add(s.image);
+      }
+      for (const m of i.extraModels ?? []) modelPaths.add(m);
+    }
+    const compiled = (k: string) => k.toLowerCase().startsWith("models/workshop/workbench/");
+    const model = (k: string) => compiled(k) || modelPaths.has(k) || [...modelPaths].some((p) => k.startsWith(p + "@"));
+    // the materials: of the models as loaded (the name a mesh asks for and the path the material answers with can differ in case and prefix)
+    const norm = (p: string) => p.toLowerCase().replace(/^materials\//, "").replace(/\.vmt$/, "");
+    const materialNames = new Set<string>();
+    for (const [k, data] of models) {
+      if (!model(k)) continue;
+      for (const bp of data.bodyParts) for (const mdl of bp.models) for (const m of mdl.meshes) { materialNames.add(norm(m.material)); for (const x of m.materials ?? []) materialNames.add(norm(x)); }
+    }
+    return { model, material: (p: string) => materialNames.has(norm(p)), image: (p: string) => images.has(p) };
+  }
+
+  async function reloadWorkshopItems(quiet: boolean, changed: boolean) {
     els.items.refresh.disabled = true;
     try {
+      const loaded = workshopLoaded(await loadItemDb());
       await refreshWorkshopCommand();
       importedTaunts.clear();
+      const stampWas = workshopStamp;
       workshopStamp = await workshopStampCommand().catch(() => workshopStamp);
-      const isWorkshop = (p: string) => p.toLowerCase().includes("workshop");
-      for (const k of [...models.keys()]) if (isWorkshop(k)) models.delete(k);
-      for (const k of [...materials.keys()]) if (isWorkshop(k)) materials.delete(k);
-      for (const k of [...materialErrors.keys()]) if (isWorkshop(k)) materialErrors.delete(k);
-      viewer?.mats.purge(isWorkshop);
-      purgeIcons(isWorkshop);
+      // what was loaded from the zips is forgotten only when they changed: a style linked in the Styles panel changes no file, and
+      // nothing is to be drawn again for it
+      if (changed || stampWas === null || workshopStamp !== stampWas) {
+        for (const k of [...models.keys()]) if (loaded.model(k)) models.delete(k);
+        for (const k of [...materials.keys()]) if (loaded.material(k)) materials.delete(k);
+        for (const k of [...materialErrors.keys()]) if (loaded.material(k)) materialErrors.delete(k);
+        viewer?.mats.purge(loaded.material);
+        purgeIcons(loaded.image);
+      }
       const db = await reloadItemDb();
       const fresh = new Map([...db.items, ...db.taunts].filter((i) => i.workshop).map((i) => [i.id, i]));
       // every character's loadout: workshop items are swapped for their reloaded definitions, and dropped when their zip is gone
@@ -1151,12 +1185,14 @@ export function createViewTab(els: Els) {
     }
   }
   els.items.refresh.onclick = () => void refreshWorkshopItems();
-  // which workshop items are styles of another: by their names, and linked by hand here; a change reads the catalog again
-  const workshopStylesHost = {
+  // which workshop items are styles of another: by their names, and linked by hand in the Styles panel of an item (the right-click menu);
+  // a change reads the catalog again
+  const itemStylesHost = {
     items: async () => { await loadItemDb(); return workshopItemsAsZipped(); },
     changed: () => refreshWorkshopItems(true),
+    startPick: (accept: (item: ItemInfo) => boolean, pick: (item: ItemInfo) => void) => itemsUi.startPick(accept, pick),
+    endPick: () => itemsUi.endPick(),
   };
-  els.items.workshopStyles.onclick = () => openWorkshopStyles(workshopStylesHost);
   // drop a workshop item .zip anywhere on the app to mount it in place (read-only, this session) and show it under the Workshop filter
   // (the places that take a file of their own, the compiler's file rows say, keep theirs: the nearest one under the pointer gets it)
   const dropZone = document.getElementById("view");
@@ -1193,7 +1229,7 @@ export function createViewTab(els: Els) {
           const before = await loadItemDb();
           const had = new Set([...before.items, ...before.taunts].filter((i) => i.workshop).map((i) => i.id));
           await mountItemZips(zips); // (the refresh that follows mounts them, once for all)
-          await refreshWorkshopItems(true);
+          await refreshWorkshopItems(true, true);
           const db = await loadItemDb();
           const added = [...db.items, ...db.taunts].filter((i) => i.workshop && !had.has(i.id));
           let item = added[0] as ItemInfo | undefined;
@@ -5621,11 +5657,14 @@ export function createViewTab(els: Els) {
         const layers: PromoLayer[] = [], names: PromoLayer[] = [];
         const specs = styles.map((_, i) => aloneSpec(cellW, 920, 0.95, { loadout: [worn(item, paint, i)] }));
         await sameScale(specs);
+        const caption = (text: string, cx: number, maxWidth: number) => textLayer(text, { ...DEFAULT_TEXT, text, font: "resource/tf2build.ttf", weight: 400, size: 64, shadow: true, color: "#ffffff" }, cx, 1010, maxWidth);
         for (let i = 0; i < styles.length; i++) {
           const x = 40 + i * cellW;
           layers.push(await shot(styleName(i), specs[i], x, 40, cellW, 920, true));
-          names.push(await textLayer(styleName(i), { ...DEFAULT_TEXT, text: styleName(i), font: "resource/tf2build.ttf", weight: 400, size: 64, shadow: true, color: "#ffffff" }, x + cellW / 2, 1010));
+          // each style's name under it (set smaller when it is long), or, with many styles, one line for all: their names would not fit
+          if (styles.length <= 3) names.push(await caption(styleName(i), x + cellW / 2, cellW - 24));
         }
+        if (styles.length > 3) names.push(await caption(`${styles.length} styles to choose from`, W / 2, W - 80));
         picture(item, `${name}_styles`, "Styles", W, H, [...layers, ...names]);
       }
       if (item.paintable) {

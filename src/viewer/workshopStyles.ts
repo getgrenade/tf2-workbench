@@ -1,9 +1,10 @@
 /**
  * Styles of workshop cosmetics. The workshop importer has no styles: each zip is one model, and a style is made as a zip of its own
  * (`cighat` and `cighat_style`). They are put together here: by name (`<name>_style`, `<name>_style2`, ... are styles of `<name>`),
- * and by links set by hand in the Workshop styles window (remembered). An item that is a style of another leaves the catalog and is
+ * and by links set by hand in the Styles panel of an item (remembered). An item that is a style of another leaves the catalog and is
  * one of that item's styles instead.
  */
+import { itemIcon } from "./itemIcons";
 import type { ItemDb, ItemInfo, ItemStyleInfo } from "./payload";
 
 const KEY = "tf2workbench.workshopStyles";
@@ -93,115 +94,183 @@ export function applyWorkshopStyles(db: ItemDb, links: StyleLinks = loadStyleLin
   return db;
 }
 
-// --- the window --------------------------------------------------------------------------------------------------------------------
+// --- the popover ----------------------------------------------------------------------------------------------------------------------
 
-export interface WorkshopStylesHost {
+export interface ItemStylesHost {
   /** The workshop cosmetics as they are in their zips (before their styles are put together). */
   items(): Promise<ItemInfo[]>;
   /** The links changed: the catalog is read again. */
   changed(): Promise<void>;
+  /** Puts the item browser in pick mode: a click on a workshop item that `accept` allows calls `pick` instead of putting it on. */
+  startPick(accept: (item: ItemInfo) => boolean, pick: (item: ItemInfo) => void): void;
+  /** Ends pick mode (the pick was made, or given up). */
+  endPick(): void;
 }
 
 let closeOpen: (() => void) | null = null;
 
-/** The Workshop styles window: pick an item, see its styles (by name and by hand), link others as its styles by hand. */
-/** `open`: the import name of the item to open the window on. */
-export function openWorkshopStyles(host: WorkshopStylesHost, open?: string) {
-  if (closeOpen) return;
+/**
+ * The styles of one workshop item, in a small panel at `at` (where it was asked for): its styles in order, with their icons; the name of
+ * each can be edited, a style linked by hand can be dragged to another place and taken out, and "Add a style…" turns the item browser into
+ * a picker (click a workshop item to make it a style of this one). `name` is the import name of the item, or of one of its styles.
+ */
+export function openItemStyles(host: ItemStylesHost, name: string, at: { x: number; y: number }) {
+  closeOpen?.();
   const win = document.createElement("div");
-  win.className = "chartWindow rollWindow workshopStylesWindow";
+  win.className = "stylesPop";
   win.setAttribute("role", "dialog");
-  win.setAttribute("aria-label", "Workshop styles");
-  win.innerHTML = `<div class="chartHead"><span>Workshop styles</span><button class="chartClose" title="Close" aria-label="Close">×</button></div>
-    <div class="rollBody">
-      <p class="dim hint">The importer makes one model a zip, so a style is a zip of its own. Zips named <code>&lt;name&gt;_style</code>, <code>&lt;name&gt;_style2</code> … are styles of <code>&lt;name&gt;</code> by themselves; any other can be linked to an item here. For styles with names of their own, particle effects, paint, regions and the rest, an <code>items_game.txt</code> beside the zips says it in the game's own words (see docs/WORKSHOP_SCHEMA.md).</p>
-      <label class="chartRow inline">Item <select class="wsBase"></select></label>
-      <h3>Its styles</h3>
-      <div class="wsList"></div>
-      <h3>Link another as a style</h3>
-      <div class="wsAdd"><input type="search" class="wsPick" placeholder="Workshop item" spellcheck="false" /><button class="wsAddBtn">Add</button></div>
-      <p class="chartInfo" role="status"></p>
-    </div>`;
+  win.setAttribute("aria-label", "Styles");
+  win.innerHTML = `<div class="chartHead"><span class="spTitle">Styles</span><button class="chartClose" title="Close" aria-label="Close">×</button></div>
+    <div class="spRows"></div>
+    <div class="spFoot"><button class="spAdd">Add a style…</button><span class="chartInfo dim" role="status"></span></div>`;
   const $ = <T extends HTMLElement>(sel: string) => win.querySelector(sel) as T;
-  const baseSel = $<HTMLSelectElement>(".wsBase"), list = $(".wsList"), pick = $<HTMLInputElement>(".wsPick"), status = $(".chartInfo");
-  const names = document.createElement("datalist");
-  names.id = `wsItems${Date.now()}`;
-  pick.setAttribute("list", names.id);
-  win.appendChild(names);
+  const title = $(".spTitle"), rows = $(".spRows"), add = $<HTMLButtonElement>(".spAdd"), status = $(".chartInfo");
   let items: ItemInfo[] = [];
   let links = loadStyleLinks();
+  let base: ItemInfo | null = null;
+  let picking = false;
 
-  const byLower = () => new Map(items.map((i) => [i.name.toLowerCase(), i] as const));
+  const key = () => base!.name.toLowerCase();
+  const save = () => { saveStyleLinks(links); void host.changed(); };
+  /** The hand links of the item (made when the first is added). */
+  const mine = () => (links[key()] ??= []);
+  const icon = (el: HTMLElement, item: ItemInfo) => {
+    if (!item.image) return;
+    void itemIcon(item.image).then((url) => { if (url && el.isConnected) el.style.backgroundImage = `url(${url})`; });
+  };
+
   function render() {
-    const { groups, styles } = workshopStyleGroups(items, links);
-    const was = baseSel.value;
-    baseSel.innerHTML = "";
-    // the items that can have styles: every one that is not itself a style of another
-    for (const i of items.filter((x) => !styles.has(x)).sort((a, b) => a.displayName.localeCompare(b.displayName))) {
-      const n = groups.get(i)?.length ?? 0;
-      baseSel.add(new Option(n ? `${i.displayName} (${n + 1} styles)` : i.displayName, i.name.toLowerCase()));
-    }
-    if ([...baseSel.options].some((o) => o.value === was)) baseSel.value = was;
-    const base = byLower().get(baseSel.value);
-    list.innerHTML = "";
     if (!base) return;
-    const own = document.createElement("div");
-    own.className = "wsRow dim";
-    own.textContent = `1 · ${base.displayName} (the item itself)`;
-    list.appendChild(own);
+    const { groups } = workshopStyleGroups(items, links);
     const group = groups.get(base) ?? [];
+    title.textContent = `Styles of ${base.displayName}`;
+    rows.innerHTML = "";
+    const row = (item: ItemInfo, n: number) => {
+      const r = document.createElement("div");
+      r.className = "spRow";
+      const i = document.createElement("i");
+      i.className = "spIcon";
+      icon(i, item);
+      const num = document.createElement("span");
+      num.className = "spNum dim";
+      num.textContent = String(n);
+      r.append(i, num);
+      rows.appendChild(r);
+      return r;
+    };
+    // the item itself is its first style
+    const own = row(base, 1);
+    const ownName = document.createElement("span");
+    ownName.className = "spOwn";
+    ownName.textContent = base.styles[0]?.name || base.displayName;
+    ownName.title = `${base.name}: the item itself`;
+    own.appendChild(ownName);
+    let dragged: string | null = null;
     group.forEach((s, at) => {
-      const row = document.createElement("div");
-      row.className = "wsRow";
+      const r = row(s.item, at + 2);
+      r.title = s.byName ? `${s.item.name}: a style by its name` : s.item.name;
       const label = document.createElement("input");
       label.type = "text";
+      label.className = "spName";
       label.value = s.label;
-      label.disabled = s.byName;
-      label.title = s.byName ? `A style by its name (${s.item.name}); rename the zip to change it` : "What the style is called";
+      label.title = "What the style is called";
       label.onchange = () => {
-        const mine = (links[baseSel.value] ??= []);
-        const l = mine.find((x) => x.name === s.item.name.toLowerCase());
-        if (l) l.label = label.value.trim();
-        saveStyleLinks(links);
-        void host.changed();
+        const text = label.value.trim() || s.label;
+        const l = mine().find((x) => x.name === s.item.name.toLowerCase());
+        // a style by its name that is renamed is a link from then on (it keeps its place after the others linked by hand)
+        if (l) l.label = text;
+        else mine().push({ name: s.item.name.toLowerCase(), label: text });
+        save();
+        render();
       };
-      const what = document.createElement("span");
-      what.className = "dim";
-      what.textContent = `${at + 2} · ${s.item.name}${s.byName ? " (by name)" : ""}`;
-      row.append(what, label);
-      if (!s.byName) {
-        const remove = document.createElement("button");
-        remove.className = "rollRemove";
-        remove.textContent = "×";
-        remove.title = "Not a style of it any more";
-        remove.onclick = () => {
-          links[baseSel.value] = (links[baseSel.value] ?? []).filter((x) => x.name !== s.item.name.toLowerCase());
-          if (!links[baseSel.value].length) delete links[baseSel.value];
-          saveStyleLinks(links);
-          render();
-          void host.changed();
-        };
-        row.appendChild(remove);
+      r.appendChild(label);
+      if (s.byName) {
+        const tag = document.createElement("span");
+        tag.className = "spTag dim";
+        tag.textContent = "by name";
+        tag.title = "A style because of the zip's name; it stays one while the zip is called that";
+        r.appendChild(tag);
+        return;
       }
-      list.appendChild(row);
+      // linked by hand: dragged to another place among those, and taken out
+      const grip = document.createElement("span");
+      grip.className = "spGrip dim";
+      grip.textContent = "⋮⋮";
+      grip.title = "Drag to put it in another place";
+      const remove = document.createElement("button");
+      remove.className = "spRemove";
+      remove.textContent = "×";
+      remove.title = "Not a style of it any more (it is an item of its own again)";
+      remove.onclick = () => {
+        links[key()] = mine().filter((x) => x.name !== s.item.name.toLowerCase());
+        if (!links[key()].length) delete links[key()];
+        save();
+        render();
+      };
+      r.append(grip, remove);
+      r.draggable = true;
+      r.dataset.link = s.item.name.toLowerCase();
+      r.ondragstart = (ev) => { dragged = r.dataset.link!; ev.dataTransfer?.setData("text/plain", dragged); r.classList.add("dragging"); };
+      r.ondragend = () => { dragged = null; r.classList.remove("dragging"); rows.querySelectorAll(".spRow").forEach((x) => x.classList.remove("before", "after")); };
+      r.ondragover = (ev) => {
+        if (!dragged || dragged === r.dataset.link) return;
+        ev.preventDefault();
+        const half = ev.clientY < r.getBoundingClientRect().top + r.offsetHeight / 2;
+        r.classList.toggle("before", half);
+        r.classList.toggle("after", !half);
+      };
+      r.ondragleave = () => r.classList.remove("before", "after");
+      r.ondrop = (ev) => {
+        if (!dragged || dragged === r.dataset.link) return;
+        ev.preventDefault();
+        const list = mine();
+        const from = list.findIndex((x) => x.name === dragged);
+        if (from < 0) return;
+        const [moved] = list.splice(from, 1);
+        let to = list.findIndex((x) => x.name === r.dataset.link);
+        if (!r.classList.contains("before")) to++;
+        list.splice(to, 0, moved);
+        save();
+        render();
+      };
     });
-    if (!group.length) list.insertAdjacentHTML("beforeend", `<p class="dim">No other styles yet.</p>`);
-    // the ones that can be linked: not this item, not a style already
-    names.innerHTML = "";
-    for (const i of items) if (i !== base && !styles.has(i) && !groups.has(i)) names.appendChild(new Option(i.name));
+    if (!picking) status.textContent = group.length ? "" : "It has no other styles yet.";
   }
-  baseSel.onchange = render;
-  $(".wsAddBtn").onclick = () => {
-    const item = byLower().get(pick.value.trim().toLowerCase()) ?? items.find((i) => i.displayName.toLowerCase() === pick.value.trim().toLowerCase());
-    if (!item) { status.textContent = "Pick a workshop item from the list."; return; }
-    const base = baseSel.value;
-    if (item.name.toLowerCase() === base) { status.textContent = "An item cannot be a style of itself."; return; }
-    (links[base] ??= []).push({ name: item.name.toLowerCase(), label: item.displayName });
-    saveStyleLinks(links);
-    pick.value = "";
-    status.textContent = `${item.displayName} is a style of it now.`;
+
+  function endPick() {
+    if (!picking) return;
+    picking = false;
+    host.endPick();
+    add.textContent = "Add a style…";
+    win.classList.remove("picking");
+    window.removeEventListener("keydown", onPickKey, true);
     render();
-    void host.changed();
+  }
+  const onPickKey = (ev: KeyboardEvent) => { if (ev.key === "Escape") { ev.stopPropagation(); endPick(); } };
+  add.onclick = () => {
+    if (picking) { endPick(); return; }
+    if (!base) return;
+    picking = true;
+    add.textContent = "Cancel";
+    win.classList.add("picking");
+    status.textContent = "Click a workshop item in the list to make it a style of this one (Esc cancels).";
+    window.addEventListener("keydown", onPickKey, true);
+    // what can be a style of it: a workshop cosmetic that is not it, not a style already, and has no styles of its own
+    const { groups, styles } = workshopStyleGroups(items, links);
+    const lowerBase = key();
+    host.startPick(
+      (i) => {
+        const zipped = items.find((x) => x.name.toLowerCase() === i.name.toLowerCase());
+        return !!zipped && zipped.name.toLowerCase() !== lowerBase && !styles.has(zipped) && !groups.has(zipped);
+      },
+      (i) => {
+        mine().push({ name: i.name.toLowerCase(), label: i.displayName });
+        endPick();
+        status.textContent = `${i.displayName} is a style of it now.`;
+        save();
+        render();
+      },
+    );
   };
 
   const head = $(".chartHead");
@@ -213,26 +282,25 @@ export function openWorkshopStyles(host: WorkshopStylesHost, open?: string) {
     head.onpointermove = (m) => {
       win.style.left = `${Math.min(Math.max(0, m.clientX - dx), innerWidth - 80)}px`;
       win.style.top = `${Math.min(Math.max(0, m.clientY - dy), innerHeight - 40)}px`;
-      win.style.right = "auto";
     };
     head.onpointerup = () => (head.onpointermove = null);
   };
-  const close = () => { win.remove(); closeOpen = null; };
+  const close = () => { endPick(); win.remove(); closeOpen = null; };
   ($(".chartClose") as HTMLButtonElement).onclick = close;
-  win.addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.stopPropagation(); close(); } });
+  win.addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.stopPropagation(); if (picking) endPick(); else close(); } });
   document.body.appendChild(win);
+  const r = win.getBoundingClientRect();
+  win.style.left = `${Math.max(4, Math.min(at.x, innerWidth - r.width - 4))}px`;
+  win.style.top = `${Math.max(4, Math.min(at.y, innerHeight - r.height - 4))}px`;
   closeOpen = close;
   void host.items().then((list) => {
     items = list.filter((i) => i.workshop && i.slot !== "taunt");
     links = loadStyleLinks();
-    if (!items.length) status.textContent = "There are no workshop cosmetics yet.";
+    // the item asked for, or the item it is a style of
+    const { groups } = workshopStyleGroups(items, links);
+    const lower = name.toLowerCase();
+    base = [...groups.entries()].find(([, g]) => g.some((s) => s.item.name.toLowerCase() === lower))?.[0] ?? items.find((i) => i.name.toLowerCase() === lower) ?? null;
+    if (!base) { status.textContent = "This is not a workshop cosmetic."; add.disabled = true; return; }
     render();
-    if (open) {
-      // the item asked for: it, or the item it is a style of
-      const { groups } = workshopStyleGroups(items, links);
-      const base = [...groups.entries()].find(([, list]) => list.some((s) => s.item.name.toLowerCase() === open.toLowerCase()))?.[0];
-      const value = (base ?? items.find((i) => i.name.toLowerCase() === open.toLowerCase()))?.name.toLowerCase();
-      if (value && [...baseSel.options].some((o) => o.value === value)) { baseSel.value = value; render(); }
-    }
   });
 }

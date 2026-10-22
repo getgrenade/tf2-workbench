@@ -93,6 +93,8 @@ export interface ShotSpec extends ShotAim {
   pose?: { pos: number[]; quat: number[]; scale?: number[] };
   /** The pose can be rolled again (a random taunt or animation, stopped on a comfortable frame). */
   randomPose?: boolean;
+  /** Camera, light, effects and scale kept the same as the picture's other shots of this item in its other styles; true when absent. */
+  sync?: boolean;
   /**
    * A composition: its characters pictured together in one scene, each a spec of its own (its loadout, weapon, pose and face; `turn`).
    * This spec is then the picture's: its camera, its size and its effects.
@@ -266,10 +268,16 @@ export async function renderText(t: TextSpec, res = TEXT_RES): Promise<HTMLCanva
   return canvas;
 }
 
-/** A text layer whose middle is at (cx, cy). */
-export async function textLayer(name: string, t: TextSpec, cx: number, cy: number): Promise<PromoLayer> {
-  const image = await renderText(t);
-  const w = image.width / TEXT_RES, h = image.height / TEXT_RES;
+/** A text layer whose middle is at (cx, cy); with `maxWidth`, the text is set smaller (down to 20 px) when it would be wider than that. */
+export async function textLayer(name: string, t: TextSpec, cx: number, cy: number, maxWidth?: number): Promise<PromoLayer> {
+  let image = await renderText(t);
+  let w = image.width / TEXT_RES, h = image.height / TEXT_RES;
+  if (maxWidth !== undefined && w > maxWidth) {
+    t = { ...t, size: Math.max(20, Math.floor((t.size * maxWidth) / w)) };
+    image = await renderText(t);
+    w = image.width / TEXT_RES;
+    h = image.height / TEXT_RES;
+  }
   return { ...layer(name, image, cx - w / 2, cy - h / 2, w, h), text: t };
 }
 
