@@ -655,9 +655,6 @@ export class CompilerSession {
         error(`lod${lastIndex + 1}:${cls}`, `Add LOD ${lastIndex + 1}${where}: LOD ${lastIndex} has ${last.model.triangles} triangles and the lowest LOD may have ${TRIANGLE_BUDGET[NUM_LODS - 1]}.`);
       }
       counts.push({ cls, lods: models.filter((m) => m).length, materials: models[0]?.model.materials.length ?? 0 });
-      // the game's QC links an attachment to bip_head (for unusual effects): a skeleton that has none cannot be compiled
-      const skeleton = models[0]?.model.skeleton ?? [];
-      if (skeleton.length && !skeleton.some((b) => b.name === "bip_head")) error(`head:${cls}`, `The skeleton of the model${where} has no bip_head: the game's build links an attachment to it. Keep the class's bones in the armature, even those nothing is skinned to.`);
       if (models[0]?.model.parts.some((p) => p.boneNames.length === 1 && p.boneNames[0] === "")) warn(`skin:${cls}`, `Part of the model${where} has no skin weights; it follows the head.`);
     }
     // every class needs the same number of LODs and of materials (AreClassesLODCountMatch, AreClassesMaterialCountMatch)

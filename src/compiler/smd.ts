@@ -8,17 +8,10 @@ import { turnedWorld, type BoneTurn } from "./boneAxes";
  * same Y-up frame compiles to the same model, and unlike a .dmx it can be written in a few milliseconds.
  */
 
-/**
- * The bones the game's QC template names itself (its `$attachment unusual "bip_head"`): studiomdl keeps a bone an attachment links to, so the file
- * has it even when nothing is skinned to it (a coat, a pair of shoes), and the build does not stop at "unknown attachment link".
- */
-export const QC_BONES = ["bip_head"];
-
-/** The bones of the file the skin refers to, with their ancestors (an SMD's bone list must be closed under parent), and those the QC names. */
+/** The bones of the file the skin refers to, with their ancestors (an SMD's bone list must be closed under parent). */
 export function usedBones(model: ImportedModel, parts: ImportedPart[]) {
   const byName = new Map(model.skeleton.map((b) => [b.name, b]));
   const keep = new Set<string>();
-  for (const name of QC_BONES) for (let n: string | null = byName.has(name) ? name : null; n && byName.has(n) && !keep.has(n); n = byName.get(n)!.parent) keep.add(n);
   for (const part of parts) {
     for (let v = 0; v < part.skinIndices.length; v++) {
       if (part.skinWeights[v] <= 1e-5) continue;
