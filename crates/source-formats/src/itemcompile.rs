@@ -383,6 +383,15 @@ fn session_text(spec: &ItemSpec, template: &str, textures: &[Vec<Texture>], icon
     kv.out
 }
 
+/// The message for a model that did not compile: studiomdl's own, with a line first for the failures that have a known cause.
+fn compile_failure(tail: &str) -> String {
+    // the Hat type's QC links an attachment to bip_head (for unusual effects); a model with no head bone cannot be one
+    let hint = if tail.contains("unknown attachment link 'bip_head'") {
+        "This model has no bip_head, which an item of the Hat type needs: change the item type to Misc if it is not a hat.\n\n"
+    } else { "" };
+    format!("{hint}The model did not compile:\n{tail}")
+}
+
 /// Runs the game's studiomdl on a QC, with its output going into a private game folder instead of the install.
 pub(crate) fn run_studiomdl(exe: &Path, game: &Path, qc: &Path, log: &mut Vec<String>) -> Result<(), String> {
     let log_path = qc.with_extension("log");
@@ -406,7 +415,7 @@ pub(crate) fn run_studiomdl(exe: &Path, game: &Path, qc: &Path, log: &mut Vec<St
                 return Ok(());
             }
             let tail: String = text.chars().rev().take(2500).collect::<String>().chars().rev().collect();
-            return Err(format!("The model did not compile:\n{tail}"));
+            return Err(compile_failure(&tail));
         }
         if start.elapsed() > Duration::from_secs(120) {
             let _ = child.kill();
@@ -606,6 +615,14 @@ mod tests {
         let qc = fill_qc(template, &s, &s.classes[0]);
         let expected = "$upaxis Y\n\n$modelname \"workshop/player/items/sniper/a_cowboyhat/a_cowboyhat.mdl\"\n\n$surfaceprop \"default\"\n\n$body \"default\" \"a_cowboyhat.smd\"\n\n$lod 11\n{\nreplacemodel \"a_cowboyhat.smd\" \"a_cowboyhat_lod1.smd\"\n}\n\n\n\n$cdmaterials \"models\\workshop\\player\\items\\sniper\\a_cowboyhat\"\n$texturegroup skinfamilies\n{\n    { \"a_cowboyhat\" }\n}\n\n$sequence \"ref\" \"a_cowboyhat.smd\"\n\n$attachment unusual \"bip_head\" 0 0 0 rotate 0 0 0\n";
         assert_eq!(qc, expected);
+    }
+
+    #[test]
+    fn a_missing_head_bone_says_to_try_the_misc_type() {
+        let log = "Building binary model files...\nERROR: unknown attachment link 'bip_head'\nERROR: Aborted Processing";
+        assert!(compile_failure(log).starts_with("This model has no bip_head, which an item of the Hat type needs: change the item type to Misc"));
+        assert!(compile_failure(log).contains("ERROR: Aborted Processing"));
+        assert!(compile_failure("some other error").starts_with("The model did not compile:"));
     }
 
     #[test]
