@@ -334,3 +334,22 @@ test("a LOD that came without a skin is built with the bones of LOD 0 (else stud
   assert.deepEqual(nodes(lods[0].smd), ["bip_head", "prop_bone"]);
   assert.deepEqual(nodes(lods[1].smd), ["bip_head", "prop_bone"], "LOD 1 follows the same bones as LOD 0, where they are");
 });
+
+test("a written model keeps bip_head (the QC's attachment links to it) even when nothing is skinned to it", async () => {
+  const smd = ["version 1", "nodes", '  0 "bip_pelvis" -1', '  1 "bip_spine_0" 0', '  2 "bip_head" 1', "end", "skeleton", "time 0", "  0 0 0 0 0 0 0", "  1 0 10 0 0 0 0", "  2 0 10 0 0 0 0", "end", "triangles",
+    "coat", "  1  0 0 0  0 1 0  0 0  1 1 1.0", "  1  1 0 0  0 1 0  1 0  1 1 1.0", "  1  0 1 0  0 1 0  0 1  1 1 1.0", "end", ""].join("\n");
+  const model = importModel("coat.smd", new TextEncoder().encode(smd).buffer as ArrayBuffer);
+  const { writeSmd } = await import("../src/compiler/smd.ts");
+  const text = writeSmd(await model, (m) => m);
+  const nodes = text.split("\n").filter((l) => /^\s+\d+ "/.test(l));
+  assert.deepEqual(nodes.map((l) => l.match(/"(.+)"/)![1]), ["bip_pelvis", "bip_spine_0", "bip_head"]);
+});
+
+test("a skeleton with no bip_head is an error (the build would stop at the attachment)", async () => {
+  const smd = ["version 1", "nodes", '  0 "bip_pelvis" -1', "end", "skeleton", "time 0", "  0 0 0 0 0 0 0", "end", "triangles",
+    "coat", "  0  0 0 0  0 1 0  0 0  1 0 1.0", "  0  1 0 0  0 1 0  1 0  1 0 1.0", "  0  0 1 0  0 1 0  0 1  1 0 1.0", "end", ""].join("\n");
+  const files = { "C:/art/coat.smd": new TextEncoder().encode(smd).buffer as ArrayBuffer };
+  const s = new CompilerSession(io(files));
+  await s.setLod("heavy", 0, "C:/art/coat.smd");
+  assert.ok(s.issues().some((i) => i.key === "head:heavy" && i.level === "error"));
+});
