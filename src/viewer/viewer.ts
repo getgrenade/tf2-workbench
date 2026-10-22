@@ -51,6 +51,8 @@ export interface PaintChartOpts {
 export interface PaintChartCell {
   paint: [number, number, number] | null;
   skin: number;
+  /** The team the cell is of (0 RED, 1 BLU): the character, and what it wears besides the item, are drawn in its skin. Absent: as the character is. */
+  team?: number;
 }
 import type { JiggleSetup } from "../compiler/jiggleBones";
 import type { ClipData, MaterialData, ModelData } from "./payload";
@@ -412,8 +414,9 @@ export class Viewer {
     const layout = layoutChart(cells.length, opts.cellAspect, { width: opts.width, height: opts.height, gapX: opts.gapX, gapY: opts.gapY, padding: opts.padding, cols: opts.cols, align: opts.align });
     const k = w / opts.width;
     // the item's meshes are read each time so a hat switch is picked up at once; the per-paint materials are cached, so this is cheap
-    const meshes = actor.cosmeticMeshes(itemId);
-    const originals = meshes.map((m) => m.mesh.material);
+    let meshes = actor.cosmeticMeshes(itemId);
+    let originals = meshes.map((m) => m.mesh.material);
+    const homeSkin = actor.particleTeam;
     // only the charted item is in the cells: hide every other mesh in the scene (ground, the shadow decal, the floor reflection, the
     // backdrop, the grid, editor overlays, other characters), and with `cosmeticOnly` the parts of the character shown with it too
     const shown = new Set<THREE.Object3D>(opts.cosmeticOnly ? meshes.map((m) => m.mesh) : actor.meshes());
@@ -440,9 +443,19 @@ export class Viewer {
       r.setScissorTest(true);
       this.camera.aspect = layout.cellW / Math.max(1e-3, layout.cellH);
       this.camera.updateProjectionMatrix();
-      for (let i = 0; i < cells.length; i++) {
+      // the cells of the character's own team first, then the others: the character is drawn in each cell's team (the skin is switched once per team,
+      // not per cell). With only the item drawn there is nothing else to switch.
+      const teamOf = (c: PaintChartCell) => (opts.cosmeticOnly ? homeSkin : c.team ?? homeSkin);
+      const order = cells.map((_, i) => i).sort((a, b) => Number(teamOf(cells[a]) !== homeSkin) - Number(teamOf(cells[b]) !== homeSkin));
+      for (const i of order) {
         const rect = layout.rects[i];
         const cell = cells[i];
+        if (teamOf(cell) !== actor.particleTeam) {
+          // (the character's meshes are made again in the other skin: the item's are looked up anew)
+          actor.setSkin(teamOf(cell));
+          meshes = actor.cosmeticMeshes(itemId);
+          originals = meshes.map((m) => m.mesh.material);
+        }
         for (const m of meshes) m.mesh.material = this.mats.material(m.skins[cell.skin] ?? m.data, undefined, cell.paint);
         const x = Math.round(rect.x * k), cw = Math.round(rect.w * k), ch = Math.round(rect.h * k);
         const y = Math.round(h - (rect.y + rect.h) * k); // GL's origin is bottom-left; the layout counts from the top
@@ -458,7 +471,8 @@ export class Viewer {
       r.render(this.chartResolve, this.camera);
       r.readRenderTargetPixels(target, 0, 0, w, h, pixels);
     } finally {
-      meshes.forEach((m, i) => (m.mesh.material = originals[i])); // put the item's own materials back
+      if (actor.particleTeam !== homeSkin) actor.setSkin(homeSkin); // the character's own skin again (made anew with the item's own materials)
+      else meshes.forEach((m, i) => (m.mesh.material = originals[i])); // put the item's own materials back
       r.autoClear = autoClear;
       r.setRenderTarget(prevTarget);
       r.setViewport(prevViewport);

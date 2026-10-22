@@ -4067,15 +4067,24 @@ export function createViewTab(els: Els) {
       const data = path ? models.get(path) : undefined;
       if (data) for (const t of [0, 1]) await ensureMaterials(data, skinOf(t));
     }
+    // the character and the rest of what it wears are drawn in the cell's team too: both skins' materials are there
+    const classData = models.get(classPath(e.cls));
+    if (classData) for (const t of [0, 1]) await ensureMaterials(classData, t);
+    for (const w of e.applied) {
+      for (const path of [itemModelFor(w.item, gameClassOf(e.cls), w.style), ...(w.item.extraModels ?? [])]) {
+        const data = path ? models.get(path) : undefined;
+        if (data) for (const t of [0, 1]) await ensureMaterials(data, t);
+      }
+    }
     const own = skinOf(e.team);
     const out: ChartCell[] = [];
-    if (unpainted === "both") out.push({ label: "Unpainted (RED)", paint: null, skin: skinOf(0) }, { label: "Unpainted (BLU)", paint: null, skin: skinOf(1) });
-    else if (unpainted) out.push({ label: "Unpainted", paint: null, skin: own });
+    if (unpainted === "both") out.push({ label: "Unpainted (RED)", paint: null, skin: skinOf(0), team: 0 }, { label: "Unpainted (BLU)", paint: null, skin: skinOf(1), team: 1 });
+    else if (unpainted) out.push({ label: "Unpainted", paint: null, skin: own, team: e.team });
     for (const p of db.paints as PaintInfo[]) {
       if (p.rgb2 !== null && p.rgb2 !== p.rgb) {
-        if (teams === "both") out.push({ label: `${p.displayName} (RED)`, paint: unpackRgb(p.rgb), skin: skinOf(0) }, { label: `${p.displayName} (BLU)`, paint: unpackRgb(p.rgb2), skin: skinOf(1) });
-        else out.push({ label: p.displayName, paint: unpackRgb(e.team === 1 ? p.rgb2 : p.rgb), skin: own });
-      } else out.push({ label: p.displayName, paint: unpackRgb(p.rgb), skin: own });
+        if (teams === "both") out.push({ label: `${p.displayName} (RED)`, paint: unpackRgb(p.rgb), skin: skinOf(0), team: 0 }, { label: `${p.displayName} (BLU)`, paint: unpackRgb(p.rgb2), skin: skinOf(1), team: 1 });
+        else out.push({ label: p.displayName, paint: unpackRgb(e.team === 1 ? p.rgb2 : p.rgb), skin: own, team: e.team });
+      } else out.push({ label: p.displayName, paint: unpackRgb(p.rgb), skin: own, team: e.team });
     }
     return out;
   }
@@ -5653,6 +5662,8 @@ export function createViewTab(els: Els) {
         const slotW = width / (1 + 2 * PROMO_MARGIN.x), slotH = height / (1 + 2 * PROMO_MARGIN.y);
         return { picture: p.kind, layer: l.name, widthShare: +((x1 - x0 + 1) / slotW).toFixed(2), heightShare: +((y1 - y0 + 1) / slotH).toFixed(2) };
       })),
+      /** The paintable cosmetics of a class that sit on a region (`shirt`, `whole_head`, ...): names to make a promo of. */
+      items: async (game: string, region: string) => (await loadItemDb()).items.filter((i) => i.paintable && !i.workshop && itemUsableBy(i, game) && i.equipRegions.includes(region)).map((i) => i.displayName).slice(0, 12),
       generate: async (names: string[], only?: "lineup") => {
         const db = await loadItemDb();
         const set = names.map((n) => db.items.find((i) => i.displayName === n)).filter((i): i is ItemInfo => !!i);
