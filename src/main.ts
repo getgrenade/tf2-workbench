@@ -202,7 +202,7 @@ app.innerHTML = `
       <div id="itemTools" class="row2"><button id="itemSelectAll" title="Select every equipped cosmetic, then pick one paint for all of them">Select all</button></div>
       <div id="itemEquipped" class="chips"></div>
       <div id="itemList" class="itemlist"></div>
-      <div class="itemFoot" id="itemFoot"><button id="itemMedals" class="iconBtn" title="Show medals &amp; badges" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M6.500 2h4l1.500 6.500-3 1.500zM17.500 2h-4L12 8.500l3 1.500z"/><circle cx="12" cy="15.500" r="6"/></svg></button><button id="itemWorkshopStyles" class="iconBtn" title="Workshop styles: which workshop items are styles of another (by their names, or linked by hand)" aria-label="Workshop styles"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/><path d="M11 7h4a2 2 0 0 1 2 2v4"/></svg></button><button id="itemWorkshopRefresh" class="iconBtn" title="Reload the workshop cosmetics from tf/workshop/import_source (this also happens when you come back to this window and the zips changed)" aria-label="Reload workshop cosmetics"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.5-5.800M20 4v5h-5"/></svg></button><span id="itemCount" class="dim hint"></span></div>
+      <div class="itemFoot" id="itemFoot"><button id="itemMedals" class="iconBtn" title="Show medals &amp; badges" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M6.500 2h4l1.500 6.500-3 1.500zM17.500 2h-4L12 8.500l3 1.500z"/><circle cx="12" cy="15.500" r="6"/></svg></button><button id="itemWorkshopRefresh" class="iconBtn" title="Reload the workshop cosmetics from tf/workshop/import_source (this also happens when you come back to this window and the zips changed)" aria-label="Reload workshop cosmetics"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.5-5.800M20 4v5h-5"/></svg></button><span id="itemCount" class="dim hint"></span></div>
       </section>
       <section id="weaponsPane" class="dockSection">
         <h3 class="first">Weapons</h3>
@@ -427,7 +427,6 @@ const viewTab = createViewTab({
     medals: $<HTMLButtonElement>("itemMedals"),
     selectAll: $<HTMLButtonElement>("itemSelectAll"),
     refresh: $<HTMLButtonElement>("itemWorkshopRefresh"),
-    workshopStyles: $<HTMLButtonElement>("itemWorkshopStyles"),
     list: $("itemList"),
     equipped: $("itemEquipped"),
     count: $("itemCount"),

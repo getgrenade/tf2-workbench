@@ -17,8 +17,6 @@ export interface ItemsEls {
   selectAll: HTMLButtonElement;
   /** Reloads the workshop cosmetics (the importer's zips). */
   refresh: HTMLButtonElement;
-  /** Opens the Workshop styles window. */
-  workshopStyles: HTMLButtonElement;
   list: HTMLElement;
   equipped: HTMLElement;
   count: HTMLElement;
@@ -58,8 +56,8 @@ export interface ItemsHooks {
   removeTemporary?: () => void;
   /** Opens just this item, alone, in a scene of its own. */
   inspect: (item: ItemInfo) => void;
-  /** Opens the Workshop styles window on a workshop item (its styles, and the zips linked to it as styles). */
-  workshopStyles?: (item: ItemInfo) => void;
+  /** Opens the Styles panel of a workshop item (its styles, and the zips linked to it as styles) at a screen position. */
+  workshopStyles?: (item: ItemInfo, x: number, y: number) => void;
   /** Items that must stay on (a promo shot's promoted items): they are not taken off, nor replaced by an item of their region. */
   locked?: () => number[];
   /** An item was not put on (or taken off) because of a locked one (`because`: the locked item it would have replaced). */
@@ -117,6 +115,8 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
   let activeId: number | null = null;
   let iconObserver: IntersectionObserver | null = null;
   let scope = "solo";
+  /** Pick mode (the Styles panel): the list shows the workshop items, and a click on one that `accept` allows calls `pick` instead of putting it on. */
+  let picking: { accept: (item: ItemInfo) => boolean; pick: (item: ItemInfo) => void } | null = null;
   /** The characters the picks go to are of different classes: only items all of them can wear are listed (the scope is All-class meanwhile). */
   const mixedClasses = () => (hooks.classes?.() ?? []).length > 1;
   const activeScope = () => (mixedClasses() ? "shared" : scope);
@@ -160,9 +160,9 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
   }
 
   /** The right-click menu of an item: inspect it; a workshop item's styles too. */
-  const itemMenu = (item: ItemInfo) => [
+  const itemMenu = (item: ItemInfo, x: number, y: number) => [
     { label: "Inspect", run: () => hooks.inspect(item) },
-    ...(item.workshop && hooks.workshopStyles ? [{ label: "Workshop styles…", run: () => hooks.workshopStyles!(item) }] : []),
+    ...(item.workshop && hooks.workshopStyles ? [{ label: "Styles…", run: () => hooks.workshopStyles!(item, x, y) }] : []),
   ];
 
   function renderEquipped() {
@@ -197,7 +197,7 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
       }
       card.oncontextmenu = (ev) => {
         ev.preventDefault();
-        showContextMenu(ev.clientX, ev.clientY, itemMenu(e.item));
+        showContextMenu(ev.clientX, ev.clientY, itemMenu(e.item, ev.clientX, ev.clientY));
       };
       card.onclick = (ev) => {
         if ((ev.target as HTMLElement).classList.contains("x")) {
@@ -392,10 +392,11 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
     scopeButtons[0].textContent = CLASS_LABEL[cls] ?? cls;
     const all = hooks.classes?.() ?? [cls];
     const mixed = all.length > 1;
-    const shownScope = activeScope();
+    const shownScope = picking ? "workshop" : activeScope();
+    els.list.classList.toggle("picking", picking !== null);
     scopeButtons.forEach((b) => {
       b.classList.toggle("on", (b.dataset.scope ?? "solo") === shownScope);
-      b.disabled = mixed && b.dataset.scope !== "shared";
+      b.disabled = (mixed && b.dataset.scope !== "shared") || picking !== null;
       b.dataset.tip ??= b.title;
       b.title = mixed && b.dataset.scope !== "shared" ? "Characters of different classes are selected: only items all of them can wear" : b.dataset.tip;
     });
@@ -431,10 +432,16 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
         sub: it.slot,
         paintable: it.paintable,
       });
-      tile.onclick = () => toggle(it);
+      if (picking) {
+        const ok = picking.accept(it);
+        tile.classList.toggle("pickable", ok);
+        tile.classList.toggle("unpickable", !ok);
+        tile.title = ok ? `Make ${it.displayName} a style of the item` : "Cannot be a style: it is a style already, or has styles of its own";
+      }
+      tile.onclick = () => { if (picking) { if (picking.accept(it)) picking.pick(it); } else toggle(it); };
       tile.oncontextmenu = (ev) => {
         ev.preventDefault();
-        showContextMenu(ev.clientX, ev.clientY, itemMenu(it));
+        showContextMenu(ev.clientX, ev.clientY, itemMenu(it, ev.clientX, ev.clientY));
       };
       if (it.image) {
         tile.dataset.image = it.image;
@@ -527,6 +534,17 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
     },
     /** The characters the picks go to changed (a selection of several, of one class or of several): the list follows. */
     targetsChanged: renderList,
+    /** Pick mode: the list shows the workshop items, and a click on one that `accept` allows calls `pick` instead of putting it on. */
+    startPick(accept: (item: ItemInfo) => boolean, pick: (item: ItemInfo) => void) {
+      picking = { accept, pick };
+      renderList();
+    },
+    /** Pick mode is over: the list is the browser again. */
+    endPick() {
+      if (!picking) return;
+      picking = null;
+      renderList();
+    },
     /** Reads the catalog again (the workshop zips changed): the list shows the new items. */
     async reloadCatalog() {
       db = null;
