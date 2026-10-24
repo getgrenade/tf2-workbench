@@ -7,7 +7,8 @@
 import { showContextMenu } from "./contextMenu";
 import { rotateLightDirection } from "./lighting";
 import { DEFAULT_SHOT_EFFECTS, solidOf } from "./promo";
-import { DEFAULT_CHART, DEFAULT_GLOW, DEFAULT_STROKE, DEFAULT_TEXT, TEXT_FONTS, layerPivot, layerRect, turnPoint, measureContent, opaqueRect, randomBackdrop, refreshText, textLayer, type ChartCellRect, renderPicture, type Backdrop, type BoardLook, type PromoLayer, type PromoPicture, type ShotSpec } from "./promo";
+import { createBackdropPicker } from "./backdropPicker";
+import { DEFAULT_CHART, DEFAULT_GLOW, DEFAULT_STROKE, DEFAULT_TEXT, TEXT_FONTS, layerPivot, layerRect, turnPoint, measureContent, opaqueRect, loadBackdropPictures, randomBackdrop, refreshText, textLayer, type ChartCellRect, renderPicture, type Backdrop, type BoardLook, type PromoLayer, type PromoPicture, type ShotSpec } from "./promo";
 
 export interface BoardHost {
   /** Writes every picture (asks where); resolves to what to say. */
@@ -228,6 +229,8 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     if (p === picked) drawPreview();
   };
   const drawAll = () => pictures.forEach(draw);
+  // the pictures behind the pictures (a backdrop of a picture) are loaded before they are drawn, then it is drawn again
+  void loadBackdropPictures([look.backdrop, ...pictures.map((x) => x.backdrop)]).then(() => drawAll());
   const resizer = new ResizeObserver(() => drawPreview());
   resizer.observe(stage);
 
@@ -395,20 +398,11 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     keepLook();
     drawAll();
   }
-  /** The backdrop controls, for the shared one or a picture's own. */
-  function backdropFields(box: HTMLElement, b: () => Backdrop, changed: () => void) {
-    box.innerHTML = "";
-    const set = (f: (x: Backdrop) => void) => { f(b()); changed(); };
-    field(box, "From", colour(b().from, (v) => set((x) => (x.from = v))));
-    field(box, "To", colour(b().to, (v) => set((x) => (x.to = v))));
-    field(box, "Angle", range(0, 360, 1, b().angle, (v) => set((x) => (x.angle = v))));
-    field(box, "Light", colour(b().glow, (v) => set((x) => (x.glow = v))));
-    field(box, "Light amount", range(0, 0.8, 0.01, b().glowAmount, (v) => set((x) => (x.glowAmount = v))));
-    field(box, "Dark corners", range(0, 0.8, 0.01, b().vignette, (v) => set((x) => (x.vignette = v))));
-  }
   const lookBackdrop = $(".promoLookBackdrop");
-  const showLookBackdrop = () => backdropFields(lookBackdrop, () => look.backdrop, changedLook);
-  showLookBackdrop();
+  // the backdrop of every picture: a category and thumbnails to pick from (a step of a fade only draws, the last one is kept)
+  const lookPicker = createBackdropPicker({ get: () => look.backdrop, set: (b, live) => { look.backdrop = b; if (live) drawAll(); else changedLook(); }, picture: true });
+  lookBackdrop.append(lookPicker.el);
+  const showLookBackdrop = () => lookPicker.refresh();
   $(".promoShuffle").onclick = () => { look.backdrop = randomBackdrop(); showLookBackdrop(); changedLook(); };
   const strokeBox = $(".promoLookStroke");
   function showLookStroke() {
@@ -544,7 +538,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
 
   // --- editing in the large preview ---
   /** The picture point (in its pixels) under a pointer event on the preview. */
-  const pointAt = (e: PointerEvent | WheelEvent) => {
+  const pointAt = (e: MouseEvent) => {
     const r = preview.getBoundingClientRect();
     const k = picked ? picked.w / r.width : 1;
     return [(e.clientX - r.left) * k, (e.clientY - r.top) * k] as const;
@@ -569,6 +563,18 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       return false;
     }) ?? null : null;
   preview.oncontextmenu = (e) => e.preventDefault();
+  // a double click on a character (a shot, or a line-up) opens it in 3D, as the Edit in 3D button does
+  preview.ondblclick = (ev) => {
+    const p = picked;
+    if (!p || ev.shiftKey || ev.button !== 0) return;
+    const [x, y] = pointAt(ev);
+    const hit = layerAt(x, y);
+    if (!hit?.shot) return;
+    selectOnly(hit);
+    showInspector();
+    drawPreview();
+    void editIn3D(p, hit);
+  };
   preview.onpointerdown = (ev) => {
     const p = picked;
     if (!p) return;
@@ -811,7 +817,8 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     const showOwn = () => {
       ownBox.innerHTML = "";
       if (!p.backdrop) return;
-      backdropFields(ownBox, () => p.backdrop!, () => draw(p));
+      const ownPicker = createBackdropPicker({ get: () => p.backdrop!, set: (b) => { p.backdrop = b; draw(p); }, picture: true });
+      ownBox.appendChild(ownPicker.el);
       const shuffle = document.createElement("button");
       shuffle.textContent = "Shuffle";
       shuffle.onclick = () => { p.backdrop = randomBackdrop(); showOwn(); draw(p); };

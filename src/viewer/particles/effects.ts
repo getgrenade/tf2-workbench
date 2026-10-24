@@ -82,6 +82,9 @@ export class ActorEffects {
           : lane.system ? catalog.find((e) => e.system === lane.system) : UNUSUALS[id!];
         if (!config?.file) throw new Error(`Particle definition not installed for ${kind} effect ${selected !== undefined ? `#${selected}` : lane.system ?? id}`);
         const attachmentName = lane.attachment ?? ("attachment" in config ? config.attachment : "unusual");
+        // an effect an item always shows plays at an attachment of its model: a style whose model has none (the cigarette left out) shows no effect,
+        // not one from the middle of the head
+        if (!lane.chosen && kind === "hat" && lane.item !== null && hatModel && !hatModel.attachments.some((x) => x.name.toLowerCase() === attachmentName.toLowerCase())) continue;
         const rootBoneFallback = "root_bone" in config ? config.root_bone : true;
         const root = particleSystemForTeam(config.system, actor.particleTeam);
         const file = catalog.find((e) => e.system === root)?.file ?? config.file;

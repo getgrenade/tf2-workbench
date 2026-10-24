@@ -59,6 +59,7 @@ import type { ClipData, MaterialData, ModelData } from "./payload";
 import { DEFAULT_SHADOW, type ShadowParams } from "./shadowMath";
 import { SourceMaterials, type SharedUniforms } from "./sourceMaterials";
 import { FOG_GLSL, MAX_FOGS, applyFogUniforms, type FogState } from "./fog";
+import { paintBackdrop, type Backdrop as BackdropState } from "./promo";
 import { AO_APPLY_GLSL, DEFAULT_AO, aoTintRgb, type AoState } from "./aoMath";
 import { AoPass } from "./aoPass";
 import { BloomPass, LOOK_GLSL, applyLookUniforms, createLookUniforms, type LookStates } from "./look";
@@ -1235,7 +1236,8 @@ void main() {
 
   async setUnusuals(actor: Actor, settings: UnusualSettings, restart = false, seed = 0): Promise<void> {
     if (!settings.silver && !settings.arctic && !settings.hatEffect && !settings.tauntEffect && !settings.items?.length) { this.clearUnusuals(actor); return; }
-    const key = JSON.stringify([actor.particleModel?.path, actor.particleTeam, actor.particleCosmetic(settings.hatItem)?.path, settings]);
+    // (the model each item with an effect of its own wears too: a style is another model, and its effect is made again on it)
+    const key = JSON.stringify([actor.particleModel?.path, actor.particleTeam, actor.particleCosmetic(settings.hatItem)?.path, (settings.items ?? []).map((x) => actor.particleCosmetic(x.item)?.path), settings]);
     const previous = this.unusualEffects.get(actor);
     if (previous?.key === key && !restart) return previous.pending;
     this.clearUnusuals(actor);
@@ -2844,6 +2846,10 @@ void main() {
   private backgroundColor: number | null = null;
   /** The colour of the scene itself, behind everything when there is no sky and the studio does not ask for another. */
   private backdropColor = HLMV_BACKGROUND;
+  /** A gradient or a picture behind everything (over the colour of the scene, under a sky), and the canvas it is painted on for the view. */
+  private worldBackdrop: BackdropState | null = null;
+  private backdropTexture: THREE.CanvasTexture | null = null;
+  private backdropTimer = 0;
   private sky: THREE.CubeTexture | null = null;
   private skyRotation = 0;
   private skyBrightness = 1;
@@ -2857,6 +2863,33 @@ void main() {
   setBackdropColor(hex: string) {
     this.backdropColor = parseInt(hex.slice(1), 16);
     this.applyBackground();
+  }
+
+  /** A gradient or a picture behind the scene (null: the colour of the scene is what is behind it). */
+  setWorldBackdrop(b: BackdropState | null) {
+    this.worldBackdrop = b;
+    this.rebuildBackdropTexture();
+    this.applyBackground();
+  }
+
+  /** The background painted on a texture of w × h (long sides kept to what a card can hold). */
+  private makeBackdropTexture(b: BackdropState, w: number, h: number): THREE.CanvasTexture {
+    const k = Math.min(1, 4096 / Math.max(w, h));
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, Math.round(w * k));
+    c.height = Math.max(1, Math.round(h * k));
+    paintBackdrop(c.getContext("2d")!, c.width, c.height, b);
+    const texture = new THREE.CanvasTexture(c);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    return texture;
+  }
+
+  private rebuildBackdropTexture() {
+    this.backdropTexture?.dispose();
+    this.backdropTexture = null;
+    if (!this.worldBackdrop) return;
+    const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+    this.backdropTexture = this.makeBackdropTexture(this.worldBackdrop, Math.min(size.x, 2560), Math.min(size.y, 2560));
   }
 
   /** The colour behind everything (null: the usual grey, or the sky when there is one). */
@@ -2942,7 +2975,8 @@ void main() {
       scene.background = this.sky;
       scene.backgroundRotation.set(0, this.skyRotation * Math.PI / 180, 0);
       scene.backgroundIntensity = this.skyBrightness;
-    } else scene.background = new THREE.Color(this.backgroundColor ?? this.backdropColor);
+    } else if (this.backgroundColor === null && this.backdropTexture) scene.background = this.backdropTexture;
+    else scene.background = new THREE.Color(this.backgroundColor ?? this.backdropColor);
   }
 
   private resize() {
@@ -2953,6 +2987,11 @@ void main() {
     this.renderer.domElement.style.height = `${h}px`;
     const buffer = this.renderer.getDrawingBufferSize(new THREE.Vector2());
     this.sceneTarget.setSize(buffer.x, buffer.y);
+    // (the background is painted again for the new shape of the view, once it has stopped changing)
+    if (this.worldBackdrop) {
+      window.clearTimeout(this.backdropTimer);
+      this.backdropTimer = window.setTimeout(() => { this.rebuildBackdropTexture(); this.applyBackground(); }, 120);
+    }
     this.camera.aspect = w / h;
     // hlmv specifies a horizontal FOV; three wants vertical.
     this.camera.fov = this.fixedVerticalFov ?? (2 * Math.atan(Math.tan((this.fovX * Math.PI) / 360) / this.camera.aspect) * 180) / Math.PI;
@@ -3353,6 +3392,33 @@ void main() {
     return cam;
   }
 
+  /** The groups of every particle effect the characters have (a hat's effect, smoke, a weapon's, the conditions'). */
+  private particleGroups(): THREE.Object3D[] {
+    const groups: THREE.Object3D[] = [];
+    for (const entry of this.unusualEffects.values()) if (entry.effect) groups.push(entry.effect.group);
+    for (const lane of this.conditionParticles.all) groups.push(lane.group);
+    for (const entry of this.weaponEffects.values()) if (entry.effect) groups.push(entry.effect.group);
+    for (const list of this.storedWeaponEffects.values()) for (const effect of list) groups.push(effect.group);
+    return groups;
+  }
+
+  /** Whether these characters have a particle effect on them now (smoke, a hat's effect, a weapon's, a condition's). */
+  hasParticles(actors: Actor[]): boolean {
+    return actors.some((a) => !!this.unusualEffects.get(a)?.effect || !!this.weaponEffects.get(a)?.effect || (this.storedWeaponEffects.get(a)?.length ?? 0) > 0) || this.conditionParticles.all.length > 0;
+  }
+
+  /** Runs `job` with the particle effects hidden: what measures the characters themselves (their silhouette), not the smoke round them. */
+  async withoutParticles<T>(job: () => Promise<T>): Promise<T> {
+    const groups = this.particleGroups();
+    const was = groups.map((g) => g.visible);
+    groups.forEach((g) => (g.visible = false));
+    try {
+      return await job();
+    } finally {
+      groups.forEach((g, i) => (g.visible = was[i]));
+    }
+  }
+
   /** The bounds of one item a character wears, as it is posed (empty when it wears none of it). */
   itemBounds(actor: Actor, itemId: number): THREE.Box3 {
     const box = new THREE.Box3(), part = new THREE.Box3();
@@ -3533,6 +3599,12 @@ void main() {
     if (ownShadow && typeof opts!.groundShadow === "object") this.shadowParams = [{ ...opts!.groundShadow, enabled: true }];
     if (ownShadow) this.updateShadows(Math.min(...onlyList!.map((a) => a.floorY)), true);
     const background = this.scene.background;
+    // the gradient or picture behind the scene is painted for the shape of this picture
+    let captureBackdrop: THREE.CanvasTexture | null = null;
+    if (!transparent && this.worldBackdrop && background === this.backdropTexture && background !== null) {
+      captureBackdrop = this.makeBackdropTexture(this.worldBackdrop, w, h);
+      this.scene.background = captureBackdrop;
+    }
     const prevClear = r.getClearColor(new THREE.Color());
     const prevAlpha = r.getClearAlpha();
     if (transparent) {
@@ -3767,6 +3839,7 @@ void main() {
       r.setRenderTarget(null);
       r.setClearColor(prevClear, prevAlpha);
       this.scene.background = background;
+      captureBackdrop?.dispose();
       hidden.forEach((o, i) => (o.visible = wasVisible[i]));
       // the shadows of the whole scene again
       if (ownShadow) {

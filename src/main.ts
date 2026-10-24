@@ -262,7 +262,8 @@ app.innerHTML = `
       <div id="lightPane" class="lightPane" hidden>
         <section class="lightCol worldView" id="worldView">
           <h3>Scene</h3>
-          <label class="colorRow" title="The colour behind the scene; a skybox covers it"><span>Background</span> <input type="color" id="bgColor" value="#404040" /></label>
+          <input type="color" id="bgColor" value="#404040" hidden />
+          <div id="worldBackdrop" class="worldBackdrop" title="What is behind the scene: a colour, a gradient or a picture (a skybox covers it)"></div>
           <label class="slider" title="How far apart the characters stand">Spacing <output></output><input type="range" id="entSpacing" min="30" max="200" step="1" value="37" /></label>
           <label class="slider" title="Horizontal field of view in degrees, as a camera's own setting">Field of view <output></output><input type="range" id="fov" min="10" max="100" step="1" value="30" /></label>
           <div class="checks"><label title="The hair, scarves and other loose parts of the characters swing with their movement"><input type="checkbox" id="jiggle" checked /> Jiggle bones</label></div>

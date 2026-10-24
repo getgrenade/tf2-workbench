@@ -72,6 +72,10 @@ export interface CosmeticSpec {
   paint: Rgb | null;
   skin: number;
   clip?: ClipData | null;
+  /** The clip is the item's own first sequence, which poses the bones the class lacks: held at its first frame (the engine's cycle 0), not run with the class's clock. */
+  idle?: boolean;
+  /** The clip is an animation the item plays over and over on a clock of its own (a pet's idle), whatever the class does. */
+  loop?: boolean;
   /** The item this model belongs to (what a click on it picks). */
   itemId?: number;
   /** The weapon the character holds. */
@@ -187,7 +191,7 @@ export class Actor {
   private flexGlobals: FlexGlobals = new Map();
   private flexClass: FlexMesh[] = [];
   private flexCosmetic: FlexMesh[] = [];
-  private cosmetics: { rig: Rig; bones: THREE.Bone[]; bindLocal: THREE.Matrix4[]; map: number[]; jiggles: (JiggleBone | null)[]; own: Playback | null }[] = [];
+  private cosmetics: { rig: Rig; bones: THREE.Bone[]; bindLocal: THREE.Matrix4[]; map: number[]; jiggles: (JiggleBone | null)[]; own: Playback | null; idle: boolean; loop: boolean; clock: number }[] = [];
   /** A manual aim (a turn about the bone's own axes, clamped to the bone's limits) on an overridden jiggle bone, keyed by lowercase name. */
   private boneAims = new Map<string, BoneTurn>();
   /** Jiggle bones whose rotation is overridden by hand (posed, held, not simulated), keyed by lowercase name; the jiggle inspector sets this. */
@@ -918,7 +922,7 @@ export class Actor {
     this.boneAims.clear(); // the worn items changed; any hand-aim/override no longer refers to a bone that is on
     this.boneOverride.clear();
     const classIndex = new Map(this.classData.bones.map((b, i) => [b.name.toLowerCase(), i]));
-    for (const [index, { data, paint, skin, clip }] of list.entries()) {
+    for (const [index, { data, paint, skin, clip, idle, loop }] of list.entries()) {
       const rig = new Rig(data.bones);
       const bones = data.bones.map((info) => {
         const b = new THREE.Bone();
@@ -940,7 +944,7 @@ export class Actor {
         own = new Playback();
         own.clip = clip;
       }
-      this.cosmetics.push({ rig, bones, bindLocal, map, jiggles, own });
+      this.cosmetics.push({ rig, bones, bindLocal, map, jiggles, own, idle: !!idle && !!own, loop: !!loop && !!own, clock: 0 });
       for (const [partIndex, bp] of data.bodyParts.entries()) {
         const sub = (list[index].weapon && partIndex === 0 ? bp.models[this.heldBodyState] : null) ?? bp.models[0];
         if (!sub) continue;
@@ -1735,9 +1739,9 @@ export class Actor {
     apply(this.prop?.group);
   }
 
-  /** Jiggle bones that are simulated (not merged into the class skeleton) keep moving even in a still pose. */
+  /** Jiggle bones that are simulated (not merged into the class skeleton) keep moving even in a still pose, and so do items that play an animation of their own. */
   private get hasJiggle(): boolean {
-    return this.ctx.jiggle() && this.cosmetics.some((c) => c.jiggles.some(Boolean));
+    return (this.ctx.jiggle() && this.cosmetics.some((c) => c.jiggles.some(Boolean))) || this.cosmetics.some((c) => c.loop);
   }
 
   /** The group for drawings in the character's own space (null until it has a model). */
@@ -1884,14 +1888,22 @@ export class Actor {
         } else if (j >= 0 && j < classWorld.length) {
           world[i].copy(classWorld[j]); // merged bone: identical transform
           if (correction && lock!.follow.has(j)) world[i].premultiply(correction);
-        } else if (c.own && (this.playback.clip || c.own.clip!.frames <= 1)) {
+        } else if (c.own && (c.loop || c.idle || this.playback.clip || c.own.clip!.frames <= 1)) {
           // extra bone of a model with its own animation (the tank's tracks): the clip's local transform under the parent
           const p = c.own;
-          p.time = this.playback.time;
-          p.loopAll = this.playback.loopAll;
+          p.time = c.loop ? c.clock : c.idle ? 0 : this.playback.time;
+          p.loopAll = c.loop || this.playback.loopAll;
           const local = ownLocal(p.clip!, p.frame(), i, _cosLocal);
           if (c.rig.parents[i] >= 0) world[i].multiplyMatrices(world[c.rig.parents[i]], local);
           else world[i].copy(local);
+          // (a jiggle bone swings about where the item's own animation puts it, or is posed by hand there)
+          if (c.rig.parents[i] >= 0 && c.jiggles[i]) {
+            const lower = c.bones[i].name.toLowerCase();
+            if (this.boneOverride.has(lower)) {
+              const aim = this.boneAims.get(lower);
+              if (aim && !isIdentityTurn(aim)) turnedWorld(world[i], aim, world[i]);
+            } else if (jiggleOn) world[i].copy(c.jiggles[i]!.update(now, world[i], this.playback.clip ? this.gravitySource : this.gravityBind));
+          }
         } else if (c.rig.parents[i] >= 0) {
           world[i].multiplyMatrices(world[c.rig.parents[i]], c.bindLocal[i]); // extra bone: follow the parent (the goal)
           const lower = c.bones[i].name.toLowerCase();
@@ -1944,6 +1956,8 @@ export class Actor {
   step(dt: number): boolean {
     if (!this.rig || !this.modelGroup) return false;
     const pb = this.playback;
+    // (an item's own animation runs on its own clock: the class standing still does not stop it)
+    for (const c of this.cosmetics) if (c.loop) c.clock += dt;
     if (!pb.clip) {
       const faced = this.stepFace();
       // Jiggle bones keep settling in the bind pose too.

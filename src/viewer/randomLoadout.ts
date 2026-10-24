@@ -44,6 +44,9 @@ export interface Rolled {
   style: number;
 }
 
+/** Cosmetics a random roll never picks (one named by a rule still can be): the Wiki Cap (260), an all-class hat that does not fit every class. */
+export const NEVER_ROLLED = new Set([260]);
+
 /** A medal is rarely picked by chance: there are thousands of them and a few hundred of everything else. */
 const MEDAL_WEIGHT = 0.02;
 
@@ -75,7 +78,7 @@ export function rollLoadout(pool: ItemInfo[], paints: PaintInfo[], conflicts: (a
   const includes = rules.filter((r) => r.mode === "include");
   const left = (item: ItemInfo) => excludes.some((r) => ruleMatches(r, item));
   const asked = new Set(includes.filter((r) => r.kind === "item").map((r) => r.value));
-  const allowed = (item: ItemInfo) => asked.has(String(item.id)) || ((o.workshop || !item.workshop) && !left(item));
+  const allowed = (item: ItemInfo) => asked.has(String(item.id)) || (!NEVER_ROLLED.has(item.id) && (o.workshop || !item.workshop) && !left(item));
   const picked: ItemInfo[] = [];
   const fits = (item: ItemInfo) => !picked.includes(item) && !picked.some((p) => conflicts(p, item));
   const medalsAsked = includes.some((r) => r.kind === "medal" || (r.kind === "region" && r.value === "medal"));

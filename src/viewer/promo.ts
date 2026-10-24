@@ -5,6 +5,7 @@
  * them; the shots themselves are taken by the host (see tab.ts).
  */
 import { ensureOverlayFont, overlayFontFamily } from "./overlayFonts";
+import { sampleStops, sortedStops, unitGradientLine, type GradientStop } from "./gradientStops";
 import type { ItemInfo } from "./payload";
 
 /** A backdrop: a linear gradient between two colours at an angle, a soft light behind the middle and darker corners. */
@@ -19,7 +20,52 @@ export interface Backdrop {
   glowAmount: number;
   /** 0..1: how much darker the corners are. */
   vignette: number;
+  /**
+   * What it is: a gradient (absent: as the backdrops of before), one colour (`from`), or a picture (`image`, with `from` and `to` behind it
+   * until it has loaded).
+   */
+  kind?: "gradient" | "colour" | "picture";
+  /** The preset it was picked from (see backdropPresets.ts); absent: a custom one. */
+  preset?: string;
+  /**
+   * A gradient of colour stops, as Photoshop's: with them `from`, `to`, `glow` and `vignette` are not what is painted (`from` and `to` are the first
+   * and last stop, for a border that takes the backdrop's colours). Without them it is the two-colour gradient with a light of before.
+   */
+  stops?: GradientStop[];
+  /** With stops: a gradient running along `angle` (down, 90, as made here), or an oval out from the centre. */
+  shape?: "linear" | "radial";
+  /** With stops: 0..1, how much each blend eases in and out of its stops (0: straight, as Photoshop's). */
+  softness?: number;
+  /** With a radial one: its centre, as shares of the picture (the middle, a little above it). */
+  cx?: number;
+  cy?: number;
+  /** A step of a fade: this one painted over `from` with `t` as its opacity (never saved: the end of a fade is this one alone). */
+  crossfade?: { from: Backdrop; t: number };
+  /** A picture: a data URL (a JPEG scaled down to at most {@link BACKDROP_PICTURE_SIDE} on its long side). */
+  image?: string;
 }
+
+/** The longest side a backdrop picture is kept at. */
+export const BACKDROP_PICTURE_SIDE = 2048;
+
+const backdropPictures = new Map<string, HTMLImageElement>();
+/** Loads a backdrop's picture (so that it can be painted); null when it cannot be read. */
+export function loadBackdropPicture(src: string): Promise<HTMLImageElement | null> {
+  const known = backdropPictures.get(src);
+  if (known) return Promise.resolve(known);
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => { backdropPictures.set(src, img); resolve(img); };
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+}
+/** The pictures of some backdrops, loaded (a board or a scene that was opened has to load them before it paints them). */
+export async function loadBackdropPictures(list: (Backdrop | null | undefined)[]): Promise<void> {
+  await Promise.all(list.map((b) => (b?.kind === "picture" && b.image ? loadBackdropPicture(b.image) : null)));
+}
+/** Whether a backdrop's picture is loaded, or it has none. */
+export const backdropReady = (b: Backdrop) => b.kind !== "picture" || !b.image || backdropPictures.has(b.image);
 
 /**
  * The stroke around the border; sizes are pixels of a 1080-high picture (scaled with the picture). Its colour is the backdrop's own,
@@ -421,18 +467,84 @@ export function randomBackdrop(rand: () => number = Math.random): Backdrop {
 
 /** Paints the backdrop over a picture of w × h. */
 export function paintBackdrop(ctx: CanvasRenderingContext2D, w: number, h: number, b: Backdrop) {
-  const cx = w / 2, cy = h / 2, r = Math.hypot(w, h) / 2;
+  if (b.crossfade) {
+    // the one it is fading from, and this one over it: any two backdrops fade, whatever their kind, angle or shape
+    paintBackdrop(ctx, w, h, b.crossfade.from);
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, Math.max(0, b.crossfade.t));
+    paintBackdrop(ctx, w, h, { ...b, crossfade: undefined });
+    ctx.restore();
+    return;
+  }
+  if (b.kind === "colour") {
+    ctx.fillStyle = b.from;
+    ctx.fillRect(0, 0, w, h);
+    return;
+  }
+  const picture = b.kind === "picture" && b.image ? backdropPictures.get(b.image) : undefined;
+  if (picture) {
+    // covers the whole picture, centred (the part that does not fit is cut off)
+    const k = Math.max(w / picture.naturalWidth, h / picture.naturalHeight);
+    const dw = picture.naturalWidth * k, dh = picture.naturalHeight * k;
+    ctx.drawImage(picture, (w - dw) / 2, (h - dh) / 2, dw, dh);
+    return;
+  }
+  if (b.stops && b.stops.length >= 2) {
+    paintStops(ctx, w, h, b);
+    return;
+  }
   const g = ctx.createLinearGradient(...gradientEnds(w, h, b.angle));
   g.addColorStop(0, b.from);
   g.addColorStop(1, b.to);
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, w, h);
-  const glow = ctx.createRadialGradient(cx, cy * 0.9, 0, cx, cy, r);
-  glow.addColorStop(0, rgba(b.glow, b.glowAmount));
-  glow.addColorStop(0.6, rgba(b.glow, 0));
-  glow.addColorStop(1, `rgba(0,0,0,${b.vignette})`);
-  ctx.fillStyle = glow;
-  ctx.fillRect(0, 0, w, h);
+  // the light and the dark corners are ovals that fade out smoothly (stops that ease, in one colour each: no ring where one ends)
+  if (b.glowAmount > 0) {
+    ctx.save();
+    ctx.translate(w / 2, h * 0.46);
+    ctx.scale(w * 0.7, h * 0.78);
+    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+    for (const [at, k] of [[0, 1], [0.2, 0.82], [0.4, 0.52], [0.6, 0.25], [0.8, 0.07], [1, 0]]) g.addColorStop(at, rgba(b.glow, b.glowAmount * k));
+    ctx.fillStyle = g;
+    ctx.fillRect(-2, -2, 4, 4);
+    ctx.restore();
+  }
+  if (b.vignette > 0) {
+    ctx.save();
+    ctx.translate(w / 2, h / 2);
+    ctx.scale(w * Math.SQRT1_2, h * Math.SQRT1_2);
+    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+    for (const [at, k] of [[0, 0], [0.5, 0], [0.7, 0.15], [0.85, 0.5], [1, 1]]) g.addColorStop(at, `rgba(0,0,0,${b.vignette * k})`);
+    ctx.fillStyle = g;
+    ctx.fillRect(-2, -2, 4, 4);
+    ctx.restore();
+  }
+}
+
+/** A gradient of stops: along a direction, or an oval out from a centre that reaches the farthest corner at its end. */
+function paintStops(ctx: CanvasRenderingContext2D, w: number, h: number, b: Backdrop) {
+  const stops = sortedStops(b.stops!), soft = b.softness ?? 0;
+  const samples = sampleStops(stops, soft, 48);
+  ctx.save();
+  let g: CanvasGradient;
+  if (b.shape === "radial") {
+    const cx = (b.cx ?? 0.5) * w, cy = (b.cy ?? 0.46) * h;
+    ctx.translate(cx, cy);
+    // an oval of the picture's own shape (not a circle), as far as the farthest corner
+    ctx.scale(Math.max(cx, w - cx) * Math.SQRT2, Math.max(cy, h - cy) * Math.SQRT2);
+    g = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+    for (const s of samples) g.addColorStop(s.at, s.color);
+    ctx.fillStyle = g;
+    ctx.fillRect(-4, -4, 8, 8);
+  } else {
+    // drawn on a picture of 1 × 1 and stretched, so that a gradient looks the same on a square picture and on a wide one
+    ctx.scale(w, h);
+    g = ctx.createLinearGradient(...unitGradientLine(b.angle));
+    for (const s of samples) g.addColorStop(s.at, s.color);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 1, 1);
+  }
+  ctx.restore();
 }
 
 /** The direction of a backdrop's gradient over a picture of w × h, as its two ends. */

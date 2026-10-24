@@ -1329,3 +1329,39 @@ body.dndActive.dndRefused * { cursor: no-drop !important; }
 .promoTextArea { width: 100%; min-width: 0; resize: vertical; background: var(--bg); color: var(--fg); border: 1px solid var(--line); padding: 3px 6px; border-radius: var(--ui-radius); font: inherit; }
 .promoStackRow.border { color: var(--dim); font-style: italic; }
 .promoEditNote.warn { color: #ffb45a; }
+
+/* the background picker: a category menu, and thumbnails (backdropPicker.ts) */
+.bdPicker { display: flex; flex-direction: column; gap: 8px; }
+.bdGrid { display: flex; flex-wrap: wrap; gap: var(--ui-2); }
+/* a thumbnail is as big and as round as a button of the 3D view's toolbar */
+.bdThumb { position: relative; display: block; flex: none; width: var(--ui-h-float); height: var(--ui-h-float); min-height: 0; padding: 0; border: 0; border-radius: var(--ui-radius-l); background: transparent; color: var(--ui-text); cursor: pointer; overflow: hidden; line-height: 0; }
+.bdThumb canvas { display: block; width: 100%; height: 100%; }
+.bdThumb:hover { color: var(--ui-text-hi); }
+.bdThumb.on { outline: 2px solid var(--accent); outline-offset: 1px; }
+.bdIcon { display: grid; place-items: center; overflow: visible; }
+.bdIcon svg { width: var(--ui-icon-l); height: var(--ui-icon-l); fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.bdIcon:hover { background: var(--ui-wash-2); }
+.bdIcon.on { background: var(--ui-accent-mid); color: var(--ui-text-hi); outline: none; }
+.bdRow { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 8px; align-items: center; color: var(--dim); }
+.bdRow input[type=range] { width: 100%; accent-color: var(--accent); }
+.bdRow input[type=color] { width: 100%; height: 24px; padding: 0; border: 1px solid var(--line); background: var(--bg); }
+.bdColours { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+/* the gradient editor: a bar, its stops under it, and the midpoints between them */
+.bdBar { position: relative; display: flex; flex-direction: column; gap: 2px; user-select: none; touch-action: none; }
+.bdBarFill { display: block; width: 100%; height: 22px; border-radius: var(--ui-radius); box-shadow: inset 0 0 0 1px var(--line); cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20'%3E%3Cpath d='M10 3v14M3 10h14' stroke='black' stroke-width='4' stroke-linecap='round'/%3E%3Cpath d='M10 3v14M3 10h14' stroke='white' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E") 10 10, copy; }
+.bdTrack { position: relative; height: 26px; }
+.bdMid { position: absolute; top: 1px; width: 7px; height: 7px; background: var(--ui-text); border-radius: 1px; transform: translateX(-50%) rotate(45deg); cursor: ew-resize; }
+.bdMid:hover { background: var(--accent); }
+.bdStop { position: absolute; top: 10px; width: 14px; height: 15px; transform: translateX(-50%); cursor: grab; }
+.bdStop i { display: block; width: 100%; height: 100%; border-radius: 3px; box-shadow: 0 0 0 1px rgba(255, 255, 255, .6), 0 0 0 2px rgba(0, 0, 0, .55); }
+.bdStop.on i { box-shadow: 0 0 0 2px var(--accent), 0 0 0 3px rgba(0, 0, 0, .55); }
+.bdTrack.out .bdStop.on { opacity: .3; }
+.bdTrack.out { cursor: no-drop; }
+.bdBar:focus-visible { outline: none; }
+.bdRow.off { opacity: .5; }
+.bdSeg { display: flex; gap: var(--ui-1); }
+.bdSeg button { flex: 1; height: var(--ui-h); border-radius: var(--ui-radius); border: 1px solid var(--line); background: var(--bg); color: var(--ui-text); cursor: pointer; }
+.bdSeg button.on { background: var(--ui-accent-mid); color: var(--ui-text-hi); border-color: transparent; }
+.bdAsk { position: fixed; z-index: 1000; padding: 6px; background: var(--ui-float, var(--panel)); border: 1px solid var(--line); border-radius: var(--ui-radius-l); box-shadow: 0 6px 20px rgba(0, 0, 0, .45); }
+.bdAsk input { width: 190px; height: var(--ui-h); padding: 0 8px; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: var(--ui-radius); }
+.bdHint { margin: 0; color: var(--dim); font-size: var(--ui-fs-small); }

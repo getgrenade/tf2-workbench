@@ -91,6 +91,9 @@ import { blankUnusuals, parseUnusualSettings, loadUnusualCatalog as fetchUnusual
 import { DEFAULT_SHADOW, type ShadowParams } from "./shadowMath";
 import { CONDITION_CLASS, CONDITION_KEYS, CONDITION_LABELS, anyCondition, parseConditions, uberMaterialPath, type ConditionKey, cigaretteEffects } from "./conditions";
 import { DEFAULT_FOG, MIST_PRESET, parseFog, type FogState } from "./fog";
+import { createBackdropPicker } from "./backdropPicker";
+import { colourBackdrop } from "./backdropPresets";
+import { loadBackdropPictures, type Backdrop } from "./promo";
 import { DEFAULT_AO, parseAo, type AoState } from "./aoMath";
 import { hotkeyMatches, redoMatches } from "../hotkeys";
 import { buildPsd } from "./layerExport";
@@ -322,6 +325,22 @@ export function createViewTab(els: Els) {
   }
   bgInput.oninput = () => { viewer?.setBackdropColor(bgInput.value); };
   bgInput.ondblclick = () => { setBackgroundColor(DEFAULT_BACKGROUND); };
+  /** A gradient or a picture behind the scene, over the colour (null: the colour alone is behind it). */
+  let worldBackdrop: Backdrop | null = null;
+  const worldBackground = (): Backdrop => worldBackdrop ?? colourBackdrop(bgInput.value);
+  /** Sets what is behind the scene: a colour (the scene's own), or a gradient or a picture. */
+  function setWorldBackground(b: Backdrop) {
+    if (b.kind === "gradient" || b.kind === "picture") {
+      worldBackdrop = b;
+      viewer?.setWorldBackdrop(b);
+    } else {
+      worldBackdrop = null;
+      viewer?.setWorldBackdrop(null);
+      setBackgroundColor(b.from);
+    }
+  }
+  const worldPicker = createBackdropPicker({ get: worldBackground, set: (b) => setWorldBackground(b), picture: true });
+  document.getElementById("worldBackdrop")?.append(worldPicker.el);
   let ground: GroundState = { ...DEFAULT_GROUND };
   let groundUi: ReturnType<typeof createGroundUi> | null = null;
   function setGroundState(next: GroundState) {
@@ -790,7 +809,7 @@ export function createViewTab(els: Els) {
     }
     const everything: Equipped[] = weapon ? [...loadout, { item: weapon, paint: null, style: 0 }] : loadout;
     /** Loads a model (cached) and its materials for a skin family, then adds it to the bonemerged list. */
-    const add = async (path: string, rgb: number | null, skin: number, clip: ClipData | null = null, itemId?: number) => {
+    const add = async (path: string, rgb: number | null, skin: number, clip: ClipData | null = null, itemId?: number, idle = false, loop = false) => {
       let data = models.get(path);
       if (!data) {
         try {
@@ -804,7 +823,7 @@ export function createViewTab(els: Els) {
       // at a lower LOD every item is drawn at that LOD too (one with fewer LODs at its own last)
       if (e.lod > 0) data = await modelAtLod(path, e.lod).catch(() => data!);
       await ensureMaterials(data!, skin);
-      list.push({ data: data!, paint: rgb === null ? null : unpackRgb(rgb), skin, clip, itemId });
+      list.push({ data: data!, paint: rgb === null ? null : unpackRgb(rgb), skin, clip, itemId, idle, loop });
     };
     let prop: { data: ModelData; skin: number; clip: ClipData | null } | null = null;
     for (const { item: it, paint, style } of everything) {
@@ -840,8 +859,12 @@ export function createViewTab(els: Els) {
       }
       // a worn item's bones the class lacks are posed by the item's own idle animation, as the game does (the old all-class hats are one
       // model for every class, fitted to each by that animation)
-      if (!weaponClip && it !== weapon) weaponClip = await cosmeticIdleClip(path, cls);
-      await add(path, rgb, skin, weaponClip, it.id);
+      let idle = false, loop = false;
+      // the few items that play an animation of their own all the time (a style without it has none: it is posed as the others are)
+      const animation = ANIMATED_IDLE[it.id];
+      if (!weaponClip && it !== weapon && animation) { weaponClip = await cosmeticSequenceClip(path, animation); loop = !!weaponClip; }
+      if (!weaponClip && it !== weapon) { weaponClip = await cosmeticIdleClip(path, e.cls); idle = !!weaponClip; }
+      await add(path, rgb, skin, weaponClip, it.id, idle, loop);
       if (it === weapon && list.length) list[list.length - 1].weapon = true;
       // Models that travel with the item (a weapon's backpack, an attached part) share its paint and skin.
       for (const extra of it.extraModels ?? []) await add(extra, rgb, skin, null, it.id);
@@ -882,6 +905,24 @@ export function createViewTab(els: Els) {
       if (token === e.loadoutToken) playWeaponAnimation(e, weapon);
     }
     if (token === e.loadoutToken) await applyUnusuals(e);
+  }
+
+  /** The cosmetics that play a sequence of their own on a loop, by item id: Pet RoBro (its idle). (The Hat of Undeniable Wealth and Respect has a "blink" sequence too, but it holds no bone motion we can read: it has to be scale, which the animation baker does not read yet.). */
+  const ANIMATED_IDLE: Record<number, string> = { 733: "idle" };
+  const sequenceClips = new Map<string, Promise<ClipData | null>>();
+  /** A worn item's own sequence by name, baked (null when its model has none of that name). */
+  async function cosmeticSequenceClip(path: string, name: string): Promise<ClipData | null> {
+    const key = `${path}|${name}`;
+    let clip = sequenceClips.get(key);
+    if (!clip) {
+      clip = (async () => {
+        const info = parseAnimInfo(await listSequences(path));
+        const seq = info.sequences.find((s) => s.name.toLowerCase() === name && s.frames > 1);
+        return seq ? await bakeClip(path, seq.index, info.poseParams.map((p) => p.default)) : null;
+      })().catch(() => null);
+      sequenceClips.set(key, clip);
+    }
+    return clip;
   }
 
   /** The first frame of a worn item's own first sequence, for the item's bones that the class does not have (null when it has none). */
@@ -1746,6 +1787,7 @@ export function createViewTab(els: Els) {
       void applyReflection().catch(() => {});
       viewer.setGround(ground);
       viewer.setBackdropColor(bgInput.value);
+      viewer.setWorldBackdrop(worldBackdrop);
       viewer.setSpacing(+els.entities.spacing.value);
       viewer.setWireframe(els.wire.checked);
       viewer.setJiggle(els.jiggle.checked);
@@ -4625,7 +4667,8 @@ export function createViewTab(els: Els) {
     cam.updateProjectionMatrix();
     try {
       for (let k = 0; k < rounds; k++) {
-        const small = (await v.capture(1, true, { camera: cam, only: actors, size: { w: SW, h: SH }, canvas: true })).canvas!;
+        // (the characters alone: the smoke or the effect round one is not what a picture is framed on)
+        const small = (await v.withoutParticles(() => v.capture(1, true, { camera: cam, only: actors, size: { w: SW, h: SH }, canvas: true }))).canvas!;
         const { width, height } = small;
         const data = small.getContext("2d", { willReadFrequently: true })!.getImageData(0, 0, width, height).data;
         let x0 = width, y0 = height, x1 = -1, y1 = -1;
@@ -4696,6 +4739,11 @@ export function createViewTab(els: Els) {
           solidOf.set(shot.canvas!, plain.canvas!);
           // the shadow on its own (with the look's glow and bloom it cannot be told from them: that shot keeps its shadow in its pixels)
           if (shadow && !look) shadowOf.set(shot.canvas!, shadowLayer(shot.canvas!, plain.canvas!));
+        }
+        // with particles in the shot (smoke, a hat's effect), the character alone too: its bounds and clicks are not those of the smoke
+        if (v.hasParticles(actors)) {
+          const alone = await v.withoutParticles(() => v.capture(1, true, { camera: cam, only: actors, size: { w: W, h: H }, canvas: true }));
+          solidOf.set(shot.canvas!, alone.canvas!);
         }
         return shot.canvas!;
       });
@@ -5703,6 +5751,19 @@ export function createViewTab(els: Els) {
       })),
       /** The paintable cosmetics of a class that sit on a region (`shirt`, `whole_head`, ...): names to make a promo of. */
       items: async (game: string, region: string) => (await loadItemDb()).items.filter((i) => i.paintable && !i.workshop && itemUsableBy(i, game) && i.equipRegions.includes(region)).map((i) => i.displayName).slice(0, 12),
+      /** Dresses the selected character in these cosmetics (by name, with a style each: `[["Eyequarium", 1]]`), unpainted. */
+      wear: async (list: [string, number?][]) => {
+        const db = await loadItemDb();
+        const loadout = list.flatMap(([name, style]) => { const item = db.items.find((i) => i.displayName === name); return item ? [{ item, paint: null, style: style ?? 0 } as Equipped] : []; });
+        await promoDress(selected!, loadout, null, null, selected!.team);
+        return loadout.length;
+      },
+      /** The cosmetics that have effects of their own and more than one style (a test of the two together). */
+      styledEffects: async () => (await loadItemDb()).items.filter((i) => (i.particles ?? []).length && i.styles.length > 1).map((i) => ({ name: i.displayName, styles: i.styles.length, particles: i.particles, classes: ["scout","soldier","pyro","demoman","heavy","engineer","medic","sniper","spy"].filter((g) => itemUsableBy(i, g)) })).slice(0, 200),
+      /** Every cosmetic (not a medal, not a taunt) a class can wear that has a model for it, as names (workshop ones too when asked). */
+      allItems: async (game: string, workshop = false) => (await loadItemDb()).items.filter((i) => i.slot !== "taunt" && !i.medal && (workshop || !i.workshop) && itemUsableBy(i, game) && itemModelFor(i, game) !== null).map((i) => i.displayName),
+      /** The sequences of a model (name, frames, fps, loops): what its own animations are. */
+      sequences: async (path: string) => parseAnimInfo(await listSequences(path)).sequences,
       generate: async (names: string[], only?: "lineup") => {
         const db = await loadItemDb();
         const set = names.map((n) => db.items.find((i) => i.displayName === n)).filter((i): i is ItemInfo => !!i);
@@ -5753,6 +5814,7 @@ export function createViewTab(els: Els) {
       reflection: { ...reflection },
       ground: { ...ground },
       background: bgInput.value,
+      ...(worldBackdrop ? { backdrop: worldBackdrop } : {}),
       wireframe: els.wire.checked,
       jiggle: els.jiggle.checked,
       selected: Math.max(0, savable.indexOf(selected)),
@@ -5900,6 +5962,10 @@ export function createViewTab(els: Els) {
     void setReflectionState(scene.reflection ?? DEFAULT_REFLECTION).catch(() => {});
     setGroundState(scene.ground ?? DEFAULT_GROUND);
     setBackgroundColor(scene.background ?? DEFAULT_BACKGROUND);
+    // (a picture is loaded before it is painted)
+    worldBackdrop = scene.backdrop ?? null;
+    void loadBackdropPictures([worldBackdrop]).then(() => { if (worldBackdrop === (scene.backdrop ?? null)) viewer?.setWorldBackdrop(worldBackdrop); });
+    worldPicker.refresh();
     els.wire.checked = scene.wireframe;
     v.setWireframe(scene.wireframe);
     syncWireButton();
@@ -6096,6 +6162,9 @@ export function createViewTab(els: Els) {
     setPointControls(DEFAULT_POINT_LIGHT);
     applyPoint();
     setBackgroundColor(DEFAULT_BACKGROUND);
+    worldBackdrop = null;
+    viewer?.setWorldBackdrop(null);
+    worldPicker.refresh();
     for (const input of [els.fov, els.entities.spacing]) {
       input.value = input.defaultValue;
       input.oninput?.(new Event("input"));

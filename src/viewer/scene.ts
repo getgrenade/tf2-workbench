@@ -5,6 +5,8 @@ import { parseSky, type SkyState } from "./skyState";
 import { parseReflection, type ReflectionState } from "./reflectionState";
 import { parseGround, type GroundState } from "./groundPlane";
 import type { AoState } from "./aoMath";
+import type { Backdrop } from "./promo";
+import { parseBackdrop } from "./backdropPresets";
 import { parseRimLight, type RimLightState } from "./rimLight";
 import { parseUnusualSettings, type UnusualSettings } from "./particles/assets";
 import { parseWeaponSnapshot, type WeaponParticleSnapshot } from "./particles/weaponSnapshot";
@@ -96,6 +98,8 @@ export interface SceneFile {
   ground?: GroundState;
   /** The colour behind everything when there is no skybox ("#rrggbb"; the usual grey when missing). */
   background?: string;
+  /** A gradient or a picture behind everything, over that colour (a plain colour is `background` alone). */
+  backdrop?: Backdrop;
   wireframe: boolean;
   jiggle: boolean;
   /** Index of the selected character. */
@@ -195,6 +199,7 @@ export function parseScene(text: string): SceneFile {
     reflection: parseReflection(raw.reflection),
     ground: parseGround(raw.ground),
     background: typeof raw.background === "string" && /^#[0-9a-f]{6}$/i.test(raw.background) ? raw.background.toLowerCase() : undefined,
+    backdrop: parseBackdrop(raw.backdrop),
     wireframe: raw.wireframe === true,
     jiggle: raw.jiggle !== false,
     selected: isNum(raw.selected) ? Math.min(Math.max(Math.floor(raw.selected), 0), entities.length - 1) : 0,

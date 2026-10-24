@@ -67,3 +67,15 @@ test("paint chance: never paints at 0, always paints a paintable item at 1", () 
   assert.ok(r0.items.every((x) => x.paint === null));
   assert.ok(r1.items.every((x) => x.paint !== null));
 });
+
+test("the Wiki Cap is never rolled, unless a rule names it", () => {
+  const wiki = item("Wiki Cap", ["hat"], { id: 260 });
+  const only = [wiki, glasses];
+  for (let s = 1; s < 100; s++) {
+    const r = rollLoadout(only, paints, conflicts, [], opts, seeded(s));
+    assert.ok("items" in r);
+    assert.ok(!r.items.some((x) => x.item === wiki));
+  }
+  const asked = rollLoadout(only, paints, conflicts, [{ mode: "include", kind: "item", value: "260" }], opts, seeded(1));
+  assert.ok("items" in asked && asked.items.some((x) => x.item === wiki));
+});

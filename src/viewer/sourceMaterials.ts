@@ -223,7 +223,9 @@ export class SourceMaterials {
     const additive = flag("$additive");
     // CBaseShader::TextureIsTranslucent: the base texture's alpha is opacity only on a $translucent or $alphatest material, and not when it is the
     // self-illum mask or the envmap mask ($opaquetexture says it never is)
-    const baseAlphaIsOpacity = (translucent || alphaTest) && !selfIllum && !flag("$basealphaenvmapmask") && !flag("$opaquetexture");
+    // (and not in the Skin shader when the alpha is the phong mask: skin_ps20b.fxc takes the material's own alpha then, `lerp(baseColor.a * alpha, alpha, $basemapalphaphongmask)`: the translucent eyes of Sight for Sore Eyes are opaque)
+    const phongSkinMask = flag("$phong") && !eyes && (!!warp || flag("$basemapalphaphongmask") || !!bump) && flag("$basemapalphaphongmask");
+    const baseAlphaIsOpacity = (translucent || alphaTest) && !selfIllum && !flag("$basealphaenvmapmask") && !flag("$opaquetexture") && !phongSkinMask;
     const envTint = parseColor(p["$envmaptint"], [1, 1, 1]);
     const phong = flag("$phong") && !eyes;
     // WantsSkinShader() in vertexlitgeneric_dx9_helper.cpp: phong materials with a lightwarp (or
@@ -241,6 +243,8 @@ export class SourceMaterials {
       wireframe: this.wireframe,
       side: flag("$nocull") ? THREE.DoubleSide : THREE.FrontSide,
       transparent: translucent || additive,
+      // a translucent material does not write depth in the engine: what lies behind it (the pupil under the glass of Sight for Sore Eyes) is drawn through it, whatever order the triangles come in
+      ...(translucent ? { depthWrite: false } : {}),
       // $additive adds the colour to the frame without writing depth. The engine blends it as SRC_ALPHA, ONE (BT_BLENDADD) only when
       // the base texture's alpha counts as translucency (see baseAlphaIsOpacity), else as ONE, ONE (BT_ADD): the output alpha is then 1
       // (uUseBaseAlpha is off), which makes SRC_ALPHA, ONE the same plain add. The Airdog's goggle lens and the Jarate liquid are added
