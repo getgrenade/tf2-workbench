@@ -86,10 +86,12 @@ import { bakeClip, blendingTaunts, createAnimUi, newAnimState, type AnimEls, typ
 import { createFlexUi, flexGlobalsFor, type FlexEls } from "./flexUi";
 import { DEFAULT_FOV_X, DEFAULT_POINT_LIGHT, Viewer, type CosmeticSpec, type LightState, type PointLightState } from "./viewer";
 import { createLightingUi } from "./lightingUi";
-import { defaultLightingRig, newRigLight, parseLightingRig, type RigLight } from "./lighting";
+import { MAX_LIGHTS, defaultLightingRig, newRigLight, parseLightingRig, type RigLight } from "./lighting";
 import { blankUnusuals, parseUnusualSettings, loadUnusualCatalog as fetchUnusualCatalog, customEffectZips, type UnusualSettings } from "./particles/assets";
 import { DEFAULT_SHADOW, type ShadowParams } from "./shadowMath";
-import { CONDITION_CLASS, CONDITION_KEYS, CONDITION_LABELS, anyCondition, parseConditions, uberMaterialPath, type ConditionKey, cigaretteEffects } from "./conditions";
+import { parseStudio, studioAo, studioRigLights, DEFAULT_STUDIO, STUDIO_LABELS, STUDIO_ROLES, type StudioLight } from "./studioLight";
+import { createLightRigPanel, DEFAULT_SCENE_RIG } from "./lightRigPanel";
+import { CONDITION_CLASS, CONDITION_KEYS, CONDITION_LABELS, anyCondition, parseConditions, uberMaterialPath, type ConditionKey, cigaretteEffects, coversSpyHead } from "./conditions";
 import { DEFAULT_FOG, MIST_PRESET, parseFog, type FogState } from "./fog";
 import { createBackdropPicker } from "./backdropPicker";
 import { colourBackdrop } from "./backdropPresets";
@@ -2453,7 +2455,7 @@ export function createViewTab(els: Els) {
 
   // --- properties: the panel under the outliner shows what the selected character, light or camera has ---------------------------
 
-  type PropsKind = "character" | "light" | "camera" | "effect" | "overlay";
+  type PropsKind = "character" | "light" | "camera" | "effect" | "overlay" | "rig";
   let propsKind: PropsKind = "character";
   /** Who the cosmetic picks go to, and their classes, as last shown by the browser. */
   let lastTargetKey = "";
@@ -2466,6 +2468,50 @@ export function createViewTab(els: Els) {
   let selCameras = new Set<string>();
   /** The camera whose settings the panel shows. */
   let propsCamera = "";
+  /** The three-point light rig (its folder's id) whose controller the panel shows. */
+  let propsRig = "";
+  /** The rig's controller, in the properties panel (beside a light's settings). */
+  const rigPanel = createLightRigPanel({
+    get: () => groups.find((g) => g.id === propsRig)?.rig ?? null,
+    set: (rig, final) => {
+      rigEditBefore ??= rigState();
+      groups = groups.map((g) => (g.id === propsRig ? { ...g, rig } : g));
+      applyRig(propsRig);
+      if (final) {
+        const before = rigEditBefore, after = rigState();
+        rigEditBefore = null;
+        editHistory.push({ label: "Three-point light", undo: () => restoreRigState(before), redo: () => restoreRigState(after) });
+      }
+    },
+    // (the scene's ambient, not the rig's: the Light tab shows the same)
+    ambient: {
+      get: () => { const l = viewer?.getLight(); return { level: l?.ambient ?? 0.3, color: l?.ambientColor ?? "#ffffff" }; },
+      set: (level, color, final) => {
+        rigEditBefore ??= rigState();
+        const v = ensureViewer(), l = v.getLight();
+        v.setLight({ ...l, ambient: level, ambientColor: color });
+        lightingUi?.sync();
+        if (final) {
+          const before = rigEditBefore, after = rigState();
+          rigEditBefore = null;
+          editHistory.push({ label: "Ambient light", undo: () => restoreRigState(before), redo: () => restoreRigState(after) });
+        }
+      },
+    },
+  });
+  document.getElementById("propLight")!.after(rigPanel.el);
+  rigPanel.el.hidden = true;
+  /** What a change of a rig is undone to: the lights and the folders (where the rigs' settings are) as they were before it. */
+  let rigEditBefore: { light: ReturnType<Viewer["getLight"]>; groups: HierarchyGroup[] } | null = null;
+  const rigState = () => ({ light: ensureViewer().getLight(), groups: structuredClone(groups) });
+  function restoreRigState(s: { light: ReturnType<Viewer["getLight"]>; groups: HierarchyGroup[] }) {
+    ensureViewer().setLight(s.light);
+    lightingUi?.sync();
+    groups = structuredClone(s.groups);
+    rigPanel.refresh();
+    renderEntities();
+  }
+
   /** The id of the post-processing effect whose settings the panel shows. */
   let propsEffect = "";
   /** The post-processing effects of the scene (a new scene has the ground shadow). */
@@ -2582,6 +2628,8 @@ export function createViewTab(els: Els) {
     const building = !!selected && isBuildingCls(selected.cls);
     propsEl("propChar").hidden = nothingSelected || propsKind !== "character";
     propsEl("propLight").hidden = nothingSelected || propsKind !== "light";
+    rigPanel.el.hidden = nothingSelected || propsKind !== "rig";
+    if (!rigPanel.el.hidden) rigPanel.refresh();
     propsEl("propCamera").hidden = nothingSelected || propsKind !== "camera";
     propsEl("propEffect").hidden = propsKind !== "effect";
     propsEl("overlayProps").hidden = propsKind !== "overlay";
@@ -2969,6 +3017,7 @@ export function createViewTab(els: Els) {
       }
       renderEntities();
     },
+    selectRig: (id) => selectRig(id),
     newGroup: (parent) => {
       const id = crypto.randomUUID();
       groups = [...groups, { id, name: newGroupName(groups), ...(parent ? { parent } : {}) }];
@@ -3057,7 +3106,7 @@ export function createViewTab(els: Els) {
   function currentPrimary(): Pick | null {
     if (propsKind === "character") return selected ? { kind: "character", id: String(selected.id) } : null;
     if (propsKind === "light") return { kind: "light", id: currentLights().rig.selected ?? "" };
-    if (propsKind === "effect") return null;
+    if (propsKind === "effect" || propsKind === "rig") return null;
     return { kind: "camera", id: propsCamera };
   }
   /** What a box (or a click) of the box select tool covers becomes the selection, is added to it, or is taken from it. */
@@ -3196,8 +3245,8 @@ export function createViewTab(els: Els) {
       ...lights.map((l): OutlinerNode => ({ kind: "light", id: l.id, label: l.name, sub: l.type, keywords: l.type, group: l.group, selected: selLights.has(l.id), off: !l.enabled, removable: true })),
       ...(cameraRig?.cameras ?? []).map((c): OutlinerNode => ({ kind: "camera", id: c.id, label: c.name, sub: c.ratio, keywords: c.ratio, group: c.group, selected: selCameras.has(c.id), off: false, removable: true, viewing: cameraRig?.active === c.id })),
     ];
-    const primary: Pick | null = nothingSelected || propsKind === "effect" ? null : propsKind === "character" ? (selected ? { kind: "character", id: String(selected.id) } : null) : propsKind === "light" ? { kind: "light", id: lightRig.selected ?? "" } : { kind: "camera", id: propsCamera };
-    hierarchy().render(nodes, groups, primary);
+    const primary: Pick | null = nothingSelected || propsKind === "effect" || propsKind === "rig" ? null : propsKind === "character" ? (selected ? { kind: "character", id: String(selected.id) } : null) : propsKind === "light" ? { kind: "light", id: lightRig.selected ?? "" } : { kind: "camera", id: propsCamera };
+    hierarchy().render(nodes, groups, primary, !nothingSelected && propsKind === "rig" ? propsRig : undefined);
   }
 
   /** Turns a character's gizmo on, or off when it is already on; only one gizmo shows at a time. */
@@ -4707,7 +4756,7 @@ export function createViewTab(els: Els) {
    * with {@link PROMO_MARGIN} more room round the slot, so what reaches past the character (a long weapon) is not cut off at the slot's
    * edge but spills over it (see {@link marginBox}).
    */
-  async function promoShot(who: Entity | Entity[], dir: THREE.Vector3, w: number, h: number, fill: number, scaleDistance?: number, pan?: { fov?: number; panX?: number; panY?: number; light?: { azimuth: number; elevation: number }; particles?: { seed: number; time: number } }, margin = true, effects?: ShotEffects, bounds?: THREE.Box3, quick = false): Promise<HTMLCanvasElement> {
+  async function promoShot(who: Entity | Entity[], dir: THREE.Vector3, w: number, h: number, fill: number, scaleDistance?: number, pan?: { fov?: number; panX?: number; panY?: number; light?: { azimuth: number; elevation: number }; particles?: { seed: number; time: number }; studio?: StudioLight }, margin = true, effects?: ShotEffects, bounds?: THREE.Box3, quick = false): Promise<HTMLCanvasElement> {
     const v = ensureViewer();
     const actors = (Array.isArray(who) ? who : [who]).map((x) => x.actor);
     const fov = pan?.fov ?? PROMO_FOV;
@@ -4730,9 +4779,13 @@ export function createViewTab(els: Els) {
     const look = !!effects?.look;
     // the particle effects at a set moment of theirs (the shot is the same each time it is taken), held still while it is taken
     if (pan?.particles) for (const a of actors) await v.restartEffects(a, pan.particles.seed, pan.particles.time);
+    // a thumbnail's studio light: its rig in place of the scene's lights (fixed where the shot's camera sees them), and its occlusion
+    const studio = pan?.studio?.on ? parseStudio(pan.studio) : null;
+    const ao = studio ? studioAo(studio) : undefined;
+    const lit = <T>(job: () => Promise<T>) => (studio ? withStudioLight(studio, cam.quaternion, job) : withShotLight(pan?.light, job));
     try {
-      return await withShotLight(pan?.light, async () => {
-        const shot = await v.capture(1, true, { camera: cam, only: actors, size: { w: W, h: H }, canvas: true, groundShadow: shadow, look });
+      return await lit(async () => {
+        const shot = await v.capture(1, true, { camera: cam, only: actors, size: { w: W, h: H }, canvas: true, groundShadow: shadow, look, ao });
         // with effects, the shot again without them: the character alone, for its bounds and clicks
         if (shadow || look) {
           const plain = await v.capture(1, true, { camera: cam, only: actors, size: { w: W, h: H }, canvas: true });
@@ -4774,6 +4827,27 @@ export function createViewTab(els: Els) {
     } finally {
       v.setLight(was);
     }
+  }
+
+  /**
+   * Lights the view with a studio light instead of its own while `job` runs: the rig's three lights (fixed in the world where `camera`
+   * sees them; turning with the view without one) and its ambient. Its own lights, ambient and all, come back after.
+   */
+  async function withStudioLight<T>(studio: StudioLight, camera: THREE.Quaternion | undefined, job: () => Promise<T>): Promise<T> {
+    const v = ensureViewer();
+    const was = v.getLight();
+    v.setLight(studioLightState(studio, camera));
+    try {
+      return await job();
+    } finally {
+      v.setLight(was);
+    }
+  }
+  /** The view's light as a studio light makes it (see {@link withStudioLight}). */
+  function studioLightState(studio: StudioLight, camera?: THREE.Quaternion): LightState {
+    const l = ensureViewer().getLight();
+    const rig = l.rig ?? parseLightingRig(undefined, l);
+    return { ...l, ambient: studio.ambient, ambientColor: "#ffffff", rig: { ...rig, marker: false, selected: null, lights: studioRigLights(studio, camera) } };
   }
 
   /**
@@ -4820,6 +4894,11 @@ export function createViewTab(els: Els) {
     e.actor.setVisibleRegions(regions ?? (all.length ? all : ["*"]));
     if (e === selected && !promoQuiet) { itemsUi.load(e.items); weapons.load(e.held); }
     else if (e === selected) uiStale = true;
+    // a Spy smokes in a promo unless what he wears covers his head (the smoke would float out of the mask); the loadout plays it
+    if (game === "spy") {
+      const cig = !coversSpyHead(e.applied);
+      if (e.actor.conditions.cig !== cig) ensureViewer().setConditions(e.actor, { ...e.actor.conditions, cig });
+    }
     await applyLoadout(e, e.applied);
     const idle = weapon ? weaponIdleSequences(weapon, game) : [];
     if (!(idle.length && anim.selectByName(e.actor, e.anim, idle))) anim.selectByName(e.actor, e.anim, ["ref"]);
@@ -5089,10 +5168,28 @@ export function createViewTab(els: Els) {
     renderTabs();
   }
 
-  /** Dresses a shot's character as its spec says (unless it already is). */
+  /** Dresses a shot's character as its spec says (unless it already is), turned by the shot's Turn (see {@link shotDirection}). */
   async function dressForShot(spec: ShotSpec): Promise<Entity> {
-    return dressEntity(await enterRole(spec.role), spec);
+    const e = await dressEntity(await enterRole(spec.role), spec);
+    turnForShot(spec, e);
+    return e;
   }
+  /**
+   * Turns a shot's character by its Turn (its camera stays at the front: see {@link shotDirection}); the eyes of a thumbnail of an item on
+   * the head look into the camera, as the game's model panels have them (any other shot's look ahead).
+   */
+  function turnForShot(spec: ShotSpec, e: Entity) {
+    e.actor.setEyesFollowCamera(spec.focusZone === "head");
+    const a = e.actor, yaw = (-spec.yaw * Math.PI) / 180;
+    if (Math.abs(a.yaw - yaw) > 1e-6) ensureViewer().placeActor(a, a.offset.x, a.offset.y, a.offset.z, yaw);
+  }
+
+  /**
+   * Where a shot's camera looks from. A character's shot is always taken from the front, the character turned by its Turn instead
+   * ({@link dressForShot}): the light and the ground shadow lie in the world, so every shot of the set has them the same way round on
+   * the picture (RED and BLU side by side, their shadows parallel). A line-up's camera goes round its row.
+   */
+  const shotDirection = (spec: ShotSpec) => new THREE.Vector3(...aimDirection(spec.group ? spec : { yaw: 0, pitch: spec.pitch }));
 
   /** Dresses a character as a shot's spec says (it is built anew only when the spec's key changes): what it wears and holds, and how it stands. */
   async function dressEntity(e: Entity, spec: ShotSpec): Promise<Entity> {
@@ -5211,6 +5308,183 @@ export function createViewTab(els: Els) {
     spec.randomPose = true;
   }
 
+  // --- a thumbnail on the character: framed on the item, in a pose that shows it -----------------------------------------------------
+
+  /** Where on the body an item is worn, by its equip regions: on the head, on the legs and feet, else on the body. */
+  function thumbnailZone(regions: readonly string[]): "head" | "legs" | "body" {
+    if (regions.some((r) => /^(hat|whole_head|face|glasses|lenses|beard|ears|head_skin|.*head_replacement)$/.test(r))) return "head";
+    if (regions.length && regions.every((r) => /feet|pants|shoe|sock|legs/.test(r))) return "legs";
+    return "body";
+  }
+  /**
+   * Where a thumbnail's camera looks from for each zone, and how much of the picture what it frames fills: the head at eye level, three
+   * quarters on; the body from below, looking up at it; the legs from about knee height. The character runs on past the picture's edges.
+   */
+  const THUMB_AIM = { head: { yaw: 25, pitch: 4, fill: 0.94 }, body: { yaw: 22, pitch: -14, fill: 0.92 }, legs: { yaw: 18, pitch: 2, fill: 0.8 } } as const;
+  /**
+   * The bones of each zone of a thumbnail on the character, and how far round them it is framed (units: below, above and to each side).
+   * The head's reaches down past the chin: a head shot is of the face (and the hat on it), the shoulders only at the bottom edge.
+   */
+  const ZONE_BONES = {
+    head: { bones: ["bip_head"], pad: 6, below: -7, above: 7 },
+    body: { bones: ["bip_pelvis", "bip_neck"], pad: 9, below: -4, above: 2 },
+    legs: { bones: ["bip_knee_L", "bip_knee_R", "bip_foot_L", "bip_foot_R"], pad: 4, below: -3, above: 3 },
+  } as const;
+  /** The thumbnail of an item on the character, from the Item alone one (`alone`: its regions are kept for going back to it). */
+  function thumbnailSpec(item: ItemInfo, alone: ShotSpec): ShotSpec {
+    const zone = thumbnailZone(item.equipRegions);
+    return { ...alone, regions: null, aloneRegions: alone.regions ?? undefined, focus: item.id, focusZone: zone, ...THUMB_AIM[zone] };
+  }
+  /**
+   * What a thumbnail on the character frames: what shows of its item as it is posed, seen from the shot's side (an item's model can reach
+   * well past that: a boot's leg inside the trousers), as a flat box at the item's depth; and the part of the body it is worn on (see
+   * `focusZone`). Undefined for any other shot.
+   */
+  function focusBounds(e: Entity, spec: ShotSpec): THREE.Box3 | undefined {
+    if (spec.focus === undefined) return undefined;
+    const v = ensureViewer();
+    const model = v.itemBounds(e.actor, spec.focus);
+    if (model.isEmpty()) return undefined;
+    const wide = v.framingCamera([e.actor], shotDirection(spec), 1, 0.95, spec.fov ?? PROMO_FOV);
+    const { rect } = v.itemCoverage(e.actor, spec.focus, wide, 160);
+    let box = model;
+    if (rect) {
+      const depth = model.getCenter(new THREE.Vector3()).project(wide).z;
+      box = new THREE.Box3().setFromPoints([[rect.x0, rect.y0], [rect.x1, rect.y0], [rect.x0, rect.y1], [rect.x1, rect.y1]].map(([x, y]) => new THREE.Vector3(x, y, depth).unproject(wide)));
+    }
+    // the part of the body: round the bones of it, a little wider than they are (the head bone is at the base of the skull: the head is
+    // mostly above it)
+    const zone = ZONE_BONES[spec.focusZone ?? "body"];
+    const middle = new THREE.Vector3();
+    let found = 0;
+    for (const name of zone.bones) {
+      const p = e.actor.boneWorldPoint(name);
+      if (!p) continue;
+      box.union(new THREE.Box3(p.clone().add(new THREE.Vector3(-zone.pad, zone.below, -zone.pad)), p.clone().add(new THREE.Vector3(zone.pad, zone.above, zone.pad))));
+      middle.add(p);
+      found++;
+    }
+    // the character in the middle across, as a thumbnail has it (not the item's box, which a brim or a cape pulls to one side): the box
+    // grown to the same width each side of the middle of the part of the body (the camera is at the front: across is the world's x)
+    if (found) {
+      const cx = middle.x / found, half = Math.max(cx - box.min.x, box.max.x - cx);
+      box.min.x = cx - half;
+      box.max.x = cx + half;
+    }
+    return box;
+  }
+
+  /**
+   * A thumbnail's pose: several random taunts (two in three: their poses have the most character) and animations, each at the frame of it
+   * that shows the item best, and one of the best of them kept: what counts is how much of the item nothing is in front of (an arm, a
+   * weapon), then how much of the picture it takes.
+   */
+  async function rollThumbnailPose(spec: ShotSpec, tries = 8): Promise<void> {
+    const e = await enterRole(spec.role);
+    await dressEntity(e, { ...spec, pose: undefined });
+    const source = await poseSource(e, false);
+    const avoid = new Set<string>();
+    const found: { score: number; keep: { pose: ShotSpec["pose"]; poseOf: ShotSpec["poseOf"]; weapon: ShotSpec["weapon"]; flex: ShotSpec["flex"] } }[] = [];
+    for (let i = 0; i < tries; i++) {
+      const first = i % 3 === 2 ? "anim" : "taunt";
+      const choice = choosePose(first, source, avoid) ?? choosePose(first === "taunt" ? "anim" : "taunt", source, avoid);
+      if (!choice) break;
+      avoid.add(choice.id);
+      if (!(await poseShot(spec, choice.id, -1, choice, e))) continue;
+      // (a taunt that shows a model of its own, a prop or a costume, would be in the picture with the item)
+      if (choice.kind === "taunt" && ensureViewer().itemBounds(e.actor, choice.taunt.id).isEmpty() === false) continue;
+      const score = await bestThumbnailFrame(spec, e);
+      // (a taunt's pose has more character than a stance's: a little more, so that of two that show the item as well, it wins; more for an
+      // item on the head, whose picture is better without a weapon held up beside the face)
+      if (score !== null) found.push({ score: score + (choice.kind === "taunt" ? (spec.focusZone === "head" ? 0.12 : 0.04) : 0), keep: { pose: spec.pose, poseOf: spec.poseOf, weapon: spec.weapon, flex: spec.flex } });
+    }
+    if (!found.length) return;
+    // one of the best few, so that New pose gives another
+    const top = Math.max(...found.map((f) => f.score));
+    Object.assign(spec, pickOne(found.filter((f) => f.score >= top - 0.06))!.keep);
+    spec.randomPose = true;
+    promo().dressed.delete(spec.role);
+  }
+
+  /**
+   * The frame of the animation playing that shows a thumbnail's item best (the one it is at, and a few others of it): kept on the spec as
+   * its pose; its score (see {@link rollThumbnailPose}), or null when no frame of it stands.
+   */
+  async function bestThumbnailFrame(spec: ShotSpec, e: Entity): Promise<number | null> {
+    const v = ensureViewer(), pb = e.actor.playback, clip = pb.clip;
+    turnForShot(spec, e);
+    const span = clip && clip.frames > 1 ? (clip.frames - 1) / clip.fps : 0;
+    const window = e.anim.info?.sequences.find((q) => q.index === e.anim.seq)?.window;
+    const [from, to] = window && blendingTaunts() ? [span * window[0], span * window[1]] : [0, span];
+    const times = [pb.time, ...(span > 0 ? Array.from({ length: 6 }, (_, i) => from + ((to - from) * (i + Math.random())) / 6) : [])];
+    let best: { t: number; score: number } | null = null;
+    for (const t of times) {
+      pb.time = t;
+      e.actor.poseBones();
+      const up = e.actor.uprightness(), fromBind = e.actor.distanceFromBind();
+      if ((up !== null && up < UPRIGHT_MIN) || (fromBind !== null && fromBind < BIND_MIN_DEGREES)) continue;
+      if (e.held && (e.actor.weaponReach() ?? 0) > WEAPON_LET_GO) continue;
+      const box = focusBounds(e, spec);
+      if (!box) continue;
+      const cam = v.framingCamera([e.actor], shotDirection(spec), spec.w / spec.h, spec.fill, spec.fov ?? PROMO_FOV, undefined, box);
+      const { seen, area } = v.itemCoverage(e.actor, spec.focus!, cam);
+      // (an item on the head is shown with the face: a hand in front of it spoils the picture as much as one in front of the item, and so
+      // does a face turned to the side or away; on the body, a little of that too)
+      const facing = faceTowardCamera(e, cam);
+      const head = spec.focusZone === "head";
+      const score = seen + 0.2 * Math.min(1, area / 0.3) - (head && handOverFace(e, cam) ? 0.5 : 0)
+        + (facing === null ? 0 : (head ? 0.4 : 0.1) * facing - (head && facing < 0.45 ? 0.6 : 0));
+      if (!best || score > best.score) best = { t, score };
+    }
+    if (!best) return null;
+    pb.time = best.t;
+    pb.playing = false;
+    e.actor.poseBones();
+    if (spec.poseOf) spec.poseOf = { ...spec.poseOf, at: span > 0 ? Math.max(0, Math.min(1, best.t / span)) : 0 };
+    const pose = e.actor.snapshotPose();
+    spec.pose = pose ? { pos: Array.from(pose.pos), quat: Array.from(pose.quat), scale: pose.scale ? Array.from(pose.scale) : undefined } : undefined;
+    return best.score;
+  }
+
+  /** How straight the face looks at `cam`: 1 into it, 0 to the side, below 0 away (null without the eyes' attachment). */
+  function faceTowardCamera(e: Entity, cam: THREE.PerspectiveCamera): number | null {
+    const face = e.actor.faceDirection(), head = e.actor.boneWorldPoint("bip_head");
+    if (!face || !head) return null;
+    return face.dot(cam.position.clone().sub(head).normalize());
+  }
+
+  /** Whether a hand is in front of the face as `cam` sees it: on it, in the picture, and nearer the camera than it. */
+  function handOverFace(e: Entity, cam: THREE.PerspectiveCamera): boolean {
+    const head = e.actor.boneWorldPoint("bip_head");
+    if (!head) return false;
+    // (the face is a little above the head bone, which is at the base of the skull, and about as wide as 9 units each way)
+    const face = head.clone().add(new THREE.Vector3(0, 5, 0));
+    const right = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 0);
+    const c = face.clone().project(cam), edge = face.clone().addScaledVector(right, 9).project(cam);
+    const radius = Math.abs(edge.x - c.x);
+    const toCamera = cam.position.distanceTo(face);
+    return ["bip_hand_L", "bip_hand_R"].some((name) => {
+      const hand = e.actor.boneWorldPoint(name);
+      if (!hand) return false;
+      const p = hand.clone().project(cam);
+      return Math.hypot(p.x - c.x, p.y - c.y) < radius * 1.1 && cam.position.distanceTo(hand) < toCamera;
+    });
+  }
+
+  /** A thumbnail's framing: on the character (framed on the item, posed to show it) or the item alone (as the icons are, standing still). */
+  async function setThumbnailFraming(spec: ShotSpec, mode: "character" | "item") {
+    const db = await loadItemDb();
+    const item = db.items.find((i) => i.id === spec.loadout[0]?.item);
+    if (!item) return;
+    if (mode === "character") {
+      Object.assign(spec, thumbnailSpec(item, { ...spec, regions: spec.aloneRegions ?? spec.regions }));
+      await rollThumbnailPose(spec);
+    } else {
+      Object.assign(spec, { regions: spec.aloneRegions ?? spec.regions, focus: undefined, focusZone: undefined, pose: undefined, poseOf: undefined, flex: undefined, weapon: null, randomPose: undefined, yaw: 24, pitch: 13, fill: 0.92 });
+    }
+    promo().dressed.delete(spec.role);
+  }
+
   /** Poses a shot's character from a taunt ("t<id>") or an animation ("s<name>") at `at` (0..1; below 0: a frame that frames well). */
   async function poseShot(spec: ShotSpec, id: string, at: number, choice?: PoseChoice, on?: Entity): Promise<boolean> {
     const db = await loadItemDb();
@@ -5267,8 +5541,51 @@ export function createViewTab(els: Els) {
     return stands;
   }
 
+  /** The sequence each character edited in 3D was put back on (see {@link replayPose}): when it still plays that, the shot keeps its source. */
+  const replayed = new WeakMap<Entity, string>();
+
+  /**
+   * In the 3D view a shot's pose is the taunt or animation it was taken from, paused on its frame, not a still copy of it: the Animation
+   * tab shows it, and its timeline moves it from there. A pose made by hand (no source) stays as it is.
+   */
+  async function replayPose(part: ShotSpec, e: Entity) {
+    const of = part.poseOf;
+    if (!of) return;
+    const db = await loadItemDb();
+    if (of.id.startsWith("t")) {
+      const taunt = db.taunts.find((t) => String(t.id) === of.id.slice(1));
+      if (!taunt) return;
+      if (e.held?.id !== taunt.id) await promoDress(e, e.items.loadout, taunt, part.regions, teamOf(part));
+      playWeaponAnimation(e, taunt);
+    } else {
+      const seq = e.anim.info?.sequences.find((q) => q.name === of.id.slice(1));
+      if (!seq) return;
+      if (of.params) anim.applyHeld(e.actor, e.anim, [seq.name], of.params);
+      else anim.select(e.actor, e.anim, seq.index);
+    }
+    await e.anim.pending;
+    const pb = e.actor.playback, clip = pb.clip;
+    if (!clip) return;
+    pb.time = clip.frames > 1 ? ((clip.frames - 1) / clip.fps) * Math.max(0, Math.min(1, of.at)) : 0;
+    pb.playing = false;
+    e.actor.poseBones();
+    replayed.set(e, e.anim.seqName);
+  }
+
+  /** What a character edited in 3D is posed from now: the source it was put back on, another sequence picked there, or nothing (a pose made by hand). */
+  function poseSourceAfterEdit(part: ShotSpec, e: Entity): ShotSpec["poseOf"] {
+    if (e.actor.isPosing || e.actor.holdsPose || !e.anim.seqName) return undefined;
+    const pb = e.actor.playback, clip = pb.clip;
+    const span = clip && clip.frames > 1 ? (clip.frames - 1) / clip.fps : 0;
+    const at = span > 0 ? Math.max(0, Math.min(1, pb.time / span)) : 0;
+    if (part.poseOf && replayed.get(e) === e.anim.seqName) return { ...part.poseOf, at };
+    const seq = e.anim.info?.sequences.find((q) => q.name === e.anim.seqName);
+    return seq && seq.frames > 1 ? { id: `s${seq.name}`, at } : undefined;
+  }
+
   /** The promo shot being edited in the 3D view, and what to do when the board is shown again. */
-  let promoEditing: { spec: ShotSpec; /** the characters edited: the shot's one, or a composition's all */ ents: Entity[]; done: (set: boolean) => void; bar: HTMLElement; locked: number[] } | null = null;
+  let promoEditing: { spec: ShotSpec; /** the characters edited: the shot's one, or a composition's all */ ents: Entity[]; done: (set: boolean) => void; bar: HTMLElement; locked: number[];
+    /** a thumbnail's studio light shows in the view while it is edited: the view's own light and occlusion, to put back */ lightWas?: { light: LightState; ao: AoState } } | null = null;
 
   /**
    * Puts the view's camera where the shot's is: the view has the picture's lens (as tall a view as the picture's, whatever the shape of the
@@ -5280,7 +5597,7 @@ export function createViewTab(els: Els) {
     const aspect = Math.max(0.1, v.camera.aspect);
     const lens = spec.fov ?? PROMO_FOV;
     v.setFov((2 * Math.atan(Math.tan((lens * Math.PI) / 360) * aspect) * 180) / Math.PI);
-    const cam = v.framingCamera(ents.map((x) => x.actor), new THREE.Vector3(...aimDirection(spec)), spec.w / spec.h, spec.fill, lens, spec.scaleDistance !== undefined ? spec.scaleDistance / spec.fill : undefined);
+    const cam = v.framingCamera(ents.map((x) => x.actor), shotDirection(spec), spec.w / spec.h, spec.fill, lens, spec.scaleDistance !== undefined ? spec.scaleDistance / spec.fill : undefined, spec.group ? undefined : focusBounds(ents[0], spec));
     const target = slideCamera(cam, spec.w / spec.h, lens, spec);
     const away = cam.position.clone().sub(target).multiplyScalar(Math.max(1, spec.w / spec.h / aspect));
     v.restoreCamera(target.clone().add(away).toArray() as [number, number, number], target.toArray() as [number, number, number]);
@@ -5290,6 +5607,7 @@ export function createViewTab(els: Els) {
   function editShotIn3D(spec: ShotSpec): Promise<boolean> {
     return inPromoScene(async () => {
       const ents = spec.group ? await dressGroup(spec) : [await dressForShot(spec)];
+      for (const [i, x] of ents.entries()) await replayPose(spec.group ? spec.group[i] : spec, x);
       const e = ents[0];
       // the slider of the row's spacing shows how far apart they stand
       if (spec.group && ents.length > 1) {
@@ -5314,7 +5632,15 @@ export function createViewTab(els: Els) {
       document.getElementById("canvasWrap")?.appendChild(bar);
       // the promoted items it wears stay on (a line-up's one, a main picture's set)
       const locked = spec.loadout.map((x) => x.item).filter((id) => promo().ids.has(id) || id === spec.reroll?.item);
-      promoEditing = { spec, ents, done: resolve, bar, locked };
+      // a thumbnail is seen in its studio light (the rig turning with the view, which is the shot's camera) and with its occlusion
+      let lightWas: { light: LightState; ao: AoState } | undefined;
+      if (spec.studio?.on) {
+        const v = ensureViewer(), studio = parseStudio(spec.studio);
+        lightWas = { light: v.getLight(), ao: v.getAo() };
+        v.setLight(studioLightState(studio));
+        v.setAo(studioAo(studio));
+      }
+      promoEditing = { spec, ents, done: resolve, bar, locked, lightWas };
       (bar.querySelector(".promoEditDone") as HTMLButtonElement).onclick = () => finishShotEdit(true);
       (bar.querySelector(".promoEditCancel") as HTMLButtonElement).onclick = () => finishShotEdit(false);
       hideBoardTab(); // the role's scene shows, in the board's place
@@ -5332,6 +5658,7 @@ export function createViewTab(els: Els) {
     if (!ed) return;
     promoEditing = null;
     ed.bar.remove();
+    if (ed.lightWas) { ensureViewer().setLight(ed.lightWas.light); ensureViewer().setAo(ed.lightWas.ao); }
     viewer?.setFov(+els.fov.value); // the view's own lens again
     hidePromoTab(promo().roles.get(ed.spec.role));
     const { spec, ents } = ed;
@@ -5345,7 +5672,8 @@ export function createViewTab(els: Els) {
         part.weapon = e.held?.id ?? null;
         part.team = e.team;
         part.bodygroups = e.bodyManual.size ? Object.fromEntries(e.bodyManual) : undefined;
-        // the pose it shows now: a custom one, or the frame of what it plays
+        // the pose it shows now: a custom one, or the frame of what it plays (and that, as its source: the board's Pose list and timeline)
+        part.poseOf = poseSourceAfterEdit(part, e);
         if (e.actor.isPosing) e.actor.endPose(true);
         const pose = e.actor.snapshotCustomPose() ?? e.actor.snapshotPose();
         part.pose = pose ? { pos: Array.from(pose.pos), quat: Array.from(pose.quat), scale: pose.scale ? Array.from(pose.scale) : undefined } : undefined;
@@ -5360,7 +5688,9 @@ export function createViewTab(els: Els) {
         const v = ensureViewer();
         const cam = v.getCamera();
         const d = new THREE.Vector3(...cam.position).sub(new THREE.Vector3(...cam.target)).normalize();
-        spec.yaw = Math.round((Math.atan2(d.x, d.z) * 180) / Math.PI);
+        // (a character's shot is taken from the front with the character turned: its Turn is the angle between the two)
+        spec.yaw = Math.round((Math.atan2(d.x, d.z) * 180) / Math.PI - (ents[0].actor.yaw * 180) / Math.PI);
+        spec.yaw = ((((spec.yaw + 180) % 360) + 360) % 360) - 180;
         spec.pitch = Math.round((Math.asin(Math.max(-1, Math.min(1, d.y))) * 180) / Math.PI);
       }
       promo().dressed.set(spec.role, dressKey(spec)); // it already is as the spec says
@@ -5382,7 +5712,7 @@ export function createViewTab(els: Els) {
     const res = spec.resolution ?? 1;
     // (an item shown alone casts no shadow: it would float over one)
     const effects = spec.effects && spec.regions ? { ...spec.effects, shadow: { ...spec.effects.shadow, on: false } } : spec.effects;
-    return promoShot(e, new THREE.Vector3(...aimDirection(spec)), Math.round(spec.w * res), Math.round(spec.h * res), spec.fill, spec.scaleDistance, spec, true, effects);
+    return promoShot(e, shotDirection(spec), Math.round(spec.w * res), Math.round(spec.h * res), spec.fill, spec.scaleDistance, spec, true, effects, Array.isArray(e) ? undefined : focusBounds(e, spec));
   }
 
   /**
@@ -5406,7 +5736,7 @@ export function createViewTab(els: Els) {
     const e = spec.group ? await dressGroup(spec) : [await dressForShot(spec)];
     const v = ensureViewer();
     const aspect = (spec.w / spec.h) * (byHeight ? 6 : 1);
-    const cam = v.framingCamera(e.map((x) => x.actor), new THREE.Vector3(...aimDirection(spec)), aspect, spec.fill);
+    const cam = v.framingCamera(e.map((x) => x.actor), shotDirection(spec), aspect, spec.fill);
     measured.set(spec, (cam.userData.distance as number) * spec.fill);
   }
 
@@ -5609,14 +5939,15 @@ export function createViewTab(els: Els) {
     cameraView: (l, w, h) => inPromoScene(async () => {
       if (l.shot) {
         const e = l.shot.group ? await dressGroup(l.shot) : await dressForShot(l.shot);
-        return promoShot(e, new THREE.Vector3(...aimDirection(l.shot)), w, h, l.shot.fill, l.shot.scaleDistance, l.shot, false, undefined, undefined, true);
+        return promoShot(e, shotDirection(l.shot), w, h, l.shot.fill, l.shot.scaleDistance, l.shot, false, undefined, Array.isArray(e) ? undefined : focusBounds(e, l.shot), true);
       }
       const spec = l.chart!;
       const e = await dressForChart(spec);
       return promoShot(e, new THREE.Vector3(...aimDirection(spec)), w, h, spec.fill, undefined, spec, false, undefined, chartBounds(e, spec));
     }),
     reroll: (spec) => inPromoScene(() => rerollShot(spec)),
-    repose: (spec) => inPromoScene(() => rollShotPose(spec)),
+    repose: (spec) => inPromoScene(() => (spec.focus !== undefined ? rollThumbnailPose(spec) : rollShotPose(spec))),
+    framing: (spec, mode) => inPromoScene(() => setThumbnailFraming(spec, mode)),
     poses: (spec) => inPromoScene(async () => {
       const { taunts, sequences } = await shotPoses(spec);
       return { taunts: taunts.map((t) => ({ id: `t${t.id}`, label: t.displayName })).sort((a, b) => a.label.localeCompare(b.label)), sequences: sequences.map((q) => ({ id: `s${q.name}`, label: q.name })) };
@@ -5691,7 +6022,11 @@ export function createViewTab(els: Els) {
       ]);
 
       say(`${item.displayName}: thumbnail…`);
-      picture(item, `${name}_thumb`, "Thumbnail", 512, 512, [await shot(item.displayName, aloneSpec(512, 512, 0.92), 0, 0, 512, 512, true)]);
+      // the thumbnail: the character wearing it, framed on it, in a pose that shows it, lit as a thumbnail is (a three-point studio light,
+      // with ambient occlusion); Item alone, its other framing, is a choice of its panel
+      const thumb = thumbnailSpec(item, aloneSpec(512, 512, 0.92, { studio: structuredClone(DEFAULT_STUDIO) }));
+      await rollThumbnailPose(thumb);
+      picture(item, `${name}_thumb`, "Thumbnail", 512, 512, [await shot(item.displayName, thumb, 0, 0, 512, 512, true)]); // (centred only as Item alone)
 
       // the styles side by side, and a paint chart of each (of the item itself when it has one look)
       const styles = item.styles.length > 1 ? item.styles.slice(0, MAX_PROMO_STYLES) : [];
@@ -6809,6 +7144,8 @@ export function createViewTab(els: Els) {
           { label: "Point", icon: ICON.point, run: () => addLightFromMenu("point") },
           { label: "Spot", icon: ICON.spot, run: () => addLightFromMenu("spot") },
           { label: "Area", icon: ICON.area, run: () => addLightFromMenu("area") },
+          // (it takes three of the scene's lights)
+          ...(() => { const room = MAX_LIGHTS - currentLights().lights.length; return [{ label: "Three-point", icon: ICON.sun, separator: true, hint: room >= 3 ? "key, fill and rim in a folder" : `needs 3 free lights (${Math.max(0, room)} of ${MAX_LIGHTS} left)`, disabled: room < 3, run: () => addThreePointRig() }]; })(),
         ],
       },
       { label: "Camera", icon: ICON.camera, run: () => addCameraFromView() },
@@ -6831,6 +7168,84 @@ export function createViewTab(els: Els) {
     if (folder) made.group = folder;
     renderEntities();
     recordAdd("Add camera", [{ kind: "camera", id: made.id }]);
+  }
+
+  // --- a three-point light rig: a folder of a key, a fill and a rim light, and its controller in the properties ----------------------
+
+  /**
+   * Writes a rig's settings to its lights (the lights in its folder that have a part in it): where each is, how bright, its colour,
+   * whether it turns with the view; the key casts the shadows and the rim lights only the edges turned to it (see studioRigLights).
+   * Whether each is on stays its own (its eye in the outliner, the folder's).
+   */
+  function applyRig(id: string) {
+    const rig = groups.find((g) => g.id === id)?.rig;
+    if (!rig || !lightingUi) return;
+    const made = studioRigLights(rig);
+    lightingUi.update((lights) => {
+      for (const l of lights.lights) {
+        if (l.group !== id || !l.rigRole) continue;
+        const m = made[STUDIO_ROLES.indexOf(l.rigRole)];
+        Object.assign(l, { azimuth: ((m.azimuth % 360) + 360) % 360, elevation: m.elevation, intensity: m.intensity, color: m.color, shadows: m.shadows, shadowSoftness: m.shadowSoftness });
+        if (rig.follow) l.followCamera = true; else delete l.followCamera;
+        if (m.shadowStrength !== undefined) l.shadowStrength = m.shadowStrength; else delete l.shadowStrength;
+        if (m.curve !== undefined) l.curve = m.curve; else delete l.curve;
+      }
+    });
+  }
+
+  /** Shows a rig's controller in the properties (its folder was clicked in the outliner). */
+  function selectRig(id: string) {
+    if (!groups.some((g) => g.id === id && g.rig)) return;
+    nothingSelected = false;
+    multi = new Set();
+    selLights = new Set();
+    selCameras = new Set();
+    propsKind = "rig";
+    propsRig = id;
+    rigPanel.refresh();
+    renderEntities();
+  }
+
+  /** Adds a three-point light rig: its folder (in the active one), the key, the fill and the rim in it (the other lights turned off), and shows its controller. */
+  function addThreePointRig() {
+    ensureViewer();
+    if (!lightingUi) return;
+    if (currentLights().lights.length + 3 > MAX_LIGHTS) return; // (the menu says so)
+    const before = structure();
+    const id = crypto.randomUUID();
+    const parent = hierarchy().activeGroup();
+    const taken = new Set(groups.map((g) => g.name));
+    let name = "Three-point light";
+    for (let n = 2; taken.has(name); n++) name = `Three-point light ${n}`;
+    groups = [...groups, { id, name, ...(parent ? { parent } : {}), rig: structuredClone(DEFAULT_SCENE_RIG) }];
+    const ids: string[] = [];
+    for (let i = 0; i < STUDIO_ROLES.length; i++) {
+      lightingUi.add("directional");
+      const made = currentLights().lights.at(-1);
+      if (made) ids.push(made.id);
+    }
+    lightingUi.update((lights) => {
+      ids.forEach((lightId, i) => {
+        const l = lights.lights.find((x) => x.id === lightId);
+        if (!l) return;
+        l.name = `${STUDIO_LABELS[STUDIO_ROLES[i]]} light`;
+        l.rigRole = STUDIO_ROLES[i];
+        l.group = id;
+      });
+    });
+    applyRig(id);
+    // the rig lights the scene alone: the other lights are turned off (their eyes in the outliner turn them on again)
+    for (const l of currentLights().lights) if (!ids.includes(l.id) && l.enabled) lightingUi.setEnabled(l.id, false);
+    // (its undo takes the lights out and the folder with them, and turns the others on again; the redo puts them back)
+    const picks: Pick[] = ids.map((lightId) => ({ kind: "light", id: lightId }));
+    const after = structure();
+    let caps: Captured[] = [];
+    editHistory.push({
+      label: "Add three-point light",
+      undo: () => { caps = capturePicks(picks); removeCaptured(caps); applyStructure(before); },
+      redo: () => { void reinstate(caps).then(() => applyStructure(after)); },
+    });
+    selectRig(id);
   }
 
   /** Adds a light of a type and makes it the selection. */

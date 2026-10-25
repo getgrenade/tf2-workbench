@@ -574,13 +574,14 @@ export class CompilerSession {
   modelFile(cls: string) { return this.isMulticlass() ? `${this.itemName}_${cls}` : this.itemName; }
 
   /** Game paths (no extension) of a material's textures; only those the artist gave. */
-  texturePaths(cls: string, material: string, index: number, team: Team = 0): MaterialTexturePaths {
+  texturePaths(cls: string, material: string, index: number, team: Team = 0, placeholder = false): MaterialTexturePaths {
     const m = this.data.materials[material];
     const base = `models/${this.itemFolder(cls)}/${materialFileName(this.itemName, index)}`;
     const has = (path: string | undefined) => !!path && !!this.images.get(path);
     const illum = m?.settings.selfIllum && has(m.illum);
     // the BLU diffuse texture is a file of its own when it is another one than the RED; else the BLU material points at the RED file
-    const color = team === 1 && this.blueIsOwn(material) ? `${base}_blue_color` : has(m?.color) ? `${base}_color` : undefined;
+    // (a material with no diffuse texture is given a plain grey one when the item is built: its material file points at it all the same)
+    const color = team === 1 && this.blueIsOwn(material) ? `${base}_blue_color` : has(m?.color) || placeholder ? `${base}_color` : undefined;
     return {
       color,
       normal: has(m?.normal) && m?.settings.envmapMask !== "$basealphaenvmapmask" ? `${base}_normal` : undefined,
@@ -600,7 +601,7 @@ export class CompilerSession {
     const m = this.data.materials[material];
     const settings = m?.settings ?? DEFAULT_MATERIAL;
     const tinted = team === 1 && m?.blueTint ? { ...settings, colorTintBase: m.blueTint.colorTintBase, selfIllumTint: m.blueTint.selfIllumTint } : settings;
-    return buildVmt(tinted, this.texturePaths(cls, material, index, team));
+    return buildVmt(tinted, this.texturePaths(cls, material, index, team, true));
   }
 
   vmtText(cls: string, material: string, index: number, team: Team = 0) { return vmtText(this.vmt(cls, material, index, team)); }
@@ -679,7 +680,7 @@ export class CompilerSession {
     if (customBones.length > BONE_BUDGET) error("bones", `The item has ${customBones.length} bones of its own (${customBones.join(", ")}); the limit is ${BONE_BUDGET}.`);
     for (const name of this.materialNames()) {
       const m = this.data.materials[name];
-      if (!m?.color) error(`material:${name}`, `Material ${name} needs a diffuse texture.`);
+      if (!m?.color) warn(`material:${name}`, `Material ${name} has no diffuse texture: a plain grey one (256 × 256) is made when you build.`);
       for (const [kind, label] of [["color", "diffuse"], ["normal", "normal"], ["phongexponent", "exponent"], ["illum", "glow"]] as const) {
         const image = m && m[kind] ? this.image(m[kind]) : null;
         if (!image) continue;

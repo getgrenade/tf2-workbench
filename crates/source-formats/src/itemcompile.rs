@@ -147,7 +147,7 @@ pub fn validate(spec: &ItemSpec) -> Result<(), String> {
     if let Some(b) = spec.bodygroups.iter().find(|b| !BODYGROUPS.contains(&b.as_str())) { return Err(format!("unknown bodygroup {b}")); }
     if spec.materials.is_empty() || spec.materials.len() > 2 { return Err("an item has one or two materials".into()); }
     for (i, m) in spec.materials.iter().enumerate() {
-        if m.color.is_none() { return Err(format!("material {} has no colour texture", i + 1)); }
+        // (a material with no colour texture gets a plain grey one: see placeholder_tga)
         if m.vmt.trim().is_empty() { return Err(format!("material {} has no material file", i + 1)); }
         if spec.team_colors() {
             match &m.blue { None => return Err(format!("material {} has no BLU material (every material of a team-coloured item has one)", i + 1)), Some(b) if b.vmt.trim().is_empty() => return Err(format!("the BLU material {} has no material file", i + 1)), _ => {} }
@@ -439,6 +439,19 @@ pub(crate) fn quoted_path(p: &Path) -> Result<String, String> {
     Ok(format!("\"{s}\""))
 }
 
+/// The plain grey texture (RGB 115, the viewer's grey for a material with no texture) of a material that was given none: a 256 x 256 TGA of 24 bits.
+fn placeholder_tga() -> Vec<u8> {
+    const SIDE: u16 = 256;
+    let mut v = vec![0u8; 18];
+    v[2] = 2; // uncompressed true colour
+    v[12..14].copy_from_slice(&SIDE.to_le_bytes());
+    v[14..16].copy_from_slice(&SIDE.to_le_bytes());
+    v[16] = 24;
+    v[17] = 0x20; // rows from the top
+    v.extend(std::iter::repeat([115u8, 115, 115]).take(SIDE as usize * SIDE as usize).flatten());
+    v
+}
+
 /// Builds the item. `work_root` holds the scratch folder of the build (the private game folder studiomdl writes into). An archive
 /// and session file of the same name are replaced.
 pub fn build(vpk: &VpkSet, spec: &ItemSpec, out_dir: &Path, work_root: &Path) -> Result<Built, String> {
@@ -453,14 +466,15 @@ pub fn build(vpk: &VpkSet, spec: &ItemSpec, out_dir: &Path, work_root: &Path) ->
     let icon_dir = format!("{ICON_DIRECTORY}/{class}/{}", spec.name);
 
     // --- the textures: decoded, checked, converted on their own threads ----------------------------------------------------
-    struct Job { index: usize, team: u8, kind: &'static str, file_kind: Kind, source: PathBuf, vtf_path: String, content_path: String }
+    struct Job { index: usize, team: u8, kind: &'static str, file_kind: Kind, source: PathBuf, /** the file, when it is made here (a placeholder) and not read */ bytes: Option<Vec<u8>>, vtf_path: String, content_path: String }
     let mut jobs = Vec::new();
     for (i, m) in spec.materials.iter().enumerate() {
         let base = material_file(&spec.name, i);
         for (kind, file_kind, path) in [("base", Kind::Color, &m.color), ("normal", Kind::Normal, &m.normal), ("phongexponent", Kind::PhongExponent, &m.phongexponent), ("selfillum", Kind::Illum, &m.illum)] {
-            let Some(source) = path else { continue };
             let suffix = match kind { "base" => "_color", "normal" => "_normal", "phongexponent" => "_phongexponent", _ => "_illum" };
-            jobs.push(Job { index: i, team: 0, kind, file_kind, source: source.clone(),
+            // no colour texture: a plain grey one is made, so that a test does not need a texture to build
+            let (source, bytes) = match path { Some(source) => (source.clone(), None), None if kind == "base" => (PathBuf::from(format!("{base}{suffix}.tga")), Some(placeholder_tga())), None => continue };
+            jobs.push(Job { index: i, team: 0, kind, file_kind, source, bytes,
                 vtf_path: format!("game/materials/models/{item_dir}/{base}{suffix}.vtf"),
                 content_path: format!("content/materialsrc/models/{item_dir}/{base}{suffix}.tga") });
         }
@@ -469,7 +483,7 @@ pub fn build(vpk: &VpkSet, spec: &ItemSpec, out_dir: &Path, work_root: &Path) ->
     for (i, m) in spec.materials.iter().enumerate() {
         if let Some(source) = m.blue.as_ref().and_then(|b| b.color.as_ref()) {
             let base = material_file(&spec.name, i);
-            jobs.push(Job { index: i, team: 1, kind: "base", file_kind: Kind::Color, source: source.clone(),
+            jobs.push(Job { index: i, team: 1, kind: "base", file_kind: Kind::Color, source: source.clone(), bytes: None,
                 vtf_path: format!("game/materials/models/{item_dir}/{base}_blue_color.vtf"),
                 content_path: format!("content/materialsrc/models/{item_dir}/{base}_blue_color.tga") });
         }
@@ -478,7 +492,7 @@ pub fn build(vpk: &VpkSet, spec: &ItemSpec, out_dir: &Path, work_root: &Path) ->
     let compression = spec.compression;
     let results: Vec<Result<Done, String>> = std::thread::scope(|scope| {
         let handles: Vec<_> = jobs.iter().map(|job| scope.spawn(move || -> Result<Done, String> {
-            let bytes = fs::read(&job.source).map_err(|e| format!("{}: {e}", job.source.display()))?;
+            let bytes = match &job.bytes { Some(made) => made.clone(), None => fs::read(&job.source).map_err(|e| format!("{}: {e}", job.source.display()))? };
             let image = tga::decode(&bytes).map_err(|e| format!("{}: {e}", job.source.display()))?;
             let limit = match job.file_kind { Kind::Color | Kind::Normal => 512, _ => 256 };
             if image.width > limit || image.height > limit { return Err(format!("{} is {}x{}; the limit is {limit}x{limit}", job.source.display(), image.width, image.height)); }
@@ -626,6 +640,14 @@ mod tests {
     }
 
     #[test]
+    fn the_placeholder_texture_is_a_plain_grey_256_square() {
+        let image = tga::decode(&placeholder_tga()).unwrap();
+        assert_eq!((image.width, image.height, image.depth), (256, 256, 24));
+        assert!(!image.uses_alpha);
+        assert!(image.rgba.chunks(4).all(|p| p == [115, 115, 115, 255]));
+    }
+
+    #[test]
     fn the_session_keeps_the_qc_template_with_the_bone_commands() {
         let mut s = spec();
         s.classes[0].lod_commands = vec![vec!["replacebone \"bip_pack\" \"bip_pelvis\"".into()], vec![]];
@@ -705,7 +727,8 @@ nofacial
         let mut s = spec(); let mut other = s.classes[0].clone(); other.folder = "scout".into(); other.lods.pop(); s.classes.push(other); assert!(validate(&s).is_err(), "LOD counts differ");
         let mut s = spec(); s.materials.clear(); assert!(validate(&s).is_err());
         let mut s = spec(); s.bodygroups = vec!["feet".into()]; assert!(validate(&s).is_err());
-        let mut s = spec(); s.materials[0].color = None; assert!(validate(&s).is_err());
+        // (a material with no colour texture is allowed: a plain grey one is made)
+        let mut s = spec(); s.materials[0].color = None; assert!(validate(&s).is_ok());
     }
 
     #[test]

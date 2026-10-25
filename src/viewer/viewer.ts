@@ -2282,6 +2282,80 @@ void main() {
   }
 
 
+  /**
+   * How much of a worn item `camera` sees, at a small size: `seen` is the share of its pixels that nothing else (an arm, a weapon, the
+   * character itself) is in front of, `area` the share of the picture it covers, with nothing in front of it, and `rect` where what is
+   * seen of it is in the picture (normalized device coordinates; null when none of it is). What a promo thumbnail's pose is chosen by, and
+   * what it is framed on: an item's model can reach well past what shows of it (a boot's leg inside the trousers). (The particle effects are
+   * no part of it.)
+   */
+  itemCoverage(actor: Actor, itemId: number, camera: THREE.PerspectiveCamera, size = 96): { seen: number; area: number; rect: { x0: number; y0: number; x1: number; y1: number } | null } {
+    const slots = new Set(actor.cosmeticMeshes(itemId).map(({ mesh }) => mesh.userData.cosmeticSlot as number | undefined).filter((s): s is number => !!s));
+    if (!slots.size) return { seen: 0, area: 0, rect: null };
+    const target = new THREE.WebGLRenderTarget(size, size, { colorSpace: THREE.NoColorSpace });
+    const swapped: [THREE.Mesh, THREE.Material | THREE.Material[], boolean][] = [];
+    for (const a of this.actorList) {
+      for (const m of a.meshes()) {
+        const slot = (m.userData.cosmeticSlot as number | undefined) ?? 0;
+        const key = a.id * 256 + slot;
+        let mat = this.pickMaterials.get(key);
+        if (!mat) { mat = makePickMaterial(a.id, slot); this.pickMaterials.set(key, mat); }
+        swapped.push([m, m.material, m.visible]);
+        m.material = mat;
+      }
+    }
+    const hidden: THREE.Object3D[] = [...this.shadowQuads(), ...this.editorObjects, this.floorGrid.mesh, ...this.particleGroups()];
+    const wasVisible = hidden.map((o) => o.visible);
+    hidden.forEach((o) => (o.visible = false));
+    const background = this.scene.background;
+    this.scene.background = null;
+    const prevClear = this.renderer.getClearColor(new THREE.Color()), prevAlpha = this.renderer.getClearAlpha();
+    this.renderer.setClearColor(0x000000, 0);
+    const pixels = new Uint8Array(size * size * 4);
+    // (how many of the seen pixels are in each column and row: where the item is, its few stray bits left out)
+    const cols = new Uint32Array(size), rows = new Uint32Array(size);
+    const count = (bounds = false) => {
+      this.renderer.setRenderTarget(target);
+      this.renderer.clear();
+      this.renderer.render(this.scene, camera);
+      this.renderer.readRenderTargetPixels(target, 0, 0, size, size, pixels);
+      let n = 0;
+      for (let i = 0; i < pixels.length; i += 4) {
+        if (!(pixels[i + 3] > 0 && pixels[i] === actor.id && slots.has(pixels[i + 1]))) continue;
+        n++;
+        if (bounds) { cols[(i / 4) % size]++; rows[Math.floor(i / 4 / size)]++; }
+      }
+      return n;
+    };
+    let seen = 0, alone = 0;
+    try {
+      seen = count(true);
+      // the item with nothing in front of it: everything else hidden
+      for (const [m] of swapped) if (!slots.has((m.userData.cosmeticSlot as number | undefined) ?? 0) || !actor.meshes().includes(m)) m.visible = false;
+      alone = count();
+    } finally {
+      this.renderer.setRenderTarget(null);
+      this.renderer.setClearColor(prevClear, prevAlpha);
+      this.scene.background = background;
+      hidden.forEach((o, i) => (o.visible = wasVisible[i]));
+      for (const [m, mat, vis] of swapped) { m.material = mat; m.visible = vis; }
+      target.dispose();
+    }
+    // where the item is: from the 3rd to the 97th hundredth of its seen pixels across and up (a model can have a few stray bits far off,
+    // such as a boot's with some by the hands); the rows read back start at the bottom, as device coordinates do
+    const span = (hist: Uint32Array): [number, number] => {
+      const cut = seen * 0.03;
+      let lo = 0, hi = size - 1, sum = 0;
+      while (lo < size - 1 && sum + hist[lo] <= cut) sum += hist[lo++];
+      sum = 0;
+      while (hi > lo && sum + hist[hi] <= cut) sum += hist[hi--];
+      return [(lo / size) * 2 - 1, ((hi + 1) / size) * 2 - 1];
+    };
+    const [rx0, rx1] = span(cols), [ry0, ry1] = span(rows);
+    const rect = seen ? { x0: rx0, y0: ry0, x1: rx1, y1: ry1 } : null;
+    return { seen: alone ? Math.min(1, seen / alone) : 0, area: alone / (size * size), rect };
+  }
+
   /** Puts orbit, zoom and pan on the mouse buttons the user chose (Settings, Hotkeys); a button with none of them does nothing in the view. */
   setNavButtons() {
     const buttons = { LEFT: -1, MIDDLE: -1, RIGHT: -1 };
@@ -3556,7 +3630,9 @@ void main() {
       /** With `only`: the character's own ground shadow is in the picture (as the scene's shadow settings have it, or as given). */
       groundShadow?: boolean | ShadowParams;
       /** With `camera` or `only`: the look's effects are in the picture too (the grade, bloom, depth of field, AO and so on). */
-      look?: boolean },
+      look?: boolean;
+      /** Ambient occlusion of its own for this picture (a promo thumbnail's), in place of the scene's, with or without the look. */
+      ao?: AoState },
   ): Promise<{ blob: Blob; width: number; height: number; layers?: ExportLayer[]; merged?: Uint8ClampedArray; canvas?: HTMLCanvasElement }> {
     const r = this.renderer;
     const shot = !opts?.camera && !opts?.only ? this.cameras.captureCamera() : null;
@@ -3717,11 +3793,16 @@ void main() {
         captureBloom = new BloomPass();
         material.uniforms.tBloom.value = captureBloom.render(r, sceneTex, w, h, this.look.bloom);
       }
-      if (this.ao.enabled && (!opts?.camera || opts.fullScene || opts.look) && sceneRT.depthTexture) {
+      const ao = opts?.ao ?? this.ao;
+      if (ao.enabled && (!opts?.camera || opts.fullScene || opts.look || opts.ao) && sceneRT.depthTexture) {
         capturePass = new AoPass();
-        aoTexture = capturePass.render(r, sceneRT.depthTexture, cam as THREE.PerspectiveCamera, w, h, this.ao, this.charHeight);
+        aoTexture = capturePass.render(r, sceneRT.depthTexture, cam as THREE.PerspectiveCamera, w, h, ao, this.charHeight);
         material.uniforms.tAo.value = aoTexture;
         material.uniforms.uAoOn.value = 1;
+        material.uniforms.uAoStrength.value = ao.strength;
+        material.uniforms.uAoPower.value = ao.power;
+        material.uniforms.uAoTint.value = new THREE.Vector3(...aoTintRgb(ao.tint));
+        material.uniforms.uAoBleed.value = ao.bleed;
       }
       r.setRenderTarget(outRT);
       r.render(quadScene, this.presentCamera);

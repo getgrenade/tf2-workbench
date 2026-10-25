@@ -61,6 +61,8 @@ export interface HierarchyHooks {
   removeGroup: (id: string, withContents?: boolean) => void;
   /** Puts a folder in another (undefined: the top level), and when `before` is given right before that folder. */
   nestGroup: (id: string, parent: string | undefined, before?: string) => void;
+  /** A three-point light rig's folder was clicked: the properties show its controller. */
+  selectRig: (id: string) => void;
 }
 
 const ICONS = {
@@ -112,6 +114,8 @@ export function createHierarchy(host: HTMLElement, hooks: HierarchyHooks) {
   const byKey = new Map<string, OutlinerNode>();
   /** The thing the properties show. */
   let primary: Pick | null = null;
+  /** The three-point light rig whose controller the properties show (its folder is drawn selected). */
+  let selectedRig: string | undefined;
   /** The folder that new characters, lights and cameras go into. */
   let active: string | undefined;
   const collapsed = new Set<string>();
@@ -322,14 +326,17 @@ export function createHierarchy(host: HTMLElement, hooks: HierarchyHooks) {
       else collapsed.add(g.id);
       redraw();
     };
-    const folder = span("hierIcon folder");
-    folder.innerHTML = icon("folder");
+    // (a three-point light rig's folder: the light's icon, and selected while the properties show its controller)
+    const folder = span(g.rig ? "hierIcon" : "hierIcon folder");
+    folder.innerHTML = icon(g.rig ? "bulb" : "folder");
+    if (g.rig && selectedRig === g.id) row.classList.add("selected", "primary");
     row.append(chevron, folder, span("hierLabel", g.name), span("hierCount", String(item.count)));
     row.append(button("hierTool hierRemove", "Delete the folder (what is in it stays, outside of it)", icon("cross"), () => hooks.removeGroup(g.id)));
     row.append(button("hierEye", g.hidden ? "Show the folder" : "Hide the folder (its characters hide, its lights go off)", icon(g.hidden ? "hidden" : "eye"), () => hooks.toggleGroupHidden(g.id), !!g.hidden));
     const rename = () => startRename(row.querySelector<HTMLElement>(".hierLabel")!, g.name, (n) => (n ? hooks.renameGroup(g.id, n) : redraw()));
     row.onclick = () => {
       active = active === g.id ? undefined : g.id;
+      if (g.rig) hooks.selectRig(g.id);
       redraw();
     };
     row.ondblclick = rename;
@@ -503,14 +510,15 @@ export function createHierarchy(host: HTMLElement, hooks: HierarchyHooks) {
     /** Makes a folder (inside the active one) and starts renaming it. */
     newFolder: () => newGroupIn(active),
     /** Shows the things, the folders and the one the properties show. */
-    render(nextNodes: OutlinerNode[], nextGroups: HierarchyGroup[], nextPrimary: Pick | null) {
+    render(nextNodes: OutlinerNode[], nextGroups: HierarchyGroup[], nextPrimary: Pick | null, nextRig?: string) {
       // called for every change of a light or a camera, which can be every frame: nothing to draw when nothing differs
-      const signature = JSON.stringify([nextNodes, nextGroups, nextPrimary]);
+      const signature = JSON.stringify([nextNodes, nextGroups, nextPrimary, nextRig]);
       if (signature === lastSignature && !renaming) return;
       lastSignature = signature;
       nodes = nextNodes;
       groups = nextGroups;
       primary = nextPrimary;
+      selectedRig = nextRig;
       byKey.clear();
       for (const n of nodes) byKey.set(keyOf(n), n);
       redraw();

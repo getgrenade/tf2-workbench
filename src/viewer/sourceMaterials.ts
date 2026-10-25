@@ -45,8 +45,8 @@ export class SourceMaterials {
     Array.from({ length: 6 }, () => makeTexture({ width: 1, height: 1, rgba: new Uint8Array([0, 0, 0, 255]) }, "linear")),
   );
   readonly white = makeTexture({ width: 1, height: 1, rgba: new Uint8Array([255, 255, 255, 255]) }, "srgb");
-  /** What a material without a diffuse texture shows (the compiler's preview before a texture is picked): 50% grey. */
-  readonly grey = makeTexture({ width: 1, height: 1, rgba: new Uint8Array([128, 128, 128, 255]) }, "srgb");
+  /** What a material without a diffuse texture shows (the compiler's preview before a texture is picked): the plain grey, RGB 115 (the GRAY switch's, see uGray in sourceShader.ts). */
+  readonly grey = makeTexture({ width: 1, height: 1, rgba: new Uint8Array([115, 115, 115, 255]) }, "srgb");
   wireframe = false;
   private dynamic: DynamicMaterial[] = [];
   /** Animated detail textures by name, once loaded (null: loading or unavailable). */
@@ -198,7 +198,6 @@ export class SourceMaterials {
     const refract = m?.shader === "refract";
     const translucent = flag("$translucent") || refract;
     const alphaTest = flag("$alphatest");
-    const grayFallback = !base;
     const envCube = m ? this.cubemap(m) : null;
     // The proxies (ItemTintColor -> SelectFirstIfNonZero -> ... -> $color2) decide the tint: an item's paint,
     // else its $colortint_base. The shader gets $color * $color2 in linear space.
@@ -295,7 +294,7 @@ export class SourceMaterials {
         uRimExponent: { value: Math.max(num("$rimlightexponent", 4), 1) },
         uRimBoost: { value: num("$rimlightboost", 1) },
         uRimMask: { value: flag("$rimmask") },
-        uTint: { value: grayFallback ? new THREE.Vector3(0.72, 0.74, 0.77) : new THREE.Vector3(1, 1, 1) },
+        uTint: { value: new THREE.Vector3(1, 1, 1) },
         uAlphaTest: { value: alphaTest ? num("$alphatestreference", 0.7) : 0 },
         uOpacity: { value: refract ? 0.3 : num("$alpha", 1) },
         // With self-illum or blend-tint the base alpha is a mask, not opacity.

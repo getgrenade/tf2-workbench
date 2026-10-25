@@ -1,5 +1,8 @@
 /** The data and the flattening of the outliner tree (no DOM, so it can be tested). */
 
+import { parseStudio } from "./studioLight";
+import type { SceneLightRig } from "./lightRigPanel";
+
 export interface HierarchyGroup {
   id: string;
   name: string;
@@ -7,6 +10,8 @@ export interface HierarchyGroup {
   parent?: string;
   /** Hides every character in the folder, and in the folders inside it (and turns its lights off). */
   hidden?: boolean;
+  /** A three-point light rig: the settings of its controller, which sets the key, fill and rim lights in the folder. */
+  rig?: SceneLightRig;
 }
 
 export type NodeKind = "character" | "light" | "camera";
@@ -131,8 +136,8 @@ export function parseGroups(raw: unknown): HierarchyGroup[] {
   const out: HierarchyGroup[] = [];
   for (const g of raw) {
     if (!g || typeof g.id !== "string" || typeof g.name !== "string" || out.some((x) => x.id === g.id)) continue;
-    out.push({ id: g.id, name: g.name.slice(0, 80), ...(typeof g.parent === "string" ? { parent: g.parent } : {}), ...(g.hidden === true ? { hidden: true } : {}) });
+    out.push({ id: g.id, name: g.name.slice(0, 80), ...(typeof g.parent === "string" ? { parent: g.parent } : {}), ...(g.hidden === true ? { hidden: true } : {}), ...(g.rig && typeof g.rig === "object" ? { rig: { ...parseStudio(g.rig), follow: g.rig.follow !== false } } : {}) });
   }
   // a parent that is not in the list, or a loop, puts the folder at the top level
-  return out.map((g) => (g.parent && (!out.some((p) => p.id === g.parent) || isInside(out, g.parent, g.id)) ? { id: g.id, name: g.name, ...(g.hidden ? { hidden: true } : {}) } : g));
+  return out.map((g) => (g.parent && (!out.some((p) => p.id === g.parent) || isInside(out, g.parent, g.id)) ? { id: g.id, name: g.name, ...(g.hidden ? { hidden: true } : {}), ...(g.rig ? { rig: g.rig } : {}) } : g));
 }

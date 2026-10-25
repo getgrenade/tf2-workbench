@@ -74,3 +74,12 @@ export function conditionParticles(c: Readonly<Conditions>, team: number): Condi
 export function cigaretteEffects(c: Readonly<Conditions>): { item: null; system: string; attachment: string }[] {
   return c.cig ? [{ item: null, system: "cig_smoke", attachment: "cig_smoke" }, { item: null, system: "cig_burn", attachment: "cig_smoke" }] : [];
 }
+
+/**
+ * Whether what a Spy wears covers his head (a mask, a hood, a head of its own: the `whole_head` or `face` equip regions, or an item
+ * that hides his head's model): the promo pictures leave his cigarette's smoke out then, as it would float out of the mask.
+ */
+export function coversSpyHead(worn: readonly { item: { equipRegions: readonly string[]; bodygroups?: Record<string, number>; styles?: readonly { bodygroups?: Record<string, number> }[] }; style?: number }[]): boolean {
+  return worn.some(({ item, style }) =>
+    item.equipRegions.some((r) => r === "whole_head" || r === "face") || !!item.bodygroups?.head || !!item.styles?.[style ?? 0]?.bodygroups?.head);
+}

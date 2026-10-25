@@ -56,7 +56,7 @@ app.innerHTML = `
       <div id="buildPanel" class="buildPanel" hidden></div>
       <div id="classBlock">
       <div id="cls" class="classes" role="group" aria-label="Class"></div></div>
-      <div class="teams"><button id="teamRed" class="team red">RED</button><button id="teamBlu" class="team blu">BLU</button><button id="teamGray" class="team gray" title="Plain 50% grey instead of the character's own colours and shine (on top of the team): for icons in the grey clay style" aria-pressed="false">GRAY</button></div>
+      <div class="teams"><button id="teamRed" class="team red">RED</button><button id="teamBlu" class="team blu">BLU</button><button id="teamGray" class="team gray" title="Plain grey (RGB 115) instead of the character's own colours and shine (on top of the team): for icons in the grey clay style" aria-pressed="false">GRAY</button></div>
       <div class="teams propSkins" id="propSkins" hidden></div>
       <label hidden><input type="checkbox" id="wire" /> Wireframe</label>
       <div id="bodyBlock">

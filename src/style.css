@@ -49,7 +49,7 @@ body { background: var(--bg); color: var(--fg); font: var(--ui-fw-body) var(--ui
 .teams .team.red.on { background: var(--ui-red-bg); border-color: var(--ui-red); color: var(--ui-red-text); }
 .teams .team.blu.on { background: var(--ui-blue-bg); border-color: var(--ui-blue); color: var(--ui-blue-text); }
 /* the grey switch is not a team: it stays beside them, lit apart */
-.teams .team.gray.on { background: color-mix(in srgb, #808080 35%, var(--ui-input)); border-color: #9a9a9a; color: var(--ui-text-hi); }
+.teams .team.gray.on { background: color-mix(in srgb, #737373 35%, var(--ui-input)); border-color: #9a9a9a; color: var(--ui-text-hi); }
 .animCol { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .animCol #seqList { flex: 1; min-height: 0; }
 .animCol:last-child { overflow: auto; }
@@ -1236,71 +1236,86 @@ body.dndActive.dndRefused * { cursor: no-drop !important; }
 .promoItemRow input { flex: 1; min-width: 0; }
 .promoItemBtns { justify-content: flex-start !important; padding-top: 2px !important; }
 .promoItems input { background: var(--bg); color: var(--fg); border: 1px solid var(--line); padding: 4px 8px; border-radius: var(--ui-radius); }
-.promoItems input.bad { border-color: var(--ui-danger, #c0504d); }
+.promoItems input.bad { border-color: var(--ui-red); }
 
-/* the Promo tab: the shared look, the cards, the picked picture */
+/* the Promo tab: the shared look, the cards, the picked picture (its two side panels are the app's panels: headings, rows, sliders) */
 #promoPage { min-height: 0; overflow: hidden; background: var(--bg); }
 .promoBoardRoot { height: 100%; min-height: 0; }
 .promoBoardRoot[hidden] { display: none; }
-.promoBoard { display: grid; grid-template-columns: 250px minmax(0, 1fr) 300px; grid-template-rows: minmax(0, 1fr); height: 100%; }
-.promoSide, .promoInspector { overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 4px; background: var(--panel); }
+.promoBoard { display: grid; grid-template-columns: 260px minmax(0, 1fr) 300px; grid-template-rows: minmax(0, 1fr); height: 100%; }
+.promoSide, .promoInspector { overflow: auto; padding: var(--ui-5); display: flex; flex-direction: column; background: var(--panel); font-size: var(--ui-fs-body); }
 .promoSide { border-right: 1px solid var(--line); }
 .promoInspector { border-left: 1px solid var(--line); }
-.promoSide h3, .promoInspector h3 { margin: 10px 0 2px; font-size: var(--ui-fs-small); color: var(--accent); text-transform: uppercase; letter-spacing: .05em; }
-.promoTitle { margin: 0 0 4px; font-size: var(--ui-fs-body); }
-.promoField { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 8px; align-items: center; color: var(--dim); }
-.promoField input[type=range] { width: 100%; accent-color: var(--accent); }
-.promoField input[type=color] { width: 100%; height: 24px; padding: 0; border: 1px solid var(--line); background: var(--bg); }
-.promoField input[type=text] { min-width: 0; background: var(--bg); color: var(--fg); border: 1px solid var(--line); padding: 3px 6px; border-radius: var(--ui-radius); }
-.promoSide .btns, .promoInspector .btns { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 6px; }
-.promoSideBtns { margin-top: auto; }
-.promoSide .primary { border-color: var(--accent); color: var(--accent); }
+.promoSide h3, .promoInspector h3 { flex: none; display: flex; justify-content: space-between; align-items: center; gap: var(--ui-3); min-height: 26px; margin: 14px 0 var(--ui-2);
+  font-size: var(--ui-fs-head); font-weight: var(--ui-fw-head); color: var(--dim); text-transform: uppercase; letter-spacing: .07em; border-bottom: 1px solid var(--line);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.promoSide h3.first, .promoInspector h3.first { margin-top: 0; }
+.promoSide h3 button, .promoInspector h3 button { flex: none; height: 20px; padding: 0 var(--ui-4); font-size: var(--ui-fs-small); font-weight: var(--ui-fw-body); text-transform: none; letter-spacing: 0; }
+.promoTitle { margin: 0; font-size: var(--ui-fs-title); font-weight: var(--ui-fw-head); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.promoNote { margin: var(--ui-1) 0 0; }
+.promoSide .hint, .promoInspector .hint { margin: var(--ui-3) 0 0; font-size: var(--ui-fs-small); }
+.promoSide .ui-prop > .ui-val.single, .promoInspector .ui-prop > .ui-val.single { justify-items: start; }
+.promoSide select, .promoInspector select, .promoInspector input[type=text], .promoTextArea { width: 100%; min-width: 0; height: var(--ui-h); padding: 0 var(--ui-2); background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: var(--ui-radius); font: inherit; }
+.promoTextArea { height: auto; padding: var(--ui-2) var(--ui-3); resize: vertical; }
+.promoSide input[type=color], .promoInspector input[type=color] { width: 44px; height: var(--ui-h); padding: 0; border: 1px solid var(--line); border-radius: var(--ui-radius); background: var(--bg); cursor: pointer; }
+.promoChecks { display: flex; flex-wrap: wrap; gap: var(--ui-1) var(--ui-6); margin: var(--ui-row-gap) 0 0; }
+.promoChecks label { display: inline-flex; align-items: center; gap: var(--ui-2); min-height: var(--ui-row-height); color: var(--dim); cursor: pointer; }
+.promoChecks label:hover { color: var(--fg); }
+.promoChecks input { margin: 0; }
+.promoSide .btns, .promoInspector .btns { display: flex; flex-wrap: wrap; gap: var(--ui-3); margin-top: var(--ui-4); }
+.promoHeadBtns { display: flex; gap: var(--ui-2); flex: none; }
+.promoSide button.primary, .promoInspector button.primary { border-color: var(--accent); color: var(--accent); }
+.promoSideFoot { margin-top: auto; padding-top: var(--ui-5); }
+.promoSideFoot .btns { display: grid; grid-template-columns: 1fr 1fr; }
+.promoSideFoot .btns .primary { grid-column: 1 / -1; }
+.promoSideFoot .chartInfo:empty { display: none; }
 .promoCenter { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
-.promoThumbs { display: flex; gap: 14px; overflow-x: auto; overflow-y: hidden; padding: 10px 12px 12px; border-bottom: 1px solid var(--line); flex: none; }
-.promoThumbGroup { flex: none; display: flex; flex-direction: column; gap: 4px; }
-.promoThumbGroup + .promoThumbGroup { padding-left: 14px; border-left: 1px solid var(--line); }
-.promoThumbGroupName { padding: 0 4px; font-size: var(--ui-fs-small); font-weight: 650; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 420px; }
-.promoThumbCards { display: flex; gap: 8px; }
-.promoChain { flex: none; font-size: var(--ui-fs-small); cursor: help; }
-.promoThumb { flex: none; height: auto; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 4px; border: 1px solid transparent; border-radius: var(--ui-radius-l); background: none; color: var(--dim); font-size: var(--ui-fs-small); }
-.promoThumb:hover { border-color: var(--line); }
-.promoThumb.on { border-color: var(--accent); background: var(--ui-accent-soft); color: var(--fg); }
-.promoThumb canvas { display: block; border-radius: 2px; box-shadow: 0 2px 8px rgb(0 0 0 / 0.35); }
-.promoStage { min-height: 0; display: flex; align-items: center; justify-content: center; padding: 12px; overflow: hidden; }
-.promoPreview { display: block; box-shadow: 0 4px 22px rgb(0 0 0 / 0.45); cursor: grab; touch-action: none; }
+.promoThumbs { display: flex; gap: var(--ui-6); overflow-x: auto; overflow-y: hidden; padding: var(--ui-4) var(--ui-5) var(--ui-5); border-bottom: 1px solid var(--line); background: var(--panel); flex: none; }
+.promoThumbGroup { flex: none; display: flex; flex-direction: column; gap: var(--ui-2); }
+.promoThumbGroup + .promoThumbGroup { padding-left: var(--ui-6); border-left: 1px solid var(--line); }
+.promoThumbGroupName { padding: 0 var(--ui-2); font-size: var(--ui-fs-head); font-weight: var(--ui-fw-head); color: var(--dim); text-transform: uppercase; letter-spacing: .07em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 420px; }
+.promoThumbCards { display: flex; gap: var(--ui-3); }
+.promoThumb { flex: none; height: auto; display: flex; flex-direction: column; align-items: center; gap: var(--ui-2); padding: var(--ui-2); border: 1px solid transparent; border-radius: var(--ui-radius-l); background: none; color: var(--dim); font-size: var(--ui-fs-small); }
+.promoThumb:hover { border-color: var(--ui-line-strong); background: var(--ui-hover); color: var(--fg); }
+.promoThumb.on { border-color: var(--ui-accent-line); background: var(--ui-accent-soft); color: var(--fg); }
+.promoThumb canvas { display: block; border-radius: var(--ui-radius-s); box-shadow: 0 2px 8px var(--ui-shade-1); }
+.promoStage { min-height: 0; display: flex; align-items: center; justify-content: center; padding: var(--ui-5); overflow: hidden; }
+.promoPreview { display: block; box-shadow: 0 4px 22px var(--ui-shade-2); cursor: grab; touch-action: none; }
 .promoPreview:active { cursor: grabbing; }
-.promoHelp { margin: 0; padding: 4px 12px 8px; text-align: center; font-size: var(--ui-fs-small); }
-.promoChips { display: flex; flex-wrap: wrap; gap: 4px; }
-.promoChips button { padding: 1px 8px; font-size: var(--ui-fs-small); }
-.promoChips button.on { border-color: var(--accent); color: var(--accent); }
-.promoChips button.off { opacity: 0.5; text-decoration: line-through; }
-.promoInspector input[type=text] { min-width: 0; background: var(--bg); color: var(--fg); border: 1px solid var(--line); padding: 3px 6px; border-radius: var(--ui-radius); }
-.promoLayer { border: 1px solid var(--line); border-radius: var(--ui-radius); padding: 6px; display: flex; flex-direction: column; gap: 4px; }
-.promoLayerHead { display: flex; align-items: center; gap: 6px; }
-.promoLayerHead span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.promoField select { min-width: 0; width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--line); padding: 2px 4px; border-radius: var(--ui-radius); }
-
-/* the Promo tab's layer stack */
-.promoStack { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--ui-radius); background: var(--bg); }
-.promoStackRow { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto auto; align-items: center; gap: 6px; padding: 3px 6px; border-bottom: 1px solid var(--line); cursor: pointer; user-select: none; }
-.promoStackRow .promoGrip { grid-column: 4; }
-.promoStackRow:last-child { border-bottom: 0; }
-.promoStackRow.fixed { cursor: default; color: var(--dim); }
-.promoStackRow.on { background: var(--ui-accent-soft); color: var(--accent); }
-.promoStackRow.off .promoStackName { opacity: 0.5; }
-.promoStackRow.dragging { opacity: 0.4; }
-.promoStackRow.dropAbove { box-shadow: inset 0 2px 0 var(--accent); }
-.promoStackRow.dropBelow { box-shadow: inset 0 -2px 0 var(--accent); }
-.promoStackName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.promoEye { height: 18px; width: 20px; padding: 0; border: 0; background: none; color: inherit; font-size: 11px; }
-.promoGrip { cursor: grab; letter-spacing: -2px; }
-.promoCamera { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.promoHelp { margin: 0; padding: var(--ui-2) var(--ui-5) var(--ui-4); text-align: center; font-size: var(--ui-fs-small); }
+.promoChips { margin-top: var(--ui-row-gap); }
+.promoChips .hint { margin: 0; }
+/* the layer list: the rows of the app's lists (the Scene hierarchy, the post effects) */
+.promoStack { display: flex; flex-direction: column; padding: var(--ui-1) 0; border: 1px solid var(--line); border-radius: var(--ui-radius); background: var(--bg); }
+.promoStack .hierRow.fixed, .promoStack .hierRow.border { color: var(--dim); }
+.promoStack .hierRow.fixed { cursor: default; }
+.promoStack .hierRow.fixed:hover { background: none; }
+.promoStack .hierRow.border { cursor: grab; }
+.promoStack .hierRow.dragging { opacity: .4; }
+.promoStack .hierRow.dropAbove { box-shadow: inset 0 2px 0 var(--accent); }
+.promoStack .hierRow.dropBelow { box-shadow: inset 0 -2px 0 var(--accent); }
+.promoStack .promoChain { color: var(--dim); cursor: help; }
+.promoCamera { display: flex; flex-direction: column; align-items: center; gap: var(--ui-1); margin-top: var(--ui-2); }
 .promoCamera canvas { display: block; border: 1px solid var(--line); border-radius: var(--ui-radius); background: repeating-conic-gradient(#3a3a3a 0% 25%, #2e2e2e 0% 50%) 0 0 / 14px 14px; cursor: grab; touch-action: none; }
 .promoCamera canvas:active { cursor: grabbing; }
-/* editing a promo shot in the 3D view */
-.promoEditBar { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); z-index: 30; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 32px); padding: 6px 8px 6px 12px; border-radius: var(--ui-radius-l); background: var(--panel); border: 1px solid var(--accent); box-shadow: 0 6px 20px var(--ui-shade-3); }
+.promoCamera .hint { text-align: center; }
+/* a thumbnail's studio light: the pivot ball, and the three lights' colours in a row */
+.promoStudio { display: flex; flex-direction: column; align-items: center; gap: var(--ui-1); margin-top: var(--ui-3); }
+.promoStudio .hint { text-align: center; }
+.studioSphere { display: block; width: 168px; height: 168px; cursor: grab; touch-action: none; border-radius: 50%; }
+.studioSphere:active { cursor: grabbing; }
+.studioSphere:focus-visible { outline: 1px solid var(--ui-accent-line); outline-offset: 2px; }
+.promoSwatches { display: flex; gap: var(--ui-2); }
+/* a three-point light rig of the scene: its controller in the properties (lightRigPanel.ts) */
+.lightRigPanel h3:first-child { margin-top: 0; }
+.lightRigBall { display: flex; flex-direction: column; align-items: center; gap: var(--ui-1); margin: var(--ui-3) 0 var(--ui-2); }
+.lightRigBall .hint { margin: 0; text-align: center; }
+.lightRigPanel label.inline-check { margin-top: var(--ui-4); }
+/* editing a promo shot in the 3D view: a bar over the view, in the look of the view's floating bars */
+.promoEditBar { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); z-index: 30; display: flex; align-items: center; gap: var(--ui-4); max-width: calc(100% - 32px); padding: var(--ui-3) var(--ui-4) var(--ui-3) var(--ui-5); border-radius: var(--ui-radius-l); background: var(--ui-float); border: 1px solid var(--ui-accent-line); box-shadow: 0 6px 20px var(--ui-shade-3); font-size: var(--ui-fs-body); }
 .promoEditBar span { flex: 1; min-width: 0; }
 .promoEditBar .primary { border-color: var(--accent); color: var(--accent); }
+.promoEditNote.warn { color: var(--ui-warn); }
 /* the Styles panel of a workshop item (the right-click menu of the item) */
 .stylesPop { position: fixed; z-index: 60; width: 320px; max-height: calc(100vh - 40px); display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--ui-line-strong); border-radius: var(--ui-radius-l); box-shadow: 0 10px 28px var(--ui-shade-3); font-size: var(--ui-fs-body); }
 .stylesPop .chartHead { padding: 5px 6px 5px 10px; }
@@ -1326,9 +1341,6 @@ body.dndActive.dndRefused * { cursor: no-drop !important; }
 #itemList.picking .tile { cursor: default; }
 #itemList.picking .tile.pickable { cursor: copy; border-color: var(--ui-accent-line); }
 #itemList.picking .tile.unpickable { opacity: .35; }
-.promoTextArea { width: 100%; min-width: 0; resize: vertical; background: var(--bg); color: var(--fg); border: 1px solid var(--line); padding: 3px 6px; border-radius: var(--ui-radius); font: inherit; }
-.promoStackRow.border { color: var(--dim); font-style: italic; }
-.promoEditNote.warn { color: #ffb45a; }
 
 /* the background picker: a category menu, and thumbnails (backdropPicker.ts) */
 .bdPicker { display: flex; flex-direction: column; gap: 8px; }

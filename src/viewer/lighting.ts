@@ -20,6 +20,8 @@ export interface RigLight {
   followCamera?: boolean;
   /** The outliner folder the light is in. */
   group?: string;
+  /** Its part in a three-point rig (the folder it is in is the rig, see SceneLightRig): set by the rig's controller. */
+  rigRole?: "key" | "fill" | "rim";
   position: [
     number,
     number,
@@ -119,6 +121,7 @@ export function parseLightingRig(value: unknown, primary?: Parameters<typeof def
       parsed.height = number(value.height, fallback.height ?? DEFAULT_AREA_SIZE.height, 1, 2000);
     }
     if (typeof value.group === "string" && value.group) parsed.group = value.group.slice(0, 64);
+    if (value.rigRole === "key" || value.rigRole === "fill" || value.rigRole === "rim") parsed.rigRole = value.rigRole;
     if (typeof value.shadowStrength === "number" && value.shadowStrength < 1) parsed.shadowStrength = number(value.shadowStrength, 1, 0, 1);
     if (typeof value.shadowSoftness === "number" && value.shadowSoftness !== 1) parsed.shadowSoftness = number(value.shadowSoftness, 1, 0, 4);
     if (typeof value.curve === "number" && value.curve !== 1) parsed.curve = number(value.curve, 1, .25, 4);

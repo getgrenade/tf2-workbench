@@ -31,7 +31,7 @@ export interface MaterialEffects {
   glow?: Rgb;
   burn?: number;
   invuln?: number;
-  /** Plain 50% grey instead of the material's own look (no specular, no environment, no glow): for icons made in the grey clay style. */
+  /** Plain grey (RGB 115) instead of the material's own look (no specular, no environment, no glow): for icons made in the grey clay style. */
   gray?: boolean;
 }
 

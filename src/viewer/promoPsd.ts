@@ -5,7 +5,7 @@
  * pixels (a type layer by its transform). The merged picture in the file is the one the board draws.
  */
 import { writePsd, type Layer } from "ag-psd";
-import { layerPivot, layerRect, paintBackdrop, paintStroke, renderPicture, renderText, turnPoint, type BoardLook, type PromoLayer, type PromoPicture, type TextSpec } from "./promo";
+import { cutCorners, layerPivot, layerRect, paintBackdrop, paintStroke, renderPicture, renderText, turnPoint, type BoardLook, type PromoLayer, type PromoPicture, type TextSpec } from "./promo";
 
 /** The PostScript names of the text fonts, as Photoshop knows them (a font it lacks is swapped when the text is edited, not before). */
 const PSD_FONT: Record<string, string> = {
@@ -91,7 +91,8 @@ async function typeLayer(l: PromoLayer, t: TextSpec): Promise<Layer> {
 export async function picturePsd(p: PromoPicture, look: BoardLook): Promise<Uint8Array> {
   const backdrop = p.backdrop ?? look.backdrop;
   const glow = look.glow?.on ? look.glow : null;
-  const children: Layer[] = [{ name: p.backdrop ? "Backdrop (its own)" : "Backdrop", canvas: full(p, (ctx) => paintBackdrop(ctx, p.w, p.h, backdrop)), left: 0, top: 0 }];
+  // (round corners that are cut: the backdrop is cut round them; what is over it is left whole, to be masked in Photoshop as wanted)
+  const children: Layer[] = [{ name: p.backdrop ? "Backdrop (its own)" : "Backdrop", canvas: full(p, (ctx) => { paintBackdrop(ctx, p.w, p.h, backdrop); cutCorners(ctx, p.w, p.h, look.stroke); }), left: 0, top: 0 }];
   const border = (): Layer => ({ name: "Border", hidden: !look.stroke.on, canvas: full(p, (ctx) => paintStroke(ctx, p.w, p.h, { ...look.stroke, on: true }, backdrop)), left: 0, top: 0 });
   const strokeAt = Math.min(p.strokeAt ?? p.layers.length, p.layers.length);
   for (const [i, l] of p.layers.entries()) {

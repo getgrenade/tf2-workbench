@@ -789,7 +789,7 @@ export class Actor {
     return this.conditions.uber && !this.uberData[this.skin === 1 ? 1 : 0];
   }
 
-  /** The character's own body (and eyes) in plain 50% grey, on top of the team: icons in the grey clay style. What it wears and holds keeps its look. */
+  /** The character's own body (and eyes) in plain grey (RGB 115), on top of the team: icons in the grey clay style. What it wears and holds keeps its look. */
   gray = false;
   setGray(on: boolean) {
     if (this.gray === on) return;
@@ -1098,6 +1098,29 @@ export class Actor {
     const b = new THREE.Vector3().setFromMatrixPosition(this.rig.boneWorld[head]).applyMatrix4(root);
     const d = b.sub(a);
     return d.lengthSq() > 1e-9 ? d.normalize().y : null;
+  }
+
+  /**
+   * Which way the face looks in the world as the character is posed now (a unit vector: the eyes' attachment's forward, its X axis, the way
+   * the eyes look when they look ahead); null without the attachment.
+   */
+  faceDirection(): THREE.Vector3 | null {
+    const att = this.classData?.eyeAttachment;
+    if (!att || !this.rig || !this.modelGroup || !this.rig.boneWorld[att.bone]) return null;
+    const l = att.local;
+    _eyeLocal.set(l[0], l[1], l[2], l[3], l[4], l[5], l[6], l[7], l[8], l[9], l[10], l[11], 0, 0, 0, 1);
+    _eyeAtt.multiplyMatrices(this.rig.boneWorld[att.bone], _eyeLocal);
+    this.modelGroup.updateMatrixWorld(true);
+    return new THREE.Vector3(1, 0, 0).transformDirection(_eyeAtt).transformDirection(this.modelGroup.matrixWorld);
+  }
+
+  /** Where a bone of the character is in the world as it is posed now (by name, any case); null without it. */
+  boneWorldPoint(name: string): THREE.Vector3 | null {
+    if (!this.rig || !this.modelGroup) return null;
+    const i = this.boneNames.findIndex((n) => n.toLowerCase() === name.toLowerCase());
+    if (i < 0 || !this.rig.boneWorld[i]) return null;
+    this.modelGroup.updateMatrixWorld(true);
+    return new THREE.Vector3().setFromMatrixPosition(this.rig.boneWorld[i]).applyMatrix4(this.modelGroup.matrixWorld);
   }
 
   /**

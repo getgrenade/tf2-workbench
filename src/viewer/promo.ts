@@ -7,6 +7,7 @@
 import { ensureOverlayFont, overlayFontFamily } from "./overlayFonts";
 import { sampleStops, sortedStops, unitGradientLine, type GradientStop } from "./gradientStops";
 import type { ItemInfo } from "./payload";
+import type { StudioLight } from "./studioLight";
 
 /** A backdrop: a linear gradient between two colours at an angle, a soft light behind the middle and darker corners. */
 export interface Backdrop {
@@ -80,9 +81,32 @@ export interface Stroke {
   lighten: number;
   color: string;
   opacity: number;
+  /** How round its corners are: their radius, in pixels of a 1080 high picture (0: square). */
+  radius: number;
+  /** With round corners: the picture is cut round them too (transparent outside the border's outer edge), not square behind them. */
+  cut: boolean;
 }
 
-export const DEFAULT_STROKE: Stroke = { on: true, width: 10, inset: 0, mode: "backdrop", lighten: 0.6, color: "#ffffff", opacity: 1 };
+export const DEFAULT_STROKE: Stroke = { on: true, width: 10, inset: 0, mode: "backdrop", lighten: 0.6, color: "#ffffff", opacity: 1, radius: 0, cut: true };
+
+/** The outline of the border's outer edge (its corners as round as it has them), in a picture of w × h; `grow` moves it in (positive) or out. */
+function borderPath(ctx: CanvasRenderingContext2D, w: number, h: number, s: Stroke, grow = 0) {
+  const k = h / 1080, inset = s.inset * k + grow;
+  const bw = Math.max(0, w - 2 * inset), bh = Math.max(0, h - 2 * inset);
+  ctx.beginPath();
+  ctx.roundRect(inset, inset, bw, bh, Math.max(0, Math.min(s.radius * k - grow, bw / 2, bh / 2)));
+}
+
+/** Cuts a picture round its border's corners (transparent outside its outer edge), when they are round and cut (see `Stroke.cut`). */
+export function cutCorners(ctx: CanvasRenderingContext2D, w: number, h: number, s: Stroke) {
+  if (!s.cut || s.radius <= 0) return;
+  ctx.save();
+  ctx.globalCompositeOperation = "destination-in";
+  borderPath(ctx, w, h, s);
+  ctx.fillStyle = "#000";
+  ctx.fill();
+  ctx.restore();
+}
 
 /** A "#rrggbb" mixed toward white by `t` (0..1), as "#rrggbb". */
 export function lighter(color: string, t: number): string {
@@ -154,6 +178,22 @@ export interface ShotSpec extends ShotAim {
   place?: { x: number; y: number; z: number; yaw: number };
   /** The 3D view's effects in the shot (the board's, kept on each shot so that it is taken again with them). */
   effects?: ShotEffects;
+  /**
+   * A thumbnail on the character: the whole character is in the picture, framed on this worn item (and, for one worn on the head, the
+   * head), in a pose that shows it. Absent: the shot frames the character (or the item alone, with `regions`).
+   */
+  focus?: number;
+  /**
+   * With `focus`: where on the body the item is worn, and framed with it (a hat on its own would cut the face off, a collar on its own
+   * would fill the picture): the head, the body from the hips to the neck, or the legs from the knees down.
+   */
+  focusZone?: "head" | "body" | "legs";
+  /** A thumbnail's body parts for its Item alone framing (kept while it is on the character, so that it can go back to it). */
+  aloneRegions?: string[];
+  /** A thumbnail's studio light (three-point lighting and ambient occlusion) in place of the scene's light, when it is on. */
+  studio?: StudioLight;
+  /** A thumbnail's studio light is its own; absent, it is the board's, the same as every other thumbnail's (a copy of it, kept in step). */
+  studioOwn?: boolean;
   /** What the pose is taken from: a taunt ("t<id>") or an animation ("s<name>"), and where in it (0..1). */
   poseOf?: { id: string; at: number; /** the pose parameters a random animation was rolled with (by lower case name, real values) */ params?: Record<string, number> };
   /** The flex controllers of the face it makes (a random one, or the scene's of a taunt), by lower case name. */
@@ -374,6 +414,8 @@ export interface BoardLook {
   glow?: Glow;
   /** The 3D view's effects in every shot. */
   effects?: ShotEffects;
+  /** The studio light every thumbnail has (each but one unlinked from it: see `ShotSpec.studioOwn`). */
+  studio?: StudioLight;
 }
 
 /** The 3D view's effects in a shot: the character's ground shadow, and the view's look (its post-processing). */
@@ -557,7 +599,7 @@ function gradientEnds(w: number, h: number, angle: number): [number, number, num
 export function paintStroke(ctx: CanvasRenderingContext2D, w: number, h: number, s: Stroke, backdrop?: Backdrop) {
   if (!s.on || s.width <= 0) return;
   const k = h / 1080;
-  const line = s.width * k, inset = s.inset * k;
+  const line = s.width * k;
   ctx.save();
   ctx.globalAlpha = s.opacity;
   if (s.mode === "backdrop" && backdrop) {
@@ -567,7 +609,9 @@ export function paintStroke(ctx: CanvasRenderingContext2D, w: number, h: number,
     ctx.strokeStyle = g;
   } else ctx.strokeStyle = s.color;
   ctx.lineWidth = line;
-  ctx.strokeRect(inset + line / 2, inset + line / 2, w - 2 * inset - line, h - 2 * inset - line);
+  // (the line's middle, half its width in from the outer edge, its corners as much less round)
+  borderPath(ctx, w, h, s, line / 2);
+  ctx.stroke();
   ctx.restore();
 }
 
@@ -603,7 +647,8 @@ export function measureContent(l: PromoLayer) {
       }
     }
   }
-  l.content = x1 < 0 || !l.centre ? undefined : { x: (x0 + x1) / 2 - w / 2, y: (y0 + y1) / 2 - h / 2 };
+  // (a shot framed on the character, a thumbnail's, fills its slot as its camera framed it: what is seen of it is not moved to the middle)
+  l.content = x1 < 0 || !l.centre || l.shot?.focus !== undefined ? undefined : { x: (x0 + x1) / 2 - w / 2, y: (y0 + y1) / 2 - h / 2 };
   l.opaque = x1 < 0 ? undefined : { x0, y0, x1: x1 + step, y1: y1 + step };
 }
 
@@ -704,6 +749,7 @@ export function renderPicture(canvas: HTMLCanvasElement, p: PromoPicture, look: 
     ctx.restore();
   });
   if (strokeAt >= p.layers.length) paintStroke(ctx, p.w, p.h, look.stroke, backdrop);
+  cutCorners(ctx, p.w, p.h, look.stroke);
 }
 
 /** A picture as a PNG at full size. */

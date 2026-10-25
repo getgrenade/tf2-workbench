@@ -50,7 +50,7 @@ export interface SceneEntity {
   lod?: number;
   /** Player conditions switched on (Ubercharge, Jarate, ...); see conditions.ts. */
   conditions?: Conditions;
-  /** Drawn in plain 50% grey (the GRAY switch of the properties). */
+  /** Drawn in plain grey (RGB 115; the GRAY switch of the properties). */
   gray?: boolean;
   /** Authored visibility group ids; scenes without bodyMaskVersion use the older anatomical regions. */
   bodyShown?: string[];

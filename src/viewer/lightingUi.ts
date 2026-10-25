@@ -233,5 +233,7 @@ export function createLightingUi(pane: HTMLElement, host: LightingHost) {
     },
     /** Adds a light of a type (the new light is the selected one afterwards). */
     add: (type: RigLight["type"], duplicate = false) => addLight(type, duplicate),
+    /** Changes the lights by hand (a three-point rig's controller sets its lights through this). */
+    update: (fn: (rig: ReturnType<typeof getRig>) => void) => commit(v => fn(v.rig!)),
   };
 }

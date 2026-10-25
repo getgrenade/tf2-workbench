@@ -334,3 +334,17 @@ test("a LOD that came without a skin is built with the bones of LOD 0 (else stud
   assert.deepEqual(nodes(lods[0].smd), ["bip_head", "prop_bone"]);
   assert.deepEqual(nodes(lods[1].smd), ["bip_head", "prop_bone"], "LOD 1 follows the same bones as LOD 0, where they are");
 });
+
+test("a material with no diffuse texture is a warning, not an error, and its material file still names the texture that is made for it", async () => {
+  const s = new CompilerSession(io({ "C:/art/hat.smd": gridSmd(6) }));
+  s.data.smartFill = false;
+  await s.setLod("sniper", 0, "C:/art/hat.smd");
+  s.data.name = "test_hat";
+  const mat = s.materialNames()[0];
+  const issue = s.issues().find((i) => i.key === `material:${mat}`);
+  assert.equal(issue?.level, "warning");
+  assert.match(issue!.text, /plain grey/);
+  // (what goes to the builder has no colour file: it makes the grey one)
+  assert.equal(s.texturePaths("sniper", mat, 0).color, undefined);
+  assert.match(s.vmtText("sniper", mat, 0), /_color/);
+});
