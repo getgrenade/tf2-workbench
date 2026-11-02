@@ -348,3 +348,32 @@ test("a material with no diffuse texture is a warning, not an error, and its mat
   assert.equal(s.texturePaths("sniper", mat, 0).color, undefined);
   assert.match(s.vmtText("sniper", mat, 0), /_color/);
 });
+
+test("a texture too big for the importer is a warning; the build is made from a resized_ copy, and the item keeps the original", async () => {
+  const { encodeTga, decodeTga } = await import("../src/compiler/tga.ts");
+  const { makeBuildRequest } = await import("../src/compiler/request.ts");
+  const big = encodeTga(new Uint8Array(1024 * 1024 * 4).fill(200), 1024, 1024, false);
+  const files: Record<string, ArrayBuffer> = { "C:/art/jacket_normal.tga": big.buffer as ArrayBuffer };
+  const s = new CompilerSession(io(files));
+  s.data.smartFill = false;
+  (s as unknown as { materialNames: () => string[] }).materialNames = () => ["jacket", "collar"];
+  s.data.materials.jacket = { ...blankMaterial(), normal: "C:/art/jacket_normal.tga" };
+  s.data.materials.collar = { ...blankMaterial(), normal: "C:/art/jacket_normal.tga" };
+  await s.loadAll();
+  const issue = s.issues().find((i) => i.key === "material:jacket:normal")!;
+  assert.equal(issue.level, "warning", "it does not stop the build");
+  assert.match(issue.text, /1024x1024; the limit is 512x512: a 512x512 copy of it, resized_jacket_normal.tga, is made beside it when you build/);
+  const written: Record<string, Uint8Array> = {};
+  const swap = await s.writeResized(async (path, bytes) => { written[path] = bytes; files[path] = bytes.buffer as ArrayBuffer; });
+  assert.deepEqual([...swap], [["C:/art/jacket_normal.tga", "C:/art/resized_jacket_normal.tga"]]);
+  assert.deepEqual([decodeTga(written["C:/art/resized_jacket_normal.tga"]).width, decodeTga(written["C:/art/resized_jacket_normal.tga"]).height], [512, 512]);
+  // the item still names the original (saved again, it shows at once)
+  assert.equal(s.data.materials.jacket.normal, "C:/art/jacket_normal.tga");
+  // opened again from the importer's session file, which names the copy: the original, beside it, is named again
+  s.data.materials.jacket.normal = "C:/art/resized_jacket_normal.tga";
+  s.data.materials.collar.normal = "C:/art/resized_lonely.tga";
+  await s.preferOriginals();
+  assert.equal(s.data.materials.jacket.normal, "C:/art/jacket_normal.tga");
+  assert.equal(s.data.materials.collar.normal, "C:/art/resized_lonely.tga", "no original beside it: the copy stays");
+  void makeBuildRequest;
+});

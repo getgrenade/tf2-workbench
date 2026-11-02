@@ -7,7 +7,7 @@ import { writeFbx } from "./fbxWrite";
 import { meshFrame, stripArmatures, turnBones } from "./fbxStrip";
 import { isIdentityTurn, turnMatrix } from "./boneAxes";
 import { importModel } from "./importModel";
-import { decodeTga, iconProblem, textureProblem, type TextureKind, type TgaImage } from "./tga";
+import { decodeTga, encodeTga, fittedSize, iconProblem, resizeImage, textureProblem, type TextureKind, type TgaImage } from "./tga";
 import { buildPreviewMaterial, buildPreviewModel, type PreviewBone, type PreviewTextures } from "./preview";
 import { smdBoneNames } from "./smd";
 import { buildVmt, DEFAULT_MATERIAL, vmtText, type MaterialSettings, type MaterialTexturePaths } from "./vmt";
@@ -364,6 +364,62 @@ export class CompilerSession {
     return jobs.map((j) => j.to);
   }
 
+  // --- textures too big for the importer -----------------------------------------------------------------------------
+
+  /** The textures of the item that are bigger than the importer takes (or not a power of two): each file once, with what it is for. */
+  oversizedTextures(): { path: string; kind: TextureKind }[] {
+    const out: { path: string; kind: TextureKind }[] = [];
+    for (const name of this.materialNames()) {
+      const m = this.data.materials[name];
+      if (!m) continue;
+      for (const [role, kind] of [["color", "color"], ["blueColor", "color"], ["normal", "normal"], ["phongexponent", "phongexponent"], ["illum", "illum"]] as const) {
+        const path = m[role], image = path ? this.image(path) : null;
+        if (image && fittedSize(image, kind) && !out.some((o) => o.path === path)) out.push({ path, kind });
+      }
+    }
+    return out;
+  }
+
+  /** The copy a texture that is too big is built from: `resized_<name>.tga` beside it. */
+  static resizedPath(path: string): string {
+    const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+    const file = path.slice(slash + 1).replace(/\.[^.]*$/, "");
+    return `${path.slice(0, slash + 1)}${/^resized_/i.test(file) ? file : `resized_${file}`}.tga`;
+  }
+
+  /**
+   * Writes a copy that fits of each texture that is too big (see oversizedTextures), beside it as `resized_<name>.tga`, made again from the
+   * texture as it is now: what the item is built from (the build request names the copies, and so does the importer's session file it
+   * writes). The item keeps naming the originals, so a texture saved again shows at once. Returns each original with its copy.
+   */
+  async writeResized(write: (path: string, bytes: Uint8Array) => Promise<void>): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    for (const { path, kind } of this.oversizedTextures()) {
+      const image = this.image(path)!, size = fittedSize(image, kind)!;
+      const resized = resizeImage(image, size.width, size.height, kind === "normal");
+      const to = CompilerSession.resizedPath(path);
+      await write(to, encodeTga(resized.rgba, resized.width, resized.height, image.hasAlpha));
+      out.set(path, to);
+    }
+    return out;
+  }
+
+  /**
+   * An item opened from the importer's session file names the resized copies it was built from: each that has its original beside it
+   * (`resized_jacket.tga` and `jacket.tga`) names the original again, the one the artist works on.
+   */
+  async preferOriginals() {
+    for (const m of Object.values(this.data.materials)) {
+      for (const role of ["color", "blueColor", "normal", "phongexponent", "illum"] as const) {
+        const path = m[role];
+        const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+        if (!/^resized_/i.test(path.slice(slash + 1))) continue;
+        const original = path.slice(0, slash + 1) + path.slice(slash + 1).replace(/^resized_/i, "");
+        if ((await this.io.stamp(original).catch(() => null)) !== null) m[role] = original;
+      }
+    }
+  }
+
   // --- the armature node of an FBX ------------------------------------------------------------------------------------
 
   /** The model files of the item that have an armature node (an extra bone for the importer), with the names of the nodes. */
@@ -685,12 +741,16 @@ export class CompilerSession {
         const image = m && m[kind] ? this.image(m[kind]) : null;
         if (!image) continue;
         const problem = textureProblem(image, kind as TextureKind);
-        if (problem) error(`material:${name}:${kind}`, `The ${label} texture of ${name} ${problem}.`);
+        const fit = fittedSize(image, kind as TextureKind);
+        if (fit) warn(`material:${name}:${kind}`, `The ${label} texture of ${name} ${problem}: a ${fit.width}x${fit.height} copy of it, ${fileName(CompilerSession.resizedPath(m[kind]))}, is made beside it when you build.`);
+        else if (problem) error(`material:${name}:${kind}`, `The ${label} texture of ${name} ${problem}.`);
       }
       if (this.data.teamColors && m?.blueColor) {
         const image = this.image(m.blueColor);
         const problem = image ? textureProblem(image, "color" as TextureKind) : null;
-        if (problem) error(`material:${name}:blueColor`, `The BLU diffuse texture of ${name} ${problem}.`);
+        const fit = image ? fittedSize(image, "color") : null;
+        if (fit) warn(`material:${name}:blueColor`, `The BLU diffuse texture of ${name} ${problem}: a ${fit.width}x${fit.height} copy of it, ${fileName(CompilerSession.resizedPath(m.blueColor))}, is made beside it when you build.`);
+        else if (problem) error(`material:${name}:blueColor`, `The BLU diffuse texture of ${name} ${problem}.`);
       }
       if (m?.settings.selfIllum && !m.illum) warn(`material:${name}`, `${name} glows but has no self-illumination mask; it glows everywhere.`);
       proxyProblems(m?.settings.customProxies ?? [], !!m?.settings.selfIllum).forEach((p, i) => warn(`material:${name}:proxy${i}`, `${name}: ${p}.`));

@@ -136,6 +136,12 @@ export interface ShotAim {
   particles?: { seed: number; time: number };
 }
 
+/** The field of view of a promo shot or chart unless it says otherwise (`ShotSpec.fov`): degrees, vertical. */
+export const PROMO_FOV = 30;
+
+/** How far apart the characters of a line-up stand, middle to middle, unless it says otherwise (`ShotSpec.spacing`). */
+export const LINEUP_SPACING = 37;
+
 /** The direction a shot is taken from, for its aim. */
 export function aimDirection(a: { yaw: number; pitch: number }): [number, number, number] {
   const y = (a.yaw * Math.PI) / 180, p = (a.pitch * Math.PI) / 180;
@@ -172,6 +178,8 @@ export interface ShotSpec extends ShotAim {
   group?: ShotSpec[];
   /** The camera's lens (vertical field of view, degrees); absent: the promo's 30. */
   fov?: number;
+  /** A composition: how far apart its characters stand, middle to middle (absent: LINEUP_SPACING). */
+  spacing?: number;
   /** In a group: how far the character is turned from facing the camera, in degrees. */
   turn?: number;
   /** In a group: where the character stands (viewer space; yaw in radians) when it was placed by hand in 3D; absent: the row sets it. */
@@ -190,12 +198,20 @@ export interface ShotSpec extends ShotAim {
   focusZone?: "head" | "body" | "legs";
   /** A thumbnail's body parts for its Item alone framing (kept while it is on the character, so that it can go back to it). */
   aloneRegions?: string[];
+  /**
+   * The point of its picture its shadows fan out from or converge to, in its image (shares of its width and height, from its top left;
+   * the board sets it as the shot is taken): one point for the whole picture, so that every shot of it, whatever its camera, fans out or
+   * converges toward the same place on it, as the characters of one scene do.
+   */
+  spreadPoint?: [number, number];
   /** A thumbnail's studio light (three-point lighting and ambient occlusion) in place of the scene's light, when it is on. */
   studio?: StudioLight;
   /** A thumbnail's studio light is its own; absent, it is the board's, the same as every other thumbnail's (a copy of it, kept in step). */
   studioOwn?: boolean;
   /** What the pose is taken from: a taunt ("t<id>") or an animation ("s<name>"), and where in it (0..1). */
   poseOf?: { id: string; at: number; /** the pose parameters a random animation was rolled with (by lower case name, real values) */ params?: Record<string, number> };
+  /** The eyes look into the camera (set in 3D, the Flex panel's Eyes follow camera); absent: they do. */
+  eyesFollow?: boolean;
   /** The flex controllers of the face it makes (a random one, or the scene's of a taunt), by lower case name. */
   flex?: Record<string, number>;
   /** The class's bodygroups set by hand in this shot (name -> model; 1 hides a part that has two), over what the cosmetics set. */
@@ -420,11 +436,34 @@ export interface BoardLook {
 
 /** The 3D view's effects in a shot: the character's ground shadow, and the view's look (its post-processing). */
 export interface ShotEffects {
-  shadow: { on: boolean; azimuth: number; length: number; blur: number; opacity: number };
+  /** The ground shadow (see ShadowParams): spread fans the shadows out or makes them converge, taper lightens them with height. */
+  shadow: { on: boolean; azimuth: number; length: number; blur: number; opacity: number; spread?: number; taper?: number; /** the board's tint of them ("#rrggbb"; absent: black) */ color?: string; /** how the board lays them on the backdrop (see SHADOW_BLENDS; absent: normal) */ blend?: ShadowBlend };
   look: boolean;
 }
 
-export const DEFAULT_SHOT_EFFECTS: ShotEffects = { shadow: { on: false, azimuth: 32, length: 0.6, blur: 0.5, opacity: 0.6 }, look: false };
+/** How the shadows are laid on the backdrop: as a canvas composite operation, with its name for the panel. */
+export const SHADOW_BLENDS = [
+  ["source-over", "Normal"],
+  ["multiply", "Multiply"],
+  ["color-burn", "Colour burn"],
+  ["darken", "Darken"],
+  ["soft-light", "Soft light"],
+  ["overlay", "Overlay"],
+] as const;
+export type ShadowBlend = (typeof SHADOW_BLENDS)[number][0];
+
+export const DEFAULT_SHOT_EFFECTS: ShotEffects = { shadow: { on: true, azimuth: 0, length: 1, blur: 0.2, opacity: 0.5, spread: -1, taper: 1, color: "#000000" }, look: false };
+
+/**
+ * The effects a shot is taken with, from the board's: its shadow at full strength, the board drawing it at its opacity (so that the
+ * opacity changes nothing in the 3D view, and is not a reason to take a shot again); with the view's look, the shadow is in the shot's
+ * own pixels, at its opacity.
+ */
+export const shotEffectsOf = (fx: ShotEffects): ShotEffects => {
+  // (the colour is the board's too: not part of how a shot is taken)
+  const { color: _color, blend: _blend, ...shadow } = fx.shadow;
+  return { ...fx, shadow: { ...shadow, opacity: fx.look ? fx.shadow.opacity : 1 } };
+};
 
 /**
  * A shot's pixels without its effects (no shadow, no glow of the look), when it has any: what is the character, for its bounds and for
@@ -695,9 +734,11 @@ export function renderPicture(canvas: HTMLCanvasElement, p: PromoPicture, look: 
   // the shadows of the shots on the ground, together: the darkest of them where they overlap, under every character
   const shadowed = p.layers.filter((l) => !l.hidden && shadowOf.has(l.image));
   if (shadowed.length) {
+    // (worked out at half the size it is drawn at on the board, a shadow being soft; at full size for an export)
+    const half = scale < 1 ? 0.5 : 1;
     const acc = document.createElement("canvas");
-    acc.width = canvas.width;
-    acc.height = canvas.height;
+    acc.width = Math.max(1, Math.round(canvas.width * half));
+    acc.height = Math.max(1, Math.round(canvas.height * half));
     const actx = acc.getContext("2d", { willReadFrequently: true })!;
     actx.fillStyle = "#fff";
     actx.fillRect(0, 0, acc.width, acc.height);
@@ -711,7 +752,7 @@ export function renderPicture(canvas: HTMLCanvasElement, p: PromoPicture, look: 
       octx.setTransform(1, 0, 0, 1, 0, 0);
       octx.fillStyle = "#fff";
       octx.fillRect(0, 0, one.width, one.height);
-      octx.setTransform(scale, 0, 0, scale, 0, 0);
+      octx.setTransform(scale * half, 0, 0, scale * half, 0, 0);
       octx.imageSmoothingQuality = "high";
       octx.save();
       turn(octx, l);
@@ -720,17 +761,22 @@ export function renderPicture(canvas: HTMLCanvasElement, p: PromoPicture, look: 
       octx.restore();
       actx.drawImage(one, 0, 0);
     }
-    // white is no shadow, black the full one: the grey becomes the alpha of a black layer over the backdrop
+    // white is no shadow, black the full one: the grey becomes the alpha of a layer of the shadows' colour over the backdrop
+    const tint = parseInt((look.effects?.shadow.color ?? "#000000").slice(1), 16) || 0;
+    const [tr, tg, tb] = [(tint >> 16) & 255, (tint >> 8) & 255, tint & 255];
     const px = actx.getImageData(0, 0, acc.width, acc.height);
     for (let i = 0; i < px.data.length; i += 4) {
       px.data[i + 3] = 255 - px.data[i];
-      px.data[i] = px.data[i + 1] = px.data[i + 2] = 0;
+      px.data[i] = tr; px.data[i + 1] = tg; px.data[i + 2] = tb;
     }
     actx.globalCompositeOperation = "source-over";
     actx.putImageData(px, 0, 0);
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.drawImage(acc, 0, 0);
+    // (the board's opacity of the shadows: each shot's is taken at full strength)
+    ctx.globalAlpha = look.effects?.look ? 1 : look.effects?.shadow.opacity ?? 1;
+    ctx.globalCompositeOperation = look.effects?.look ? "source-over" : look.effects?.shadow.blend ?? "source-over";
+    ctx.drawImage(acc, 0, 0, canvas.width, canvas.height);
     ctx.restore();
   }
   p.layers.forEach((l, i) => {

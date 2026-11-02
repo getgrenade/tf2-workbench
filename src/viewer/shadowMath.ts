@@ -13,6 +13,18 @@ export interface ShadowParams {
   blur: number;
   /** Strength of the shadow, 0..1. */
   opacity: number;
+  /**
+   * -1..1: 0 every point's shadow falls the same way (a far light); above, they fan out from a light near the scene's middle; below, they
+   * converge toward a point beyond it (a promo line-up's shadows meeting). Absent: 0.
+   */
+  spread?: number;
+  /**
+   * The point on the floor (x, z) the shadows fan out from (spread above 0) or converge to (below 0) itself; absent: one 500 units back
+   * from the middle of the scene, nearer as the spread is stronger.
+   */
+  spreadPoint?: [number, number];
+  /** 0..1: how much lighter the shadow is the farther along the floor from where its character stands (dark at the feet). Absent: 0. */
+  taper?: number;
 }
 
 export const DEFAULT_SHADOW: ShadowParams = { enabled: true, azimuth: 32, length: 0.8, blur: 0.5, opacity: 0.8 };

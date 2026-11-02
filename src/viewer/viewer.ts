@@ -632,6 +632,8 @@ export class Viewer {
   private fogOn = false;
   /** Ambient occlusion over the finished picture (post effect), measured from the depth of the scene. */
   private ao: AoState = { ...DEFAULT_AO };
+  /** The last picture's compositing material, kept until the next is taken (see capture). */
+  private lastCaptureMaterial: THREE.ShaderMaterial | null = null;
   private aoPass: AoPass | null = null;
   private readonly aoUniforms = { tAo: { value: null as THREE.Texture | null }, uAoOn: { value: 0 }, uAoStrength: { value: 0.8 }, uAoPower: { value: 1.5 }, uAoTint: { value: new THREE.Vector3() }, uAoBleed: { value: 0 } };
   /** The look effects (vignette, chromatic aberration, grain, colour grading, bloom) over the finished picture. */
@@ -3939,7 +3941,10 @@ void main() {
       sceneRT.depthTexture?.dispose();
       outRT.dispose();
       maskRT?.dispose();
-      material.dispose();
+      // (the material goes after the next picture is taken: its compiled program, which every picture shares, stays compiled; disposed
+      // now, it went with it, and every picture was compiled again)
+      this.lastCaptureMaterial?.dispose();
+      this.lastCaptureMaterial = material;
       quad.geometry.dispose();
     }
     if (transparent) resolveCaptureEmission(pixelsOut);

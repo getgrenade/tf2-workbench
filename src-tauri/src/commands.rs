@@ -801,17 +801,19 @@ pub fn write_binary_file(request: tauri::ipc::Request<'_>) -> Result<(), String>
     std::fs::write(output_path(&decoded)?, bytes).map_err(|e| e.to_string())
 }
 
-/// Writes a copy of an artist's model beside the original (the adjusted copy, or a temporary LOD): the raw body to the path in the `path`
-/// header (percent-encoded), which has to be an .fbx whose name starts with `adjusted_` or `temp_` (nothing else is written this way, and no
-/// file of another name is replaced).
+/// Writes a copy of an artist's file beside the original (the adjusted copy of a model, a temporary LOD, a texture made smaller): the raw body
+/// to the path in the `path` header (percent-encoded), which has to be an .fbx whose name starts with `adjusted_` or `temp_`, or a .tga whose
+/// name starts with `resized_` (nothing else is written this way, and no file of another name is replaced).
 #[tauri::command]
 pub fn write_adjusted_model(request: tauri::ipc::Request<'_>) -> Result<(), String> {
     let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else { return Err("expected a raw body".into()) };
     let path = request.headers().get("path").and_then(|v| v.to_str().ok()).ok_or("missing path header")?;
     let path = PathBuf::from(percent_decode(path));
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_ascii_lowercase();
-    let is_fbx = path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("fbx"));
-    if !is_fbx || !(name.starts_with("adjusted_") || name.starts_with("temp_")) { return Err(format!("refusing to write {}: only adjusted_*.fbx and temp_*.fbx files", path.display())); }
+    let ext = |x: &str| path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case(x));
+    let model = ext("fbx") && (name.starts_with("adjusted_") || name.starts_with("temp_"));
+    let texture = ext("tga") && name.starts_with("resized_");
+    if !model && !texture { return Err(format!("refusing to write {}: only adjusted_*.fbx, temp_*.fbx and resized_*.tga files", path.display())); }
     std::fs::write(&path, bytes).map_err(|e| format!("Cannot write {}: {e}", path.display()))
 }
 

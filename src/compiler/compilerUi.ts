@@ -68,7 +68,7 @@ export interface CompilerHost {
   /** Builds the item on the native side and returns what to tell the artist (and the archive's path, to show it). */
   build(request: ItemBuildRequest): Promise<{ ok: boolean; message: string; path?: string }>;
   reveal?(path: string): void;
-  /** Writes a copy of a model (`adjusted_<name>.fbx`, `temp_<name>_lod1.fbx`) beside the original. Desktop only. */
+  /** Writes a copy of a model (`adjusted_<name>.fbx`, `temp_<name>_lod1.fbx`), or of a texture made smaller (`resized_<name>.tga`), beside the original. Desktop only. */
   writeModel?(path: string, bytes: Uint8Array): Promise<void>;
   /** Writes a model file again where it is (an existing .fbx: the armature node taken out of it). Desktop only. */
   rewriteModel?(path: string, bytes: Uint8Array): Promise<void>;
@@ -196,8 +196,8 @@ export function createCompilerUi(host: CompilerHost) {
   }
 
   /**
-   * A slider with a box to type the number in (which may go past the slider's end), and the mouse wheel over it moves it (Shift: ten steps).
-   * Changes are not redrawn through `render`: that would rebuild the slider under the pointer in the middle of a drag.
+   * A slider with a box to type the number in (which may go past the slider's end); the mouse wheel over either moves it, as every slider's
+   * does (see sliderWheel.ts). Changes are not redrawn through `render`: that would rebuild the slider under the pointer in the middle of a drag.
    */
   function slider(label: string, value: number, min: number, max: number, step: number, change: (v: number) => void) {
     const decimals = (String(step).split(".")[1] ?? "").length;
@@ -212,19 +212,6 @@ export function createCompilerUi(host: CompilerHost) {
       change(v);
     };
     const controls = h("div", { className: "ui-val" }, range, box);
-    // a notch of a wheel (100) is a step; a touchpad sends many small ones, which add up to steps
-    let carried = 0;
-    controls.addEventListener("wheel", (event) => {
-      event.preventDefault();
-      carried += event.deltaY * (event.deltaMode === 1 ? 33 : 1);
-      const notches = Math.trunc(carried / 100);
-      if (notches === 0) return;
-      carried -= notches * 100;
-      const next = Number(range.value) - notches * step * (event.shiftKey ? 10 : 1);
-      const v = Number(Math.min(max, Math.max(min, next)).toFixed(decimals));
-      range.value = String(v); box.value = v.toFixed(decimals);
-      change(v);
-    }, { passive: false });
     return h("div", { className: "ui-prop" }, h("span", { className: "ui-key", textContent: label }), controls);
   }
 
@@ -685,6 +672,7 @@ Choose another .tga` : "Choose the backpack icon (.tga)" });
       if (text === null) return;
       session.restore(parseImportSession(text));
       customBones = []; status = ""; builtPath = "";
+      await session.preferOriginals();
       await session.loadAll();
       changed(true);
       const first = session.classesWithModels()[0];
@@ -704,6 +692,7 @@ Choose another .tga` : "Choose the backpack icon (.tga)" });
     schedule();
     render();
   }
+
   /** A change that needs the preview but not a rebuilt pane (a slider being dragged). */
   function quiet() {
     save();
@@ -750,7 +739,9 @@ Choose another .tga` : "Choose the backpack icon (.tga)" });
       if (!sel) throw new Error("Select a character first.");
       // the temporary LODs are files too, so that the session file of the item can be opened again
       if (host.writeModel) await session.writeTempLods((path, bytes) => host.writeModel!(path, bytes));
-      const result = await host.build(makeBuildRequest(session, sel.cls));
+      // a texture too big for the importer is built from a copy that fits, made again now from the texture as it is (the item keeps the original)
+      const swap = host.writeModel ? await session.writeResized((path, bytes) => host.writeModel!(path, bytes)) : new Map<string, string>();
+      const result = await host.build(makeBuildRequest(session, sel.cls, swap));
       status = result.message;
       builtPath = result.ok ? result.path ?? "" : "";
     } catch (error) {

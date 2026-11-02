@@ -70,3 +70,30 @@ test("an RGBA image written as a TGA reads back the same, with its alpha and the
   assert.equal(back.hasAlpha, true);
   assert.deepEqual([...back.rgba], [...rgba]);
 });
+
+test("a texture too big for the importer is fitted: powers of two at or under the limit, its shape kept", async () => {
+  const { fittedSize } = await import("../src/compiler/tga.ts");
+  assert.equal(fittedSize({ width: 512, height: 512 }, "color"), null, "it fits as it is");
+  assert.deepEqual(fittedSize({ width: 2048, height: 2048 }, "normal"), { width: 512, height: 512 });
+  assert.deepEqual(fittedSize({ width: 2048, height: 1024 }, "color"), { width: 512, height: 256 });
+  assert.deepEqual(fittedSize({ width: 1024, height: 1024 }, "phongexponent"), { width: 256, height: 256 });
+  assert.deepEqual(fittedSize({ width: 1000, height: 300 }, "color"), { width: 512, height: 256 }, "not a power of two: brought down to one");
+});
+
+test("an image made smaller is the average of what each pixel covers, and a normal map's normals stay unit length", async () => {
+  const { resizeImage } = await import("../src/compiler/tga.ts");
+  // 4 × 2, made 2 × 1: each half of it averaged
+  const rgba = new Uint8Array([0, 0, 0, 255, 100, 100, 100, 255, 200, 0, 0, 255, 200, 0, 0, 255, 0, 0, 0, 255, 100, 100, 100, 255, 200, 0, 0, 255, 200, 0, 0, 255]);
+  const out = resizeImage({ width: 4, height: 2, hasAlpha: false, usesAlpha: false, rgba }, 2, 1);
+  assert.deepEqual([...out.rgba], [50, 50, 50, 255, 200, 0, 0, 255]);
+  // two normals 90° apart, averaged: the plain average is shorter than 1, the result is made unit length again
+  const n = new Uint8Array([255, 128, 128, 255, 128, 255, 128, 255]);
+  const v = [...resizeImage({ width: 2, height: 1, hasAlpha: false, usesAlpha: false, rgba: n }, 1, 1, true).rgba].slice(0, 3).map((c) => c / 127.5 - 1);
+  assert.ok(Math.abs(Math.hypot(v[0], v[1], v[2]) - 1) < 0.02, `length ${Math.hypot(v[0], v[1], v[2])}`);
+});
+
+test("a TGA without alpha is written as 24 bit", () => {
+  const img = decodeTga(encodeTga([10, 20, 30, 255], 1, 1, false));
+  assert.equal(img.hasAlpha, false);
+  assert.deepEqual([...img.rgba], [10, 20, 30, 255]);
+});

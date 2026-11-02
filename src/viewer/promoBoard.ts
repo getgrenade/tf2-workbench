@@ -6,7 +6,7 @@
  */
 import { showContextMenu } from "./contextMenu";
 import { rotateLightDirection } from "./lighting";
-import { DEFAULT_SHOT_EFFECTS, solidOf } from "./promo";
+import { shotEffectsOf, SHADOW_BLENDS, type ShadowBlend, DEFAULT_SHOT_EFFECTS, LINEUP_SPACING, PROMO_FOV, solidOf } from "./promo";
 import { createBackdropPicker } from "./backdropPicker";
 import { DEFAULT_STUDIO, STUDIO_LABELS, STUDIO_ROLES, flipStudio, parseStudio, randomStudio, type StudioLight } from "./studioLight";
 import { createStudioSphere } from "./studioSphere";
@@ -17,9 +17,9 @@ export interface BoardHost {
   /** Writes the pictures to a folder the user picks: as PNGs, or as layered Photoshop files. */
   exportAll(pictures: PromoPicture[], look: BoardLook, format?: "png" | "psd"): Promise<string>;
   /** Takes a layer's shot again as its spec now says (in the promo scene), replacing its image. */
-  retake(layer: PromoLayer): Promise<void>;
+  retake(layer: PromoLayer, live?: boolean): Promise<void>;
   /** A small picture through a layer's camera as its spec now says (w × h), to aim it by. */
-  cameraView(layer: PromoLayer, w: number, h: number): Promise<HTMLCanvasElement>;
+  cameraView(layer: PromoLayer, w: number, h: number, steady?: boolean): Promise<HTMLCanvasElement>;
   /** Sets a thumbnail's framing: on the character (framed on the item, a pose rolled that shows it) or the item alone (take it again after). */
   framing(spec: ShotSpec, mode: "character" | "item"): Promise<void>;
   /** Rolls a shot's pose again (a random taunt or animation; its spec changes; take it again after). */
@@ -89,6 +89,8 @@ let look: BoardLook = (() => {
   } catch { /* the defaults */ }
   return { backdrop: randomBackdrop(), stroke: { ...DEFAULT_STROKE }, glow: { ...DEFAULT_GLOW }, effects: structuredClone(DEFAULT_SHOT_EFFECTS) };
 })();
+/** The effects a new shot is taken with: the boards' (so a board just made does not take all of its shots again as it opens). */
+export const boardShotEffects = () => shotEffectsOf(look.effects ?? DEFAULT_SHOT_EFFECTS);
 const keepLook = () => { try { localStorage.setItem(LOOK_KEY, JSON.stringify(look)); } catch { /* not kept */ } };
 
 /** Shows a set's pictures as a board in `root`; what comes back lets go of what the board holds outside its root (when it is closed). */
@@ -103,6 +105,8 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       <div class="promoLookStroke"></div>
       <h3>Glow round the characters</h3>
       <div class="promoLookGlow"></div>
+      <h3>Shadows</h3>
+      <div class="promoLookShadow"></div>
       <h3>3D effects in the shots</h3>
       <div class="promoLookFx"></div>
       <div class="promoSideFoot">
@@ -113,7 +117,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     <main class="promoCenter">
       <div class="promoThumbs" role="listbox" aria-label="Pictures"></div>
       <div class="promoStage"><canvas class="promoPreview"></canvas></div>
-      <p class="promoHelp dim">Click a shot to select it (Shift-click for more) · drag to move · corners or wheel to size · right-drag to turn the camera round it · click a paint of a chart to take it out · Ctrl+C, Ctrl+V puts a layer into another picture, linked (Ctrl+Shift+V: a copy) · Delete takes it out</p>
+      <p class="promoHelp dim">Click a shot to select it (Shift-click for more) · drag to move · corners or wheel to size · right-drag to turn the camera round it · click a paint of a chart to take it out · Ctrl+C, then Ctrl+V pastes a layer as a copy of its own, Ctrl+Shift+V linked (the same shot and place) · Delete takes it out</p>
     </main>
     <aside class="promoInspector"></aside>
   </div>`;
@@ -240,12 +244,13 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     }
     return null;
   }
-  const draw = (p: PromoPicture) => {
+  /** Draws a picture again: its card and, when it is the one picked, the preview (`live`: a drag's step, the preview only; the card after). */
+  const draw = (p: PromoPicture, live = false) => {
     const c = thumbs.get(p);
-    if (c) renderPicture(c, p, look, thumbScale(p));
+    if (c && !live) renderPicture(c, p, look, thumbScale(p));
     if (p === picked) drawPreview();
   };
-  const drawAll = () => pictures.forEach(draw);
+  const drawAll = () => pictures.forEach((p) => draw(p));
   // the pictures behind the pictures (a backdrop of a picture) are loaded before they are drawn, then it is drawn again
   void loadBackdropPictures([look.backdrop, ...pictures.map((x) => x.backdrop)]).then(() => drawAll());
   const resizer = new ResizeObserver(() => drawPreview());
@@ -296,11 +301,20 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
   const released = () => {
     pointerHeld = false;
     if (panelLater) { panelLater = false; if (layerPicked) showLayer(); }
+    // let go: what was taken live (quick, at half size) is taken again in full; what waits to be taken live, in full
+    for (const job of waiting.values()) job.live = false;
+    for (const [l, p] of takenLive) if (!waiting.has(l)) queueRetake(p, l);
+    takenLive.clear();
   };
   window.addEventListener("pointerup", released);
   // what this board holds on the window goes when it is closed (or its pictures would stay alive with it)
   const dispose = () => { window.removeEventListener("pointerup", released); resizer.disconnect(); boardKeys.delete(keys); };
-  const waiting = new Map<PromoLayer, { p: PromoPicture; before?: () => Promise<void> }>();
+  /**
+   * The shots waiting to be taken again; `live`: in the middle of a drag (a slider, the camera window), taken quick and at half size,
+   * so that the board follows the drag without holding up the app; they are taken again in full when it is let go (`takenLive`).
+   */
+  const waiting = new Map<PromoLayer, { p: PromoPicture; before?: () => Promise<void>; live: boolean }>();
+  const takenLive = new Map<PromoLayer, PromoPicture>();
   /** The board's other charts of the same item (its other styles), each with its picture, that keep in step with this one. */
   const chartSiblings = (l: PromoLayer) => {
     const c = l.chart;
@@ -340,10 +354,31 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     }
     queueRetake(p, l, before);
   }
+  /**
+   * The point of a picture its shadows fan out from or converge to, in a shot's image (see ShotSpec.spreadPoint): from the picture's floor
+   * line (the middle, low on it), along the way the shadows fall on the picture (Direction: 0 is up it, back), toward them to converge or
+   * against them to fan out, nearer the stronger the spread (0.6 of the picture's height off at ±1); undefined without a spread.
+   */
+  const spreadPointOf = (p: PromoPicture, l: PromoLayer): [number, number] | undefined => {
+    const s = look.effects?.shadow;
+    if (!s?.on || !s.spread) return undefined;
+    const a = (s.azimuth * Math.PI) / 180, reach = (p.h * 0.6) / Math.abs(s.spread), sign = s.spread < 0 ? 1 : -1;
+    const x = p.w / 2 + sign * Math.sin(a) * reach, y = p.h * 0.85 - sign * Math.cos(a) * reach;
+    const r = layerRect(l);
+    const round = (v: number) => Math.round(v * 1000) / 1000;
+    return [round((x - r.x) / Math.max(1, r.w)), round((y - r.y) / Math.max(1, r.h))];
+  };
+  /** Shots moved on their picture: with spread shadows, taken again (their shadows fan out from, or converge to, a point of the picture). */
+  function spreadMoved(p: PromoPicture, shots: PromoLayer[]) {
+    for (const l of shots) {
+      const want = l.shot ? spreadPointOf(p, l) : undefined, had = l.shot?.spreadPoint;
+      if (want && (!had || Math.hypot(want[0] - had[0], want[1] - had[1]) > 0.01)) retake(p, l);
+    }
+  }
   function queueRetake(p: PromoPicture, l: PromoLayer, before?: () => Promise<void>) {
     const queued = waiting.get(l);
     // a change made while one waits replaces it (keeping a re-roll that was asked for)
-    waiting.set(l, { p, before: before ?? queued?.before });
+    waiting.set(l, { p, before: before ?? queued?.before, live: pointerHeld && !before && !queued?.before });
     void pump();
   }
   async function pump() {
@@ -362,13 +397,18 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
             if (was.key !== snapshot().key && !pending) pushUndo(was);
             panelStale = true; // a new outfit: the panel lists what it wears
           }
-          await host.retake(l);
+          if (l.shot) l.shot.spreadPoint = spreadPointOf(job.p, l);
+          await host.retake(l, job.live);
+          if (job.live) takenLive.set(l, job.p);
+          else takenLive.delete(l);
           measureContent(l);
           host.changed();
           // a shared shot is the same picture everywhere it is used
           for (const [q, x] of instancesOf(l)) { x.image = l.image; x.content = l.content; x.opaque = l.opaque; x.cells = l.cells; draw(q); }
-          draw(job.p);
+          draw(job.p, job.live);
           status.textContent = "";
+          // (a drag's steps one a frame at most, with the app's own frames between them)
+          if (job.live) await new Promise((res) => requestAnimationFrame(res));
         } catch (err) {
           status.textContent = `Could not take it again: ${String(err)}`;
         }
@@ -474,11 +514,24 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     box.appendChild(row);
     return row;
   };
-  /** A heading of the panel. */
-  const heading = (box: HTMLElement, text: string, title?: string) => {
+  /** A heading of the panel; with `tools`, buttons at its right (what the section does, kept out of its rows). */
+  const heading = (box: HTMLElement, text: string, title?: string, tools: { label: string; title?: string; run: () => void; primary?: boolean }[] = []) => {
     const h = document.createElement("h3");
     h.textContent = text;
     if (title) h.title = title;
+    if (tools.length) {
+      const span = document.createElement("span");
+      span.className = "promoHeadBtns";
+      for (const b of tools) {
+        const el = document.createElement("button");
+        el.textContent = b.label;
+        if (b.title) el.title = b.title;
+        if (b.primary) el.className = "primary";
+        el.onclick = (e) => { e.stopPropagation(); b.run(); };
+        span.appendChild(el);
+      }
+      h.appendChild(span);
+    }
     box.appendChild(h);
     return h;
   };
@@ -529,10 +582,10 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     keepLook();
     clearTimeout(fxTimer);
     const go = () => {
-      const fx = JSON.stringify(look.effects);
+      const wanted = shotEffectsOf(look.effects!), fx = JSON.stringify(wanted);
       for (const p of pictures) for (const l of p.layers) {
         if (!l.shot || JSON.stringify(l.shot.effects ?? DEFAULT_SHOT_EFFECTS) === fx) continue;
-        l.shot.effects = structuredClone(look.effects!);
+        l.shot.effects = structuredClone(wanted);
         retake(p, l);
       }
     };
@@ -545,17 +598,37 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     const box = (label: string, get: () => boolean, set: (v: boolean) => void, title: string) =>
       check(fxBox, label, get(), (v) => { set(v); changedEffects(true); showLookFx(); }, title);
     box("The 3D view's look", () => fx.look, (v) => (fx.look = v), "The post-processing of the 3D view (its colour grade, bloom, ambient occlusion, depth of field, and so on) in every shot, as the view has it now");
-    box("Ground shadow", () => fx.shadow.on, (v) => (fx.shadow.on = v), "The shadow each character casts on the ground (the items shown alone cast none)");
-    if (fx.shadow.on) {
-      field(fxBox, "Direction", range(0, 360, 1, fx.shadow.azimuth, (v) => { fx.shadow.azimuth = v; changedEffects(); }));
-      field(fxBox, "Length", range(0, 1.5, 0.01, fx.shadow.length, (v) => { fx.shadow.length = v; changedEffects(); }));
-      field(fxBox, "Softness", range(0, 2, 0.01, fx.shadow.blur, (v) => { fx.shadow.blur = v; changedEffects(); }));
-      field(fxBox, "Strength", range(0, 1, 0.01, fx.shadow.opacity, (v) => { fx.shadow.opacity = v; changedEffects(); }));
-    }
   }
   showLookFx();
+  // the shadows: each character's, cast in its 3D scene onto the floor from one light for every shot (the characters are turned, the
+  // cameras all at the front, so it falls the same way in every picture). Their shape is taken again when it changes (after a moment, not
+  // at every step of a slider); their opacity is the board's, at once.
+  const shadowBox = $(".promoLookShadow");
+  function showLookShadow() {
+    shadowBox.innerHTML = "";
+    const s = (look.effects ??= structuredClone(DEFAULT_SHOT_EFFECTS)).shadow;
+    check(shadowBox, "Shadows", s.on, (v) => { s.on = v; changedEffects(true); showLookShadow(); }, "The shadow each character casts on the floor (the items shown alone cast none)");
+    if (!s.on) return;
+    const shape = (label: string, min: number, max: number, step: number, get: () => number, set: (v: number) => void, title: string, show?: (v: number) => string) =>
+      field(shadowBox, label, range(min, max, step, get(), (v) => { set(v); changedEffects(); }, show), title);
+    shape("Direction", -180, 180, 1, () => (((s.azimuth + 180) % 360) + 360) % 360 - 180, (v) => (s.azimuth = v), "Which way the shadows fall (0: straight back, behind the characters)", (v) => `${v}°`);
+    shape("Spread", -1, 1, 0.01, () => s.spread ?? 0, (v) => (s.spread = v), "0: the shadows are parallel; above, they fan out (a light near them); below, they converge (toward a point beyond them)");
+    shape("Length", 0.05, 2, 0.01, () => s.length, (v) => (s.length = v), "How long a shadow is for the height of what casts it");
+    shape("Softness", 0, 4, 0.01, () => s.blur, (v) => (s.blur = v), "How blurred the shadows are");
+    shape("Taper", 0, 1, 0.01, () => s.taper ?? 0, (v) => (s.taper = v), "How much lighter the shadows get the farther they reach from the feet (dark at the feet)");
+    field(shadowBox, "Colour", colour(s.color ?? "#000000", (v) => { s.color = v; changedLook(); }), "The shadows' colour: black, or a hue of the backdrop's (a deep blue or purple looks softer than black; at once)");
+    const blend = document.createElement("select");
+    for (const [value, label] of SHADOW_BLENDS) blend.add(new Option(label, value));
+    blend.value = s.blend ?? "source-over";
+    blend.onchange = () => { s.blend = blend.value as ShadowBlend; changedLook(); };
+    field(shadowBox, "Blend", blend, "How the shadows are laid on the backdrop: Multiply darkens it by their colour (the best with a colour), Colour burn deepens and saturates it, Soft light and Overlay are gentler (at once)");
+    field(shadowBox, "Opacity", range(0, 1, 0.01, s.opacity, (v) => { s.opacity = v; changedLook(); if (look.effects?.look) changedEffects(); }), "How dark the shadows are (at once: the shots are not taken again)");
+  }
+  showLookShadow();
+  // (with spread shadows, the shots that do not know where their picture's middle is yet, such as a set's just made, are taken again)
+  for (const p of pictures) spreadMoved(p, p.layers);
   // shots made before the board had these settings take them on
-  if (pictures.some((p) => p.layers.some((l) => l.shot && JSON.stringify(l.shot.effects ?? DEFAULT_SHOT_EFFECTS) !== JSON.stringify(look.effects)))) changedEffects(true);
+  if (pictures.some((p) => p.layers.some((l) => l.shot && JSON.stringify(l.shot.effects ?? DEFAULT_SHOT_EFFECTS) !== JSON.stringify(shotEffectsOf(look.effects ?? DEFAULT_SHOT_EFFECTS))))) changedEffects(true);
   // the thumbnails' studio light is the board's (the one kept from before, else the first linked thumbnail's): those that differ take it
   // (`studioTimer`: the moment the others are taken again after a change of it, see syncStudio)
   let studioTimer = 0;
@@ -724,7 +797,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
         }
         drawPreview();
       };
-      preview.onpointerup = () => { preview.onpointermove = hoverMove; draw(p); shots.forEach(placeShared); showLayer(); };
+      preview.onpointerup = () => { preview.onpointermove = hoverMove; draw(p); shots.forEach(placeShared); showLayer(); spreadMoved(p, shots); };
       return;
     }
     // a corner handle of the selection: dragged, it sizes the selected shots together, about the middle of all of them
@@ -744,7 +817,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
           }
           drawPreview();
         };
-        preview.onpointerup = () => { preview.onpointermove = hoverMove; draw(p); shots.forEach(placeShared); showLayer(); sharpen(p, shots); };
+        preview.onpointerup = () => { preview.onpointermove = hoverMove; draw(p); shots.forEach(placeShared); showLayer(); sharpen(p, shots); spreadMoved(p, shots); };
         return;
       }
     }
@@ -872,6 +945,9 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
   }
 
   const pictureBox = document.createElement("div");
+  /** The selected layer's actions (copy, duplicate, its link, delete): in the Layers section, over the list. */
+  const actionsBox = document.createElement("div");
+  actionsBox.className = "promoLayerActions";
   const layerBox = document.createElement("div");
   function showInspector() {
     const p = picked;
@@ -1009,7 +1085,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       stack.appendChild(row);
     }
     fixedRow(p.backdrop ? "Backdrop (its own)" : "Backdrop", p.backdrop ? "" : "every picture");
-    pictureBox.append(lh, stack);
+    pictureBox.append(lh, actionsBox, stack);
     // a text of one's own, in the middle of the picture
     buttons(pictureBox, [{ label: "+ Add text", title: "A text of its own, in the middle of the picture", run: async () => {
       const was = snapshot();
@@ -1027,23 +1103,28 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
 
   /**
    * A small live view through a layer's camera: drag to turn round the subject, right-drag (or Shift-drag) to slide the framing, the
-   * wheel to zoom. It is drawn again as it is moved (small and quick, the newest look winning); the layer is taken again on letting go.
+   * wheel to zoom (a chart's: a shot is sized by its Image scale). It is drawn again as it is moved (small and quick, the newest look winning); the layer is taken again on letting go.
    */
   function cameraWindow(p: PromoPicture, l: PromoLayer, aim: NonNullable<PromoLayer["shot"] | PromoLayer["chart"]>): HTMLElement {
     const box = document.createElement("div");
     box.className = "promoCamera";
     const canvas = document.createElement("canvas");
-    // the shape of what the camera frames: the shot's slot, or one picture of a chart
+    // the window is 16:9 whatever the shot (it does not jump in size from one layer to the next); what the camera frames, the shot's slot
+    // or one picture of a chart, is fitted in the middle of it
     const aspect = l.shot ? l.shot.w / l.shot.h : l.chart?.options?.cellAspect ?? 1;
-    const W = 260, H = Math.round(Math.min(300, W / aspect)), w = Math.round(Math.min(W, H * aspect));
+    const W = 260, H = Math.round((W * 9) / 16);
+    const w = Math.round(Math.min(W, H * aspect)), h = Math.round(Math.min(H, W / aspect));
     const pr = window.devicePixelRatio || 1;
-    canvas.width = Math.round(w * pr);
+    canvas.width = Math.round(W * pr);
     canvas.height = Math.round(H * pr);
-    canvas.style.width = `${w}px`;
+    canvas.style.width = `${W}px`;
     canvas.style.height = `${H}px`;
+    const vx = Math.round(((W - w) / 2) * pr), vy = Math.round(((H - h) / 2) * pr), vw = Math.round(w * pr), vh = Math.round(h * pr);
+    /** Held steady while the camera is dragged or zoomed from here: the framing stays, the camera goes round (fitted again on letting go). */
+    let steady = false;
     const hint = document.createElement("p");
     hint.className = "dim hint";
-    hint.textContent = "Drag to turn · right-drag to slide · Ctrl-drag to turn the light · wheel to zoom";
+    hint.textContent = l.chart ? "Drag to turn · right-drag to slide · Ctrl-drag to turn the light · wheel to zoom" : "Drag to turn · right-drag to slide · Ctrl-drag to turn the light";
     box.append(canvas, hint);
     const ctx = canvas.getContext("2d")!;
     let busy = false, again = false;
@@ -1053,9 +1134,16 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       try {
         do {
           again = false;
-          const view = await host.cameraView(l, canvas.width, canvas.height);
+          const view = await host.cameraView(l, vw, vh, steady);
           ctx.clearRect(0, 0, canvas.width, canvas.height);
-          ctx.drawImage(view, 0, 0, canvas.width, canvas.height);
+          // (the frame: what is outside the shot is the window's dark, the shot's own in the checkers)
+          ctx.fillStyle = "rgba(255,255,255,0.03)";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.clearRect(vx, vy, vw, vh);
+          ctx.drawImage(view, vx, vy, vw, vh);
+          ctx.strokeStyle = "rgba(255,255,255,0.18)";
+          ctx.lineWidth = 1;
+          ctx.strokeRect(vx + 0.5, vy + 0.5, vw - 1, vh - 1);
         } while (again);
       } catch (err) {
         status.textContent = `Could not look through the camera: ${String(err)}`;
@@ -1068,6 +1156,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     canvas.onpointerdown = (ev) => {
       ev.preventDefault();
       canvas.setPointerCapture(ev.pointerId);
+      steady = true;
       // Ctrl: the light, as in the view (and hlmv): the shot gets a light of its own, from where the view's is now
       const lighting = ev.ctrlKey && ev.button === 0;
       // (a thumbnail with its studio light on: Ctrl-drag turns the rig's pivot, the three lights together)
@@ -1091,26 +1180,35 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
         } else if (sliding) {
           // the subject follows the pointer: the pan is a share of half the frame
           aim.panX = Math.round((start.panX + (dx / (w / 2)) * (1 / aim.fill)) * 1000) / 1000;
-          aim.panY = Math.round((start.panY - (dy / (H / 2)) * (1 / aim.fill)) * 1000) / 1000;
+          aim.panY = Math.round((start.panY - (dy / (h / 2)) * (1 / aim.fill)) * 1000) / 1000;
         } else {
           aim.yaw = Math.round(start.yaw + dx * TURN_PER_PIXEL);
           aim.pitch = Math.round(Math.max(-30, Math.min(70, start.pitch + dy * TURN_PER_PIXEL)));
         }
+        cameraSync?.();
         void peek();
       };
       canvas.onpointerup = () => {
         canvas.onpointermove = null;
+        // (let go: framed again, as the shot will be)
+        steady = false;
+        void peek();
         retake(p, l);
         if (studio && shared) syncStudio(l);
+        if (lighting && !studio && !start.light) panelStale = true; // (the panel shows its Reset light once the shot is taken)
       };
     };
     let wheelTake = 0;
     canvas.onwheel = (ev) => {
+      // (only a chart's camera zooms: a shot is sized by its Image scale, on the picture)
+      if (!l.chart) return;
       ev.preventDefault();
       aim.fill = Math.max(0.4, Math.min(l.chart ? CHART_ZOOM : 1.5, aim.fill * Math.exp(-ev.deltaY * 0.0012)));
+      cameraSync?.();
+      steady = true;
       void peek();
       clearTimeout(wheelTake);
-      wheelTake = window.setTimeout(() => retake(p, l), 300);
+      wheelTake = window.setTimeout(() => { steady = false; void peek(); retake(p, l); }, 300);
     };
     return box;
   }
@@ -1177,7 +1275,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     while (pictures.some((q) => q.layers.some((x) => x.link === `link${nextLink}`))) nextLink++;
     return `link${nextLink++}`;
   };
-  /** What was copied (Ctrl+C): the layers themselves, to be put into a picture linked (Ctrl+V) or as copies of their own (Ctrl+Shift+V). */
+  /** What was copied (Ctrl+C): the layers themselves, to be put into a picture as copies of their own (Ctrl+V) or linked (Ctrl+Shift+V). */
   let clipboard: PromoLayer[] = [];
   const picks = () => (picked ? selection.filter((l) => picked!.layers.includes(l)) : []);
   const some = (ls: PromoLayer[]) => (ls.length === 1 ? `“${ls[0].name}”` : `${ls.length} layers`);
@@ -1185,7 +1283,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     const sel = picks();
     if (!sel.length) return;
     clipboard = [...sel];
-    status.textContent = `Copied ${some(sel)}. Ctrl+V in a picture puts it there linked (the same shot and place); Ctrl+Shift+V as a copy of its own.`;
+    status.textContent = `Copied ${some(sel)}. Ctrl+V in a picture puts it there as a copy of its own; Ctrl+Shift+V linked (the same shot and place).`;
   }
   /** Puts the copied layers into the picked picture: linked with what they were copied from, or as copies of their own. */
   function pasteLayers(how: "instance" | "copy", from = clipboard) {
@@ -1312,22 +1410,21 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
 
   /** The buttons every layer has: copy, duplicate, delete, and its link with the other pictures. */
   function layerActions(p: PromoPicture, l: PromoLayer) {
-    heading(layerBox, "Layer");
     const linked = linkedWith(l);
     const others = l.link ? pictures.flatMap((q) => q.layers).filter((x) => x !== l && x.link === l.link) : [];
     const note = document.createElement("p");
     note.className = "dim hint";
     if (linked.length) note.textContent = `Linked: the same shot and place in ${linked.length} other picture${linked.length === 1 ? "" : "s"}. A change here changes it there too.`;
     else if (others.length) note.textContent = `A copy of its own; ${others.length} other picture${others.length === 1 ? " has" : "s have"} the shot it was copied from.`;
-    else note.textContent = "Only in this picture. Ctrl+C, then Ctrl+V in another picture, puts it there linked.";
-    buttons(layerBox, [
-      { label: "Copy", title: "Copy it (Ctrl+C): Ctrl+V in another picture puts it there linked, Ctrl+Shift+V as a copy of its own", run: () => { selectOnly(l); copyLayers(); } },
+    else note.textContent = "Only in this picture. Ctrl+C, then Ctrl+Shift+V in another picture, puts it there linked.";
+    buttons(actionsBox, [
+      { label: "Copy", title: "Copy it (Ctrl+C): Ctrl+V in a picture puts it there as a copy of its own, Ctrl+Shift+V linked", run: () => { selectOnly(l); copyLayers(); } },
       { label: "Duplicate", title: "A copy of its own in this picture, beside it", run: () => { pasteLayers("copy", [l]); } },
       ...(linked.length ? [{ label: "Unlink", title: "Make this picture's own copy: it keeps a copy of the shot, changed on its own from now on", run: () => unlinkLayer(p, l) }]
         : others.length ? [{ label: "Link back", title: "Link it to the others again: it takes their shot and place, and changes with them", run: () => relinkLayer(p, l) }] : []),
       { label: "Delete", title: "Take it out of this picture (Delete)", run: () => { selectOnly(l); deleteLayers(); } },
     ]);
-    layerBox.appendChild(note);
+    actionsBox.appendChild(note);
   }
 
   /** Every thumbnail's shot layer, with its picture. */
@@ -1352,6 +1449,9 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     if (now) go();
     else studioTimer = window.setTimeout(go, 300);
   }
+
+  /** Shows the camera moved from the camera window (a drag, the wheel) in the Camera's sliders, as it goes. */
+  let cameraSync: (() => void) | null = null;
 
   /** Shows the studio light's pivot moved from elsewhere (Ctrl-drag in the camera window): the ball and the pivot's sliders. */
   let studioMoved: (() => void) | null = null;
@@ -1532,12 +1632,17 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
   function showLayer() {
     const p = picked, l = layerPicked;
     layerBox.innerHTML = "";
+    cameraSync = null;
+    actionsBox.innerHTML = "";
+    if (p && l && p.layers.includes(l)) layerActions(p, l);
     if (!p || !l || !p.layers.includes(l)) {
       if (p && p.layers.length > 1) layerBox.innerHTML = `<p class="dim">Click a shot in the picture to change it.</p>`;
       return;
     }
     const spec = l.shot;
-    heading(layerBox, l.chart ? "Paint chart" : l.text ? "Text" : l.name);
+    heading(layerBox, l.chart ? "Paint chart" : l.text ? "Text" : l.name, undefined, spec
+      ? [{ label: "Edit in 3D…", primary: true, title: "Open this character in the 3D view as the shot has it: change its weapon, pose, cosmetics or anything else, then come back", run: () => editIn3D(p, l) }]
+      : []);
     if (!l.chart) {
       if (spec && p.kind === "Thumbnail") {
         const framing = document.createElement("select");
@@ -1547,12 +1652,12 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
         framing.onchange = () => { const mode = framing.value as "character" | "item"; retake(p, l, () => host.framing(spec, mode)); panelStale = true; };
         field(layerBox, "Framing", framing, "On the character: the whole character, framed on the item, in a pose that shows it · Item alone: the item by itself, as the icons are");
       }
-      if (spec) buttons(layerBox, [{ label: "Edit in 3D…", primary: true, title: "Open this character in the 3D view as the shot has it: change its weapon, pose, cosmetics or anything else, then come back", run: () => editIn3D(p, l) }]);
-      check(layerBox, "Visible", !l.hidden, (v) => { l.hidden = !v; draw(p); placeShared(l); showInspector(); });
+      // the image as it is placed on the picture (the camera's framing is the Camera's): its scale and its turn, about its middle
+      heading(layerBox, "Image", undefined, [{ label: "Reset", title: "Put it back where it was: its scale, place and turn as it was taken", run: () => { l.scale = 1; l.dx = 0; l.dy = 0; l.rotation = 0; draw(p); placeShared(l); showLayer(); } }]);
       const size = range(0.2, 3, 0.01, l.scale, (v) => { const r = opaqueRect(l); sizeAbout(l, v, [r.x + r.w / 2, r.y + r.h / 2]); draw(p); placeShared(l); });
       size.onchange = () => sharpen(p, [l]);
-      field(layerBox, "Size", size);
-      buttons(layerBox, [{ label: "Reset place", title: "Put it back where it was: its size, place and turn as it was taken", run: () => { l.scale = 1; l.dx = 0; l.dy = 0; l.rotation = 0; draw(p); placeShared(l); showLayer(); } }]);
+      field(layerBox, "Image scale", size, "How big the image is on the picture (it is taken again sharper when let go); the camera's Zoom frames the shot itself");
+      field(layerBox, "Image rotation", range(-180, 180, 1, l.rotation ?? 0, (v) => { l.rotation = v || undefined; draw(p); placeShared(l); }, (v) => `${v}°`), "How far the image is turned on the picture, about its middle");
     } else {
       const hint = document.createElement("p");
       hint.className = "dim hint";
@@ -1563,11 +1668,25 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     if (l.text) textFields(p, l, l.text);
     const aim = l.shot ?? l.chart;
     if (aim) {
-      heading(layerBox, "Camera");
+      heading(layerBox, "Camera", undefined, aim.light ? [{ label: "Reset light", title: `This shot has a light of its own (${aim.light.azimuth}°, ${aim.light.elevation}°; Ctrl-drag in the camera window turns it). Back to the view's light as it is.`,
+        run: () => { aim.light = undefined; retake(p, l); showLayer(); } }] : []);
       layerBox.appendChild(cameraWindow(p, l, aim));
-      field(layerBox, "Turn", range(-180, 180, 1, aim.yaw, (v) => { aim.yaw = v; retake(p, l); }, (v) => `${v}°`));
-      field(layerBox, "Tilt", range(-30, 70, 1, aim.pitch, (v) => { aim.pitch = v; retake(p, l); }, (v) => `${v}°`));
-      field(layerBox, "Zoom", range(0.4, l.chart ? CHART_ZOOM : 1.5, 0.01, aim.fill, (v) => { aim.fill = v; retake(p, l); }, (v) => `${Math.round(v * 100)}%`));
+      const turn = range(-180, 180, 1, aim.yaw, (v) => { aim.yaw = v; retake(p, l); }, (v) => `${v}°`);
+      const tilt = range(-30, 70, 1, aim.pitch, (v) => { aim.pitch = v; retake(p, l); }, (v) => `${v}°`);
+      field(layerBox, "Turn", turn);
+      field(layerBox, "Tilt", tilt);
+      // (a chart's zoom crops each of its pictures into a detail of the item; a shot's would be its Image scale over again, so it has none)
+      const zoom = l.chart ? range(0.4, CHART_ZOOM, 0.01, aim.fill, (v) => { aim.fill = v; retake(p, l); }, (v) => `${Math.round(v * 100)}%`) : null;
+      if (zoom) field(layerBox, "Zoom", zoom, "How near the camera comes to the item in each picture of the chart: in, it frames a detail of it");
+      // (the field of view of a shot's lens: wide is near and deep, narrow is far and flat; the framing keeps what it frames the same size)
+      if (spec) field(layerBox, "Field of view", range(10, 90, 1, spec.fov ?? PROMO_FOV, (v) => {
+        // (a shot at a distance shared with others, RED's and BLU's: the distance goes with the lens, so the character keeps its size)
+        const half = (deg: number) => Math.tan((deg * Math.PI) / 360);
+        if (spec.scaleDistance) spec.scaleDistance *= half(spec.fov ?? PROMO_FOV) / half(v);
+        spec.fov = v;
+        retake(p, l);
+      }, (v) => `${v}°`), "The camera's lens, as a vertical angle: wide (high) is near the subject and deep, narrow (low) far and flat");
+      cameraSync = () => { setSlider(turn, aim.yaw); setSlider(tilt, aim.pitch); if (zoom) setSlider(zoom, aim.fill); };
       // the picture's shots of the item's other styles: linked (camera, light, effects and scale) unless unlinked here
       if (spec) {
         const others = styleSiblings(p, { ...l, shot: { ...spec, sync: true } });
@@ -1586,10 +1705,6 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
           if (v) retake(p, l); // linked again: the others take this one's settings
         }, "Camera, paints and layout shared with the charts of the other styles");
       }
-      if (aim.light) {
-        buttons(layerBox, [{ label: "Reset light", title: `This shot has a light of its own (${aim.light.azimuth}°, ${aim.light.elevation}°; Ctrl-drag in the camera window turns it). Back to the view's light as it is.`,
-          run: () => { aim.light = undefined; retake(p, l); showLayer(); } }]);
-      }
     }
     if (spec && p.kind === "Thumbnail") studioFields(p, l, spec);
     if (spec) {
@@ -1597,16 +1712,33 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       const rolls: { label: string; title: string; run: () => void }[] = [];
       if (spec.randomPose) rolls.push({ label: spec.group ? "New poses" : "New pose", title: "A random taunt or animation again, stopped on a frame that frames well" + (spec.group ? " (for every character)" : ""), run: () => retake(p, l, () => host.repose(spec)) });
       if (spec.reroll) rolls.push({ label: spec.group ? "New outfits" : "New outfit", title: spec.group ? "Roll every character's loadout again (the item stays)" : "Roll this character's loadout again (the item stays)", run: () => retake(p, l, () => host.reroll(spec)) });
-      if (!spec.group || rolls.length) heading(layerBox, spec.group ? "Line-up" : "Pose");
+      heading(layerBox, spec.group ? "Line-up" : "Pose", undefined, rolls);
+      if (spec.group) {
+        // (characters placed by hand in 3D move apart from the middle of the row, their places kept as they are otherwise)
+        const placed = spec.group.every((c) => c.place);
+        const xs = placed ? spec.group.map((c) => c.place!.x) : [];
+        const sorted = [...xs].sort((a, b) => a - b);
+        const measured = sorted.length > 1 ? (sorted.at(-1)! - sorted[0]) / (sorted.length - 1) : LINEUP_SPACING;
+        let was = spec.spacing ?? (placed ? Math.round(measured) : LINEUP_SPACING);
+        const spacing = range(10, 120, 1, was, (v) => {
+          if (placed && was > 0) {
+            const mid = xs.reduce((a, b) => a + b, 0) / xs.length;
+            for (const c of spec.group!) c.place = { ...c.place!, x: mid + (c.place!.x - mid) * (v / was) };
+            xs.splice(0, xs.length, ...spec.group!.map((c) => c.place!.x));
+          }
+          spec.spacing = v;
+          was = v;
+          retake(p, l);
+        });
+        field(layerBox, "Spacing", spacing, "How far apart the characters stand, middle to middle");
+      }
       if (!spec.group) poseFields(p, l, spec);
-      if (rolls.length) buttons(layerBox, rolls);
       // the particle effects in the shot: how far in they are, and another roll of their chances
-      heading(layerBox, "Particle effects");
+      heading(layerBox, "Particle effects", undefined, [{ label: "Reroll", title: "Another seed for the effects' chances: where each particle is, which way it went", run: () => { const s = l.shot!.particles!; s.seed = Math.floor(Math.random() * 0x7fffffff); retake(p, l); } }]);
       const particles = (spec.particles ??= { seed: Math.floor(Math.random() * 0x7fffffff), time: 2 });
       const when = range(0, 10, 0.1, particles.time, (v) => { particles.time = v; retake(p, l); });
       when.title = "How far into their run the particle effects are in the shot (seconds): they are started from the same seed and run this long each time the shot is taken";
       field(layerBox, "Time", when);
-      buttons(layerBox, [{ label: "Other particles", title: "Another seed for the effects' chances: where each particle is, which way it went", run: () => { particles.seed = Math.floor(Math.random() * 0x7fffffff); retake(p, l); } }]);
     }
     // a paint chart: the live chart editor's settings, drawn again at once
     const chart = l.chart;
@@ -1667,7 +1799,6 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       }
     }
     if (spec && !spec.group) bodygroupFields(p, l, spec);
-    layerActions(p, l);
   }
 
   let paintList: { id: number; name: string }[] = [];
@@ -1749,6 +1880,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     showLookStroke();
     showLookGlow();
     showLookFx();
+    showLookShadow();
     for (const [q, c] of thumbs) c.parentElement!.title = cardTitle(q);
     selection = selection.filter((l) => picked?.layers.includes(l));
     if (layerPicked && !selection.includes(layerPicked)) layerPicked = selection.at(-1) ?? null;
@@ -1767,7 +1899,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       if (k === "y" || ev.shiftKey) step(redoStack, undoStack);
       else step(undoStack, redoStack);
     } else if (ctrl && k === "c") copyLayers();
-    else if (ctrl && k === "v") pasteLayers(ev.shiftKey ? "copy" : "instance");
+    else if (ctrl && k === "v") pasteLayers(ev.shiftKey ? "instance" : "copy");
     // Delete on a control (a slider, a list) is the control's own
     else if (!ctrl && (ev.key === "Delete" || ev.key === "Backspace") && !t.matches("input, select, textarea, button")) deleteLayers();
     else return;

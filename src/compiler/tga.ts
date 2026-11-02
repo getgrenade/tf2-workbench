@@ -14,18 +14,73 @@ export interface TgaImage {
 
 export class TgaError extends Error {}
 
-/** Writes an RGBA8 image (top row first) as an uncompressed 32 bit TGA with an alpha channel, the top row first in the file. */
-export function encodeTga(rgba: ArrayLike<number>, width: number, height: number): Uint8Array {
-  const out = new Uint8Array(18 + width * height * 4);
+/**
+ * Writes an RGBA8 image (top row first) as an uncompressed TGA, the top row first in the file: 32 bit with an alpha channel, or (`alpha`
+ * false) 24 bit without one.
+ */
+export function encodeTga(rgba: ArrayLike<number>, width: number, height: number, alpha = true): Uint8Array {
+  const n = alpha ? 4 : 3;
+  const out = new Uint8Array(18 + width * height * n);
   out[2] = 2;
   out[12] = width & 255; out[13] = width >> 8;
   out[14] = height & 255; out[15] = height >> 8;
-  out[16] = 32;
-  out[17] = 0x28; // 8 bits of alpha, rows from the top
-  for (let i = 0, o = 18; i < width * height * 4; i += 4, o += 4) {
-    out[o] = rgba[i + 2]; out[o + 1] = rgba[i + 1]; out[o + 2] = rgba[i]; out[o + 3] = rgba[i + 3];
+  out[16] = alpha ? 32 : 24;
+  out[17] = alpha ? 0x28 : 0x20; // (8 bits of alpha,) rows from the top
+  for (let i = 0, o = 18; i < width * height * 4; i += 4, o += n) {
+    out[o] = rgba[i + 2]; out[o + 1] = rgba[i + 1]; out[o + 2] = rgba[i];
+    if (alpha) out[o + 3] = rgba[i + 3];
   }
   return out;
+}
+
+/**
+ * The size a texture is made to fit its limit (see TEXTURE_LIMITS): each side the power of two at or under it, then both halved together
+ * until they are within the limit (the shape kept). Null when it fits as it is.
+ */
+export function fittedSize(image: { width: number; height: number }, kind: TextureKind): { width: number; height: number } | null {
+  if (!textureProblem(image, kind)) return null;
+  const limit = TEXTURE_LIMITS[kind];
+  const floorPow2 = (n: number) => 2 ** Math.floor(Math.log2(Math.max(1, n)));
+  let width = floorPow2(image.width), height = floorPow2(image.height);
+  while (width > limit || height > limit) { width = Math.max(1, width / 2); height = Math.max(1, height / 2); }
+  return { width, height };
+}
+
+/**
+ * An image made smaller (or another shape): each pixel the average of the ones it covers (weighted by how much of each). A normal map's
+ * averaged normals are made unit length again (`normal`): an average of unit vectors is shorter, which would flatten the lighting.
+ */
+export function resizeImage(image: TgaImage, width: number, height: number, normal = false): TgaImage {
+  const { width: sw, height: sh, rgba: src } = image;
+  const out = new Uint8Array(width * height * 4);
+  const fx = sw / width, fy = sh / height;
+  for (let y = 0; y < height; y++) {
+    const y0 = y * fy, y1 = y0 + fy;
+    for (let x = 0; x < width; x++) {
+      const x0 = x * fx, x1 = x0 + fx;
+      const sum = [0, 0, 0, 0];
+      let weight = 0;
+      for (let sy = Math.floor(y0); sy < Math.min(sh, Math.ceil(y1)); sy++) {
+        const wy = Math.min(y1, sy + 1) - Math.max(y0, sy);
+        for (let sx = Math.floor(x0); sx < Math.min(sw, Math.ceil(x1)); sx++) {
+          const w = wy * (Math.min(x1, sx + 1) - Math.max(x0, sx));
+          const i = (sy * sw + sx) * 4;
+          sum[0] += src[i] * w; sum[1] += src[i + 1] * w; sum[2] += src[i + 2] * w; sum[3] += src[i + 3] * w;
+          weight += w;
+        }
+      }
+      const o = (y * width + x) * 4;
+      let [r, g, b] = [sum[0] / weight, sum[1] / weight, sum[2] / weight];
+      if (normal) {
+        const v = [r / 127.5 - 1, g / 127.5 - 1, b / 127.5 - 1], len = Math.hypot(v[0], v[1], v[2]) || 1;
+        [r, g, b] = v.map((c) => (c / len + 1) * 127.5);
+      }
+      out[o] = Math.round(r); out[o + 1] = Math.round(g); out[o + 2] = Math.round(b); out[o + 3] = Math.round(sum[3] / weight);
+    }
+  }
+  let usesAlpha = false;
+  for (let i = 3; i < out.length; i += 4) if (out[i] < 255) { usesAlpha = true; break; }
+  return { width, height, hasAlpha: image.hasAlpha, usesAlpha, rgba: out };
 }
 
 export function decodeTga(buffer: ArrayBuffer | Uint8Array): TgaImage {

@@ -60,8 +60,8 @@ import { openRandomLoadout, regionLabel, rollLoadout, type LoadoutRule, type Rol
 import { choosePose, NOT_A_POSE, NOT_ROLLED_TAUNT, rollFace, type PoseChoice, type PoseSource } from "./randomPose";
 import { layoutChart } from "./chartLayout";
 import { bodyMasksLoaded } from "./bodyMasks";
-import { DEFAULT_CHART, DEFAULT_TEXT, aimDirection, layer, measureContent, openPromo, textLayer, type ChartCellRect, pictureBlob, type ChartSpec, type PromoLayer, type PromoPicture, type PromoText, type ShotSpec } from "./promo";
-import { showBoard, type BoardHost } from "./promoBoard";
+import { DEFAULT_CHART, DEFAULT_TEXT, LINEUP_SPACING, PROMO_FOV, aimDirection, layer, measureContent, openPromo, textLayer, type ChartCellRect, pictureBlob, type ChartSpec, type PromoLayer, type PromoPicture, type PromoText, type ShotSpec } from "./promo";
+import { boardShotEffects, showBoard, type BoardHost } from "./promoBoard";
 import { forgetBoard, loadBoards, saveBoard, type Written } from "./promoStore";
 import type { PaintChartOpts } from "./viewer";
 import { isJunkSequence } from "./sequenceFilter";
@@ -1918,7 +1918,18 @@ export function createViewTab(els: Els) {
   // --- the list of characters ----------------------------------------------------------------------------------
 
   /** Saves what the panels show into the character they were editing. */
+  /**
+   * The panels (the items, the weapons, the face) still show another character than the selected one: a quiet switch between promo
+   * scenes left them as they were (see promoQuiet), to be brought up to date when a scene is shown (syncStaleUi).
+   */
+  let uiStale = false;
+  /**
+   * Keeps what the panels show as the character's own. Not while they are stale: they show another character then (the one of the scene
+   * left), and its items would be written into this one (a scene saved by the autosave in the middle of a promo, which dressed a BLU
+   * Heavy in what a line-up's Heavy wore): the character's own state stands.
+   */
   function saveUi(e: Entity) {
+    if (uiStale && e === selected) return;
     e.items = itemsUi.getState();
     e.held = weapons.getHeld();
     e.flex = e.face?.showing() && e.heldFlex ? e.heldFlex : flex.state();
@@ -4756,15 +4767,32 @@ export function createViewTab(els: Els) {
    * with {@link PROMO_MARGIN} more room round the slot, so what reaches past the character (a long weapon) is not cut off at the slot's
    * edge but spills over it (see {@link marginBox}).
    */
-  async function promoShot(who: Entity | Entity[], dir: THREE.Vector3, w: number, h: number, fill: number, scaleDistance?: number, pan?: { fov?: number; panX?: number; panY?: number; light?: { azimuth: number; elevation: number }; particles?: { seed: number; time: number }; studio?: StudioLight }, margin = true, effects?: ShotEffects, bounds?: THREE.Box3, quick = false): Promise<HTMLCanvasElement> {
+  async function promoShot(who: Entity | Entity[], dir: THREE.Vector3, w: number, h: number, fill: number, scaleDistance?: number, pan?: { fov?: number; panX?: number; panY?: number; light?: { azimuth: number; elevation: number }; particles?: { seed: number; time: number }; studio?: StudioLight; spreadPoint?: [number, number] }, margin = true, effects?: ShotEffects, bounds?: THREE.Box3, quick = false, steady = false): Promise<HTMLCanvasElement> {
     const v = ensureViewer();
     const actors = (Array.isArray(who) ? who : [who]).map((x) => x.actor);
     const fov = pan?.fov ?? PROMO_FOV;
     await bodyMasksLoaded(); // the parts an item shown alone hides are hidden by a mask texture (before the character is looked at to fit it)
-    const cam = v.framingCamera(actors, dir, w / h, fill, fov, scaleDistance !== undefined ? scaleDistance / fill : undefined, bounds);
-    // a shot of its own scale and of the characters (not one sharing its scale with others, nor a framed item) is fitted to what is seen of them,
-    // not to their bounding box (which is always roomier than they are)
-    if (scaleDistance === undefined && !bounds) await fitSilhouette(v, cam, actors, fill, w / h, fov, quick ? 1 : 2, PROMO_MARGIN.x, PROMO_MARGIN.y);
+    // `steady` (a look through the camera as it is dragged): the framing the shot last had, the camera only going round it (fitted again at
+    // each step, the item alone shook as its outline changed); a zoom brings it nearer by as much
+    const held = steady && pan ? framedAt.get(pan) : undefined;
+    let cam: THREE.PerspectiveCamera;
+    if (held) {
+      cam = new THREE.PerspectiveCamera(fov, w / h, 0.1, 5000);
+      const distance = (held.distance * held.fill) / fill;
+      cam.position.copy(held.target).addScaledVector(dir.clone().normalize(), distance);
+      cam.near = Math.max(0.1, distance / 100);
+      cam.far = distance * 20;
+      cam.lookAt(held.target);
+      cam.updateProjectionMatrix();
+      cam.updateMatrixWorld(true);
+      cam.userData.target = held.target.clone();
+    } else {
+      cam = v.framingCamera(actors, dir, w / h, fill, fov, scaleDistance !== undefined ? scaleDistance / fill : undefined, bounds);
+      // a shot of its own scale and of the characters (not one sharing its scale with others, nor a framed item) is fitted to what is seen of them,
+      // not to their bounding box (which is always roomier than they are)
+      if (scaleDistance === undefined && !bounds) await fitSilhouette(v, cam, actors, fill, w / h, fov, quick ? 1 : 2, PROMO_MARGIN.x, PROMO_MARGIN.y);
+      if (pan) framedAt.set(pan, { distance: cam.position.distanceTo(cam.userData.target as THREE.Vector3), target: (cam.userData.target as THREE.Vector3).clone(), fill });
+    }
     const target = slideCamera(cam, w / h, fov, pan);
     v.restoreCamera(cam.position.toArray() as [number, number, number], target.toArray() as [number, number, number]);
     // the same camera, seeing the margin round the slot too: a taller view (the slot keeps its size in it) and a wider one
@@ -4775,7 +4803,19 @@ export function createViewTab(els: Els) {
     cam.updateProjectionMatrix();
     // (a live look, drawn again as it is dragged, does not wait two frames each time: it is taken at once)
     if (!quick) await nextFrames();
-    const shadow = effects?.shadow.on ? { enabled: true, azimuth: effects.shadow.azimuth, length: effects.shadow.length, blur: effects.shadow.blur, opacity: effects.shadow.opacity } : undefined;
+    // the point of the picture the shadows fan out from or converge to (see ShotSpec.spreadPoint), on this shot's floor: where its camera
+    // sees that point of its image; one beyond the horizon is far off along the floor that way (where the shadows meet at the horizon)
+    let spreadPoint: [number, number] | undefined;
+    if (pan?.spreadPoint) {
+      cam.updateMatrixWorld(true);
+      const floorY = actors[0]?.offset.y ?? 0;
+      const ray = new THREE.Vector3(pan.spreadPoint[0] * 2 - 1, 1 - pan.spreadPoint[1] * 2, 0.5).unproject(cam).sub(cam.position).normalize();
+      const t = ray.y < -1e-4 ? (floorY - cam.position.y) / ray.y : Infinity;
+      const flat = new THREE.Vector2(ray.x, ray.z).normalize();
+      const along = Math.min(t * Math.hypot(ray.x, ray.z), 20000);
+      spreadPoint = [cam.position.x + flat.x * along, cam.position.z + flat.y * along];
+    }
+    const shadow = effects?.shadow.on ? { enabled: true, azimuth: effects.shadow.azimuth, length: effects.shadow.length, blur: effects.shadow.blur, opacity: effects.shadow.opacity, spread: effects.shadow.spread, taper: effects.shadow.taper, spreadPoint } : undefined;
     const look = !!effects?.look;
     // the particle effects at a set moment of theirs (the shot is the same each time it is taken), held still while it is taken
     if (pan?.particles) for (const a of actors) await v.restartEffects(a, pan.particles.seed, pan.particles.time);
@@ -4828,6 +4868,9 @@ export function createViewTab(els: Els) {
       v.setLight(was);
     }
   }
+
+  /** The framing each shot (its spec) was last taken with: where its camera looked and from how far, at what zoom (see promoShot's `steady`). */
+  const framedAt = new WeakMap<object, { distance: number; target: THREE.Vector3; fill: number }>();
 
   /**
    * Lights the view with a studio light instead of its own while `job` runs: the rig's three lights (fixed in the world where `camera`
@@ -4908,8 +4951,6 @@ export function createViewTab(els: Els) {
     e.actor.poseBones();
   }
 
-  /** The field of view of every promo shot and chart (degrees, vertical). */
-  const PROMO_FOV = 30;
   /** How many characters a promo's loadout picture lines up (each in its own loadout with the item). */
   const PROMO_LINEUP = 4;
   /** A promo's styles picture shows at most this many styles side by side (and makes a paint chart of each). */
@@ -5017,7 +5058,6 @@ export function createViewTab(els: Els) {
    * the sliders) as they were, which is most of a switch's cost; they are brought up to date once a scene is shown.
    */
   let promoQuiet = false;
-  let uiStale = false;
   function syncStaleUi() {
     if (!uiStale) return;
     uiStale = false;
@@ -5174,12 +5214,8 @@ export function createViewTab(els: Els) {
     turnForShot(spec, e);
     return e;
   }
-  /**
-   * Turns a shot's character by its Turn (its camera stays at the front: see {@link shotDirection}); the eyes of a thumbnail of an item on
-   * the head look into the camera, as the game's model panels have them (any other shot's look ahead).
-   */
+  /** Turns a shot's character by its Turn (its camera stays at the front: see {@link shotDirection}). */
   function turnForShot(spec: ShotSpec, e: Entity) {
-    e.actor.setEyesFollowCamera(spec.focusZone === "head");
     const a = e.actor, yaw = (-spec.yaw * Math.PI) / 180;
     if (Math.abs(a.yaw - yaw) > 1e-6) ensureViewer().placeActor(a, a.offset.x, a.offset.y, a.offset.z, yaw);
   }
@@ -5219,6 +5255,8 @@ export function createViewTab(els: Els) {
       e.actor.setFlexControllers(flexBase(e));
       promo().dressed.set(spec.role, dress);
     }
+    // the eyes: as set in 3D, else into the camera (as the game's model panels have them)
+    e.actor.setEyesFollowCamera(spec.eyesFollow ?? true);
     return e;
   }
 
@@ -5238,7 +5276,7 @@ export function createViewTab(els: Els) {
     const ents = await enterGroup(spec);
     for (const [i, child] of spec.group!.entries()) await dressEntity(ents[i], child);
     // laid out again only when what stands there changed (a look drawn again as the camera is dragged changes nothing of it)
-    const key = JSON.stringify(spec.group!.map((c) => [dressKey(c), c.place ?? null, c.turn ?? 0]));
+    const key = JSON.stringify([spec.spacing ?? null, ...spec.group!.map((c) => [dressKey(c), c.place ?? null, c.turn ?? 0])]);
     if (promo().laidOut.get(spec.role) !== key) {
       layoutGroup(spec, ents);
       promo().laidOut.set(spec.role, key);
@@ -5255,10 +5293,8 @@ export function createViewTab(els: Els) {
     }
     // side by side, the same distance from each other, the row centred on the middle; the first stands at the left of the picture (the view's
     // x runs to the left)
-    ents.forEach((e, i) => v.placeActor(e.actor, ((ents.length - 1) / 2 - i) * LINEUP_SPACING, 0, LINEUP_DEPTH[i] ?? 0, ((spec.group![i].turn ?? 0) * Math.PI) / 180));
+    ents.forEach((e, i) => v.placeActor(e.actor, ((ents.length - 1) / 2 - i) * (spec.spacing ?? LINEUP_SPACING), 0, LINEUP_DEPTH[i] ?? 0, ((spec.group![i].turn ?? 0) * Math.PI) / 180));
   }
-  /** How far apart the characters of a line-up stand (from middle to middle). */
-  const LINEUP_SPACING = 37;
   /** The four of a line-up stand in a shallow arc: the outer two a little back (z) and turned in (the turn, in degrees about Y: the Rotation Y of the properties). */
   const LINEUP_DEPTH = [-4, 0, 0, -4];
   const LINEUP_TURN = [14, 5, -5, -14];
@@ -5678,6 +5714,7 @@ export function createViewTab(els: Els) {
         const pose = e.actor.snapshotCustomPose() ?? e.actor.snapshotPose();
         part.pose = pose ? { pos: Array.from(pose.pos), quat: Array.from(pose.quat), scale: pose.scale ? Array.from(pose.scale) : undefined } : undefined;
         part.flex = currentFace(e);
+        part.eyesFollow = e.actor.followsCamera;
         if (spec.group) {
           promo().dressed.set(part.role, dressKey(part));
           part.place = { x: e.actor.offset.x, y: e.actor.offset.y, z: e.actor.offset.z, yaw: e.actor.yaw };
@@ -5704,15 +5741,18 @@ export function createViewTab(els: Els) {
   }
 
   /** Takes a shot as its spec says, on its character of the open promo scene. */
-  async function takeShot(spec: ShotSpec): Promise<HTMLCanvasElement> {
+  /** Takes a shot as its spec says; `live` (a step of a drag): quick and at half size, taken again in full once it is let go. */
+  async function takeShot(spec: ShotSpec, live = false): Promise<HTMLCanvasElement> {
     const e = spec.group ? await dressGroup(spec) : await dressForShot(spec);
     // its particle effects at a moment of their own (a shot made before this had none: it gets one now)
     spec.particles ??= { seed: Math.floor(Math.random() * 0x7fffffff), time: 2 };
     // a larger rendering of the same framing (the same aspect and camera): the layer draws it at the same size, sharper
-    const res = spec.resolution ?? 1;
+    const res = (spec.resolution ?? 1) * (live ? 0.5 : 1);
     // (an item shown alone casts no shadow: it would float over one)
+    spec.effects ??= structuredClone(boardShotEffects());
     const effects = spec.effects && spec.regions ? { ...spec.effects, shadow: { ...spec.effects.shadow, on: false } } : spec.effects;
-    return promoShot(e, shotDirection(spec), Math.round(spec.w * res), Math.round(spec.h * res), spec.fill, spec.scaleDistance, spec, true, effects, Array.isArray(e) ? undefined : focusBounds(e, spec));
+    // (a drag's step keeps the framing the shot last had, as the camera window does: not fitted again, nor measured)
+    return promoShot(e, shotDirection(spec), Math.round(spec.w * res), Math.round(spec.h * res), spec.fill, spec.scaleDistance, spec, true, effects, Array.isArray(e) || live ? undefined : focusBounds(e, spec), live, live);
   }
 
   /**
@@ -5927,8 +5967,8 @@ export function createViewTab(els: Els) {
       void revealFile(dir).catch(() => {}); // the folder, to look at what was made
       return `Saved ${pictures.length} ${format === "psd" ? "Photoshop files" : "pictures"} to ${dir}.`;
     },
-    retake: (l) => inPromoScene(async () => {
-      if (l.shot) l.image = await takeShot(l.shot);
+    retake: (l, live) => inPromoScene(async () => {
+      if (l.shot) l.image = await takeShot(l.shot, live);
       else if (l.chart) {
         const taken = await takeChart(l.chart);
         l.image = taken.canvas;
@@ -5936,14 +5976,15 @@ export function createViewTab(els: Els) {
       }
     }),
     // a quick look through a layer's camera, small: the shot's slot, or one picture of a chart
-    cameraView: (l, w, h) => inPromoScene(async () => {
+    cameraView: (l, w, h, steady) => inPromoScene(async () => {
       if (l.shot) {
         const e = l.shot.group ? await dressGroup(l.shot) : await dressForShot(l.shot);
-        return promoShot(e, shotDirection(l.shot), w, h, l.shot.fill, l.shot.scaleDistance, l.shot, false, undefined, Array.isArray(e) ? undefined : focusBounds(e, l.shot), true);
+        // (held steady, its framing is the one it had: what a thumbnail frames is not measured again either)
+        return promoShot(e, shotDirection(l.shot), w, h, l.shot.fill, l.shot.scaleDistance, l.shot, false, undefined, Array.isArray(e) || steady ? undefined : focusBounds(e, l.shot), true, steady);
       }
       const spec = l.chart!;
       const e = await dressForChart(spec);
-      return promoShot(e, new THREE.Vector3(...aimDirection(spec)), w, h, spec.fill, undefined, spec, false, undefined, chartBounds(e, spec));
+      return promoShot(e, new THREE.Vector3(...aimDirection(spec)), w, h, spec.fill, undefined, spec, false, undefined, chartBounds(e, spec), false, steady);
     }),
     reroll: (spec) => inPromoScene(() => rerollShot(spec)),
     repose: (spec) => inPromoScene(() => (spec.focus !== undefined ? rollThumbnailPose(spec) : rollShotPose(spec))),
@@ -6074,6 +6115,8 @@ export function createViewTab(els: Els) {
   // dev builds: makes a promo from code (a test of it need not click through the window): `__promoDev.generate(["Bill's Hat"], "lineup")`
   if (import.meta.env.DEV) {
     (window as unknown as { __promoDev: unknown }).__promoDev = {
+      /** The size of each shot's image of the open promo (a test of what a drag takes live and what it takes in full). */
+      sizes: () => (session?.pictures ?? []).flatMap((p) => p.layers.filter((l) => l.shot).map((l) => `${p.kind}/${l.name}: ${l.image.width}×${l.image.height}`)),
       /** How much of its slot each shot of the open promo fills: the silhouette's width and height, as shares of the slot's (a test of the framing). */
       fill: () => (session?.pictures ?? []).flatMap((p) => p.layers.filter((l) => l.shot).map((l) => {
         const solid = solidOf.get(l.image) ?? l.image;

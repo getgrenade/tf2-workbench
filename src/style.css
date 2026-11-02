@@ -1264,6 +1264,9 @@ body.dndActive.dndRefused * { cursor: no-drop !important; }
 .promoChecks input { margin: 0; }
 .promoSide .btns, .promoInspector .btns { display: flex; flex-wrap: wrap; gap: var(--ui-3); margin-top: var(--ui-4); }
 .promoHeadBtns { display: flex; gap: var(--ui-2); flex: none; }
+.promoLayerActions:empty { display: none; }
+.promoLayerActions { margin-bottom: var(--ui-4); }
+.promoLayerActions .btns { margin-top: var(--ui-2); }
 .promoSide button.primary, .promoInspector button.primary { border-color: var(--accent); color: var(--accent); }
 .promoSideFoot { margin-top: auto; padding-top: var(--ui-5); }
 .promoSideFoot .btns { display: grid; grid-template-columns: 1fr 1fr; }
@@ -1296,7 +1299,7 @@ body.dndActive.dndRefused * { cursor: no-drop !important; }
 .promoStack .hierRow.dropBelow { box-shadow: inset 0 -2px 0 var(--accent); }
 .promoStack .promoChain { color: var(--dim); cursor: help; }
 .promoCamera { display: flex; flex-direction: column; align-items: center; gap: var(--ui-1); margin-top: var(--ui-2); }
-.promoCamera canvas { display: block; border: 1px solid var(--line); border-radius: var(--ui-radius); background: repeating-conic-gradient(#3a3a3a 0% 25%, #2e2e2e 0% 50%) 0 0 / 14px 14px; cursor: grab; touch-action: none; }
+.promoCamera canvas { display: block; border: 1px solid var(--line); border-radius: var(--ui-radius); background: var(--ui-canvas); cursor: grab; touch-action: none; }
 .promoCamera canvas:active { cursor: grabbing; }
 .promoCamera .hint { text-align: center; }
 /* a thumbnail's studio light: the pivot ball, and the three lights' colours in a row */

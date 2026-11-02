@@ -9,7 +9,8 @@ import { materialFileName, NUM_LODS, type CompilerSession } from "./session";
  * of the textures and icon (it reads and converts those itself), and the item's schema data. Throws when something is missing; the
  * session's own checks (`issues`) are what the interface shows before the artist gets here.
  */
-export function makeBuildRequest(session: CompilerSession, current: string): ItemBuildRequest {
+/** `swap`: textures built from another file (an original too big for the importer: its resized copy, see CompilerSession.writeResized). */
+export function makeBuildRequest(session: CompilerSession, current: string, swap: ReadonlyMap<string, string> = new Map()): ItemBuildRequest {
   const d = session.data;
   const names = session.materialNames();
   const classes: ItemBuildRequest["classes"] = [];
@@ -43,13 +44,13 @@ export function makeBuildRequest(session: CompilerSession, current: string): Ite
     return {
       sourceName: name,
       vmt: session.vmtText(current, name, i),
-      color: given.color ? m.color : null,
-      normal: given.normal ? m.normal : null,
-      phongexponent: given.phongexponent ? m.phongexponent : null,
-      illum: given.illum ? m.illum : null,
+      color: given.color ? swap.get(m.color) ?? m.color : null,
+      normal: given.normal ? swap.get(m.normal) ?? m.normal : null,
+      phongexponent: given.phongexponent ? swap.get(m.phongexponent) ?? m.phongexponent : null,
+      illum: given.illum ? swap.get(m.illum) ?? m.illum : null,
       paintable: m.settings.paintable,
       // the BLU skin: its own material file, and its own diffuse texture when it has one (else the material points at the RED one)
-      blue: d.teamColors ? { vmt: session.vmtText(current, name, i, 1), color: session.blueIsOwn(name) ? m.blueColor : null } : null,
+      blue: d.teamColors ? { vmt: session.vmtText(current, name, i, 1), color: session.blueIsOwn(name) ? swap.get(m.blueColor) ?? m.blueColor : null } : null,
     };
   });
   return {

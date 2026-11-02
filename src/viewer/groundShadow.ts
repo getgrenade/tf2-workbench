@@ -38,7 +38,7 @@ export class GroundShadow {
 
     // Flattens skinned geometry onto the floor: a point at height h moves h * length along the shadow direction.
     this.casterMaterial = new THREE.ShaderMaterial({
-      uniforms: { uFloorY: { value: 0 }, uDir: { value: new THREE.Vector2(0, -1) }, uLength: { value: 1 }, tBodyMask: { value: null }, uBodyHideBits: { value: 0 } },
+      uniforms: { uFloorY: { value: 0 }, uDir: { value: new THREE.Vector2(0, -1) }, uLength: { value: 1 }, uSpread: { value: 0 }, uTaper: { value: 0 }, uCenter: { value: new THREE.Vector2() }, uPointGiven: { value: 0 }, tBodyMask: { value: null }, uBodyHideBits: { value: 0 } },
       vertexShader: /* glsl */ `
         attribute float hideW;
         varying float vHideW;
@@ -47,6 +47,10 @@ export class GroundShadow {
         uniform float uFloorY;
         uniform vec2 uDir;
         uniform float uLength;
+        uniform float uSpread;
+        uniform float uPointGiven;
+        uniform vec2 uCenter;
+        varying float vAlong;
         void main() {
           vHideW = hideW;
           vBodyUv = uv;
@@ -55,14 +59,31 @@ export class GroundShadow {
           #include <skinning_vertex>
           vec3 wp = (modelMatrix * vec4(transformed, 1.0)).xyz;
           float h = max(wp.y - uFloorY, 0.0);
-          vec3 ground = vec3(wp.x + uDir.x * uLength * h, uFloorY, wp.z + uDir.y * uLength * h);
+          // spread: the direction from a light near the middle (fanning out), or toward a point beyond it (converging)
+          vec2 dir = uDir;
+          if (abs(uSpread) > 0.001) {
+            // (the point given, or one back from the middle along the shadows' way, nearer the stronger the spread)
+            float dist = uPointGiven > 0.5 ? 0.0 : SPREAD_REACH / abs(uSpread);
+            vec2 d = uSpread > 0.0 ? wp.xz - (uCenter - uDir * dist) : (uCenter + uDir * dist) - wp.xz;
+            if (dot(d, d) > 1e-6) dir = normalize(d);
+          }
+          vec3 ground = vec3(wp.x + dir.x * uLength * h, uFloorY, wp.z + dir.y * uLength * h);
+          // taper: how far along the floor this point of the shadow is from where its character stands (the root its body, cosmetics,
+          // weapon and taunt prop share), for a full character's shadow length: a held weapon's shadow fades as the body's does there
+          vec2 base = (modelMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xz;
+          vAlong = dot(ground.xz - base, dir) / max(uLength * TAPER_HEIGHT, 1.0);
           gl_Position = projectionMatrix * viewMatrix * vec4(ground, 1.0);
         }`,
-      fragmentShader: `${bodyMaskDeclarations} varying float vHideW; void main() { ${bodyMaskDiscard} if (vHideW > 0.5) discard; gl_FragColor = vec4(1.0); }`,
+      // (taper: lighter the farther from the feet along the floor; where parts overlap, the strongest: the most of them)
+      fragmentShader: `${bodyMaskDeclarations} uniform float uTaper; varying float vHideW; varying float vAlong; void main() { ${bodyMaskDiscard} if (vHideW > 0.5) discard; gl_FragColor = vec4(vec3(1.0 - uTaper * clamp(vAlong, 0.0, 1.0)), 1.0); }`,
       side: THREE.DoubleSide,
       depthTest: false,
       depthWrite: false,
-      blending: THREE.NoBlending,
+      blending: THREE.CustomBlending,
+      blendEquation: THREE.MaxEquation,
+      blendSrc: THREE.OneFactor,
+      blendDst: THREE.OneFactor,
+      defines: { SPREAD_REACH: "500.0", TAPER_HEIGHT: "90.0" },
     });
 
     // The override material is reused across meshes: upload each actor's own UV mask before its draw.
@@ -148,7 +169,7 @@ export class GroundShadow {
     cam.updateMatrixWorld(true);
 
     // The silhouette texture only needs redrawing when something in it moved or the shadow settings changed.
-    const key = `${p.azimuth}|${p.length}|${p.blur}|${f.half}|${f.centerX}|${f.centerZ}|${floorY}`;
+    const key = `${p.azimuth}|${p.length}|${p.blur}|${p.spread ?? 0}|${p.spreadPoint ?? ""}|${p.taper ?? 0}|${f.half}|${f.centerX}|${f.centerZ}|${floorY}`;
     const needs = redraw || key !== this.drawnKey;
     this.drawnKey = key;
     if (needs) {
@@ -156,6 +177,10 @@ export class GroundShadow {
       u.uFloorY.value = floorY;
       u.uDir.value.set(f.dirX, f.dirZ);
       u.uLength.value = p.length;
+      u.uSpread.value = p.spread ?? 0;
+      u.uTaper.value = p.taper ?? 0;
+      u.uCenter.value.set(...(p.spreadPoint ?? [cx, cz]));
+      u.uPointGiven.value = p.spreadPoint ? 1 : 0;
 
       // Draw only the casters: hide everything else, drop the background, clear to black.
       // the list holds each object once: the exclusions can hold this decal as well, and a second entry would remember it as already hidden
