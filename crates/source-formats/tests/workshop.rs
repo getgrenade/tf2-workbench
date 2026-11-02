@@ -18,7 +18,7 @@ fn importer_taunts_are_not_cosmetics_and_do_not_require_a_prop() {
         "name" "solo_taunt" "classes" { "demo" { "animation" { "source_file" "content/solo.dmx" } } }
         "ItemSchema" { "prefab" "taunt" "taunt" { "custom_taunt_scene_per_class" { "demoman" "scenes/solo.vcd" } } }
     } }"#;
-    let manifests = vec![("custom".into(), with_prop.into()), ("solo".into(), without_prop.into()), ("duplicate".into(), with_prop.into())];
+    let manifests = vec![("custom".into(), with_prop.into(), 0), ("solo".into(), without_prop.into(), 0), ("duplicate".into(), with_prop.into(), 0)];
     let db = items::parse_with(schema, &HashMap::new(), &manifests).unwrap();
     assert!(db.items.is_empty() && db.weapons.is_empty());
     assert_eq!(db.taunts.len(), 2);
@@ -88,7 +88,7 @@ fn the_workshop_schema_file_lays_over_a_zip_s_item() {
         }
         "nobody" { "equip_region" "hat" }
     }"#;
-    let manifests = vec![("cighat".into(), manifest.into()), ("cighat_style".into(), style.into())];
+    let manifests = vec![("cighat".into(), manifest.into(), 0), ("cighat_style".into(), style.into(), 0)];
     let db = items::parse_with_schema(game, &HashMap::new(), &manifests, Some(schema)).unwrap();
     let hat = db.items.iter().find(|i| i.name == "cighat").unwrap();
     assert_eq!(hat.display_name, "The Cigarette Hat");

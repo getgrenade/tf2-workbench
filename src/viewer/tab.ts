@@ -75,7 +75,7 @@ import type { PoseHud } from "./poseHud";
 import { createRigControls, type RigControls } from "../rig/rigControls";
 import type { LimbId } from "./poseRig";
 import { PLAY_ACTIONS, PLAY_DAMAGE_ACTIONS, PLAY_SLOTS, encodeParam, setsOf, type PlaySlot } from "./playLogic";
-import { itemImageFor, itemModelFor, slotForClass, weaponCategory, itemSkinFor, itemUsableBy, parseAnimInfo, parseMaterial, parsePayload, tauntPropSequence, tauntSequence, weaponIdleSequences, type ClipData, type ItemDb, type ItemInfo, type PaintInfo, type MaterialData, type ModelData } from "./payload";
+import { itemImageFor, itemMaterialOverride, itemModelFor, slotForClass, weaponCategory, itemSkinFor, itemUsableBy, parseAnimInfo, parseMaterial, parsePayload, tauntPropSequence, tauntSequence, weaponIdleSequences, type ClipData, type ItemDb, type ItemInfo, type PaintInfo, type MaterialData, type ModelData } from "./payload";
 import { createWeaponsUi, type WeaponsEls } from "./weaponsUi";
 import { loadSettings, onSettingsChange, settings, updateSetting } from "../settingsStore";
 import { accentHex } from "../theme";
@@ -811,7 +811,7 @@ export function createViewTab(els: Els) {
     }
     const everything: Equipped[] = weapon ? [...loadout, { item: weapon, paint: null, style: 0 }] : loadout;
     /** Loads a model (cached) and its materials for a skin family, then adds it to the bonemerged list. */
-    const add = async (path: string, rgb: number | null, skin: number, clip: ClipData | null = null, itemId?: number, idle = false, loop = false) => {
+    const add = async (path: string, rgb: number | null, skin: number, clip: ClipData | null = null, itemId?: number, idle = false, loop = false, material?: string) => {
       let data = models.get(path);
       if (!data) {
         try {
@@ -824,8 +824,9 @@ export function createViewTab(els: Els) {
       }
       // at a lower LOD every item is drawn at that LOD too (one with fewer LODs at its own last)
       if (e.lod > 0) data = await modelAtLod(path, e.lod).catch(() => data!);
-      await ensureMaterials(data!, skin);
-      list.push({ data: data!, paint: rgb === null ? null : unpackRgb(rgb), skin, clip, itemId, idle, loop });
+      if (material) await loadMaterials([material]);
+      else await ensureMaterials(data!, skin);
+      list.push({ data: data!, paint: rgb === null ? null : unpackRgb(rgb), skin, clip, itemId, idle, loop, material });
     };
     let prop: { data: ModelData; skin: number; clip: ClipData | null } | null = null;
     for (const { item: it, paint, style } of everything) {
@@ -866,7 +867,8 @@ export function createViewTab(els: Els) {
       const animation = ANIMATED_IDLE[it.id];
       if (!weaponClip && it !== weapon && animation) { weaponClip = await cosmeticSequenceClip(path, animation); loop = !!weaponClip; }
       if (!weaponClip && it !== weapon) { weaponClip = await cosmeticIdleClip(path, e.cls); idle = !!weaponClip; }
-      await add(path, rgb, skin, weaponClip, it.id, idle, loop);
+      // an item drawn in one material of its own whatever its model says (the Golden Wrench's gold)
+      await add(path, rgb, skin, weaponClip, it.id, idle, loop, itemMaterialOverride(it) ?? undefined);
       if (it === weapon && list.length) list[list.length - 1].weapon = true;
       // Models that travel with the item (a weapon's backpack, an attached part) share its paint and skin.
       for (const extra of it.extraModels ?? []) await add(extra, rgb, skin, null, it.id);
@@ -2351,7 +2353,7 @@ export function createViewTab(els: Els) {
         const list: PreviewItem["materials"] = [];
         for (const bp of data.bodyParts) {
           for (const m of bp.models[0]?.meshes ?? []) {
-            const p = m.materials[skin] ?? m.material;
+            const p = itemMaterialOverride(item) ?? m.materials[skin] ?? m.material;
             if (!m.indices.length) continue;
             const mat = materials.get(p);
             if (!mat) continue;
@@ -6776,6 +6778,12 @@ export function createViewTab(els: Els) {
       renderEntities();
       showCompilerItem(compilerPreview); // the item goes onto this character
       await show(e, cls, { seqName: "ref" });
+      // no cigarette smoke in a backpack icon: a Spy puts it out here
+      if (e.actor.conditions.cig) {
+        v.setConditions(e.actor, { ...e.actor.conditions, cig: false });
+        void syncConditions(e);
+        void applyUnusuals(e);
+      }
       await compiler.updatePreviewNow();
       await applyLoadout(e, e.applied); // the item is in before the camera frames it
       v.focusInspect();

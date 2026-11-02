@@ -174,7 +174,8 @@ export class SourceMaterials {
   makeMaterial(m: MaterialData | null, eye?: EyeballData, paint: Rgb | null = null, fx?: MaterialEffects): THREE.ShaderMaterial {
     if (m && eye && m.shader === "eyerefract") return this.makeEyeMaterial(m, eye);
     const p = m?.params ?? {};
-    const flag = (k: string) => Number(p[k] ?? 0) !== 0;
+    // the engine reads a switch as a whole number (GetIntValue): "$phong" ".5" is 0, off
+    const flag = (k: string) => Math.trunc(Number(p[k] ?? 0)) !== 0;
     const num = (k: string, d: number) => (p[k] !== undefined && !Number.isNaN(Number(p[k])) ? Number(p[k]) : d);
 
     const base = m ? this.texture(m, "base") : null;
@@ -285,8 +286,11 @@ export class SourceMaterials {
         uPhong: { value: phong },
         uSkinPath: { value: skinPath },
         uSpecTint: { value: new THREE.Vector3(tint[0], tint[1], tint[2]) },
-        uPhongExponent: { value: num("$phongexponent", 5) },
-        uPhongBoost: { value: num("$phongboost", 1) },
+        // with no $phongexponent the Skin shader reads the exponent map, white when there is none (150: a small, faint highlight)
+        uPhongExponent: { value: num("$phongexponent", 0) },
+        // TF2 leaves a $phongboost the VMT does not name at 0: no highlight at all (the rim light, boosted on its own, stays), as the
+        // Business Casual shows in the game and in HLMV
+        uPhongBoost: { value: num("$phongboost", 0) },
         uFresnel: { value: new THREE.Vector3((fMid - fMin) * 2, fMid, (fMax - fMid) * 2) },
         uBaseAlphaPhongMask: { value: flag("$basemapalphaphongmask") },
         uRim: { value: flag("$rimlight") },

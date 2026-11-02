@@ -80,6 +80,8 @@ export interface CosmeticSpec {
   itemId?: number;
   /** The weapon the character holds. */
   weapon?: boolean;
+  /** One material every mesh of the model is drawn with, in either team (an item's `material_override`: the Golden Wrench's gold). */
+  material?: string;
 }
 
 /** What an entity needs from the viewer it lives in. */
@@ -950,9 +952,11 @@ export class Actor {
         if (!sub) continue;
         for (const m of sub.meshes) {
           if (m.indices.length === 0) continue;
-          const material = this.ctx.mats.material(this.materials.get(m.materials[skin] ?? m.material) ?? null, undefined, paint);
+          const override = list[index].material;
+          const path = override ?? m.materials[skin] ?? m.material;
+          const material = this.ctx.mats.material(this.materials.get(path) ?? null, undefined, paint);
           const mesh = this.makeSkinnedMesh(m, material, skeleton, data, this.flexCosmetic);
-          mesh.userData.source = { data: this.materials.get(m.materials[skin] ?? m.material) ?? null, paint, skins: m.materials, base: m.material };
+          mesh.userData.source = { data: this.materials.get(path) ?? null, paint, skins: override ? [override] : m.materials, base: override ?? m.material };
           mesh.userData.cosmeticSlot = index + 1; // 1.. in the order of the list; 0 / unset is the class's own mesh
           this.cosmeticGroup.add(mesh);
         }

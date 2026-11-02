@@ -64,6 +64,8 @@ pub struct Item {
     /// The item has the `player_skin_override` attribute (the Voodoo-Cursed souls): its wearer is drawn in the zombie skin of the
     /// class model, a skin family the model has for exactly this.
     pub skin_override: bool,
+    /// `visuals/material_override`: one material the whole model is drawn with (the Golden Wrench's gold), a path under `materials/`.
+    pub material_override: Option<String>,
     /// The particle effects the item always shows (a pipe's smoke, the Earbuds' notes).
     pub particles: Vec<ItemParticle>,
     /// `anim_slot`: which animation set the item uses (`PRIMARY`, `MELEE_ALLCLASS`, ...), uppercase. Empty when unset.
@@ -91,6 +93,8 @@ pub struct Item {
     pub taunt_scene_paths: BTreeMap<String, String>,
     /// A cosmetic from the workshop importer's zips (`tf/workshop/import_source`), not from the game's own schema.
     pub workshop: bool,
+    /// A workshop item: when its zip was last written (seconds since 1970), its place in a newest-first list. 0 for the game's items.
+    pub added: u64,
 }
 
 impl Item {
@@ -374,6 +378,7 @@ fn build_item(id: u32, nodes: &[Node], names: &HashMap<String, String>) -> Item 
         taunt_prop_scenes: BTreeMap::new(),
         taunt_scene_paths: BTreeMap::new(),
         workshop: false,
+        added: 0,
         extra_models: extra_models(nodes),
         pose_params: get_block(nodes, "visuals")
             .and_then(|v| get_block(v, "player_poseparam"))
@@ -384,6 +389,10 @@ fn build_item(id: u32, nodes: &[Node], names: &HashMap<String, String>) -> Item 
         styles: parse_styles(nodes, names),
         quality: get_str(nodes, "item_quality").map(str::to_ascii_lowercase).unwrap_or_else(|| "unique".to_string()),
         skin_override: has_attribute_class(nodes, "player_skin_override"),
+        material_override: get_block(nodes, "visuals")
+            .and_then(|v| get_str(v, "material_override"))
+            .map(|m| m.trim().replace('\\', "/"))
+            .filter(|m| !m.is_empty()),
         particles: item_particles(nodes),
         paintable: get_block(nodes, "capabilities").and_then(|c| get_str(c, "paintable")).is_some_and(|v| v.trim() != "0"),
     }
@@ -634,13 +643,13 @@ pub fn parse(text: &str, names: &HashMap<String, String>) -> Result<ItemDb> {
 }
 
 /// [`parse`], plus the cosmetics of workshop import manifests (`(zip name, manifest text)`).
-pub fn parse_with(text: &str, names: &HashMap<String, String>, workshop: &[(String, String)]) -> Result<ItemDb> {
+pub fn parse_with(text: &str, names: &HashMap<String, String>, workshop: &[(String, String, u64)]) -> Result<ItemDb> {
     parse_with_schema(text, names, workshop, None)
 }
 
 /// [`parse_with`], plus the workshop schema file (`items_game.txt` beside the zips): what the zips cannot say about their items, in
 /// items_game's own words, laid over them by import name (see [`overlay_item`]). Its own `prefabs` block adds to the game's.
-pub fn parse_with_schema(text: &str, names: &HashMap<String, String>, workshop: &[(String, String)], schema: Option<&str>) -> Result<ItemDb> {
+pub fn parse_with_schema(text: &str, names: &HashMap<String, String>, workshop: &[(String, String, u64)], schema: Option<&str>) -> Result<ItemDb> {
     let root = kv::parse(text)?;
     let Some(game) = root.iter().find(|n| n.key.eq_ignore_ascii_case("items_game")).and_then(Node::block) else {
         return fail("items_game.txt has no items_game block");
@@ -679,8 +688,9 @@ pub fn parse_with_schema(text: &str, names: &HashMap<String, String>, workshop: 
 
     let mut seen = std::collections::HashSet::new();
     let mut from_zips: Vec<Item> = Vec::new();
-    for (zip_name, manifest) in workshop {
-        if let Some(item) = workshop_item(zip_name, manifest, &prefabs, names) {
+    for (zip_name, manifest, modified) in workshop {
+        if let Some(mut item) = workshop_item(zip_name, manifest, &prefabs, names) {
+            item.added = *modified;
             if seen.insert(item.id) { from_zips.push(item); }
         }
     }

@@ -301,6 +301,10 @@ export interface ItemInfo {
   paintable: boolean;
   /** Wearing the item puts the character in the zombie skin of the class model (the Voodoo-Cursed souls). */
   skinOverride: boolean;
+  /** One material the whole model is drawn with (`visuals/material_override`: the Golden Wrench's gold), a path under `materials/`. */
+  materialOverride?: string;
+  /** A workshop item: when its zip was last written (seconds since 1970), its place in a newest-first list. Unset for the game's items. */
+  added?: number;
   /**
    * The particle effects the item always shows (a pipe's smoke, the Earbuds' notes): by the game's effect id (as the unusual effects are
    * numbered), or a particle system by name, at an attachment of the item's model.
@@ -357,6 +361,17 @@ export function itemModelFor(item: ItemInfo, gameClass: string, style = 0): stri
 export function itemSkinFor(item: ItemInfo, team: number, style = 0): number | null {
   const s = item.styles[style];
   return (team === 1 ? s?.skinBlu : s?.skinRed) ?? null;
+}
+
+/** Newest first: a workshop item by when its zip was last written (its id is only a hash of its name), the game's by their number. */
+export function newestFirst(a: ItemInfo, b: ItemInfo): number {
+  return (b.added ?? 0) - (a.added ?? 0) || b.id - a.id || a.displayName.localeCompare(b.displayName);
+}
+
+/** The one material an item is drawn with whatever its model says (`materialOverride`, the Golden Wrench's gold), as a material path; null for most items. */
+export function itemMaterialOverride(item: ItemInfo): string | null {
+  if (!item.materialOverride) return null;
+  return `materials/${item.materialOverride.replace(/^\/+/, "").replace(/\.vmt$/i, "")}.vmt`.toLowerCase();
 }
 
 /** The inventory icon of an item in the given style. */

@@ -2,7 +2,7 @@ import { showContextMenu } from "./contextMenu";
 import { loadItemDb, reloadItemDb } from "./itemCatalog";
 import { itemIcon } from "./itemIcons";
 import { createBrowserSort, createBrowserView, makeTile, setTileImage } from "./browserView";
-import { itemImageFor, itemUsableBy, styleLabel, type ItemDb, type ItemInfo, type PaintInfo } from "./payload";
+import { itemImageFor, itemUsableBy, newestFirst, styleLabel, type ItemDb, type ItemInfo, type PaintInfo } from "./payload";
 
 export interface ItemsEls {
   search: HTMLInputElement;
@@ -67,7 +67,7 @@ export interface ItemsHooks {
 const MAX_ROWS = 600;
 
 const SORTS = {
-  newest: (a: ItemInfo, b: ItemInfo) => b.id - a.id || a.displayName.localeCompare(b.displayName),
+  newest: newestFirst,
   alpha: (a: ItemInfo, b: ItemInfo) => a.displayName.localeCompare(b.displayName),
 };
 

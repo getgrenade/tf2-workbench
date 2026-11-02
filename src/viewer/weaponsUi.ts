@@ -2,7 +2,7 @@ import { showContextMenu } from "./contextMenu";
 import { itemIcon } from "./itemIcons";
 import { createBrowserSort, createBrowserView, makeTile, setTileImage } from "./browserView";
 import { loadItemDb } from "./itemCatalog";
-import { itemImageFor, itemUsableBy, slotForClass, weaponCategory, type ItemDb, type ItemInfo } from "./payload";
+import { itemImageFor, itemUsableBy, newestFirst, slotForClass, weaponCategory, type ItemDb, type ItemInfo } from "./payload";
 
 export interface WeaponsEls {
   search: HTMLInputElement;
@@ -66,8 +66,8 @@ export function createWeaponsUi(els: WeaponsEls, hooks: WeaponsHooks) {
     const cls = hooks.gameClass();
     const q = els.search.value.trim().toLowerCase();
     const slot = category;
-    // newest first by item id, or by name
-    const order = sorter.order() === "newest" ? (a: ItemInfo, b: ItemInfo) => b.id - a.id || a.displayName.localeCompare(b.displayName) : (a: ItemInfo, b: ItemInfo) => a.displayName.localeCompare(b.displayName);
+    // newest first (a workshop taunt by its zip's date, the game's by item id), or by name
+    const order = sorter.order() === "newest" ? newestFirst : (a: ItemInfo, b: ItemInfo) => a.displayName.localeCompare(b.displayName);
     const textMatch = (w: ItemInfo) => !q || w.displayName.toLowerCase().includes(q) || w.name.toLowerCase().includes(q);
     const matches = (category === "taunt"
       ? db.taunts.filter((t) => itemUsableBy(t, cls) && textMatch(t)).sort(order)

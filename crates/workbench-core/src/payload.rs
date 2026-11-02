@@ -471,6 +471,9 @@ struct ItemJson<'a> {
     paintable: bool,
     /// Wearing the item puts the character in the zombie skin (the Voodoo-Cursed souls).
     skin_override: bool,
+    /// One material the whole model is drawn with (`visuals/material_override`, the Golden Wrench), a path under `materials/`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    material_override: Option<&'a str>,
     /// The particle effects the item always shows.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     particles: Vec<ParticleJson<'a>>,
@@ -480,7 +483,12 @@ struct ItemJson<'a> {
     taunt_prop_scenes: &'a std::collections::BTreeMap<String, String>,
     taunt_scene_paths: &'a std::collections::BTreeMap<String, String>,
     workshop: bool,
+    /// A workshop item: when its zip was last written (seconds since 1970).
+    #[serde(skip_serializing_if = "is_zero")]
+    added: u64,
 }
+
+fn is_zero(n: &u64) -> bool { *n == 0 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -522,6 +530,7 @@ fn item_json(i: &source_formats::items::Item) -> ItemJson<'_> {
         equip_regions: &i.equip_regions,
         paintable: i.paintable,
         skin_override: i.skin_override,
+        material_override: i.material_override.as_deref(),
         particles: i.particles.iter().map(|p| ParticleJson { effect: p.effect, system: p.system.as_deref(), attachment: p.attachment.as_deref() }).collect(),
         medal: i.is_medal(),
         quality: &i.quality,
@@ -529,6 +538,7 @@ fn item_json(i: &source_formats::items::Item) -> ItemJson<'_> {
         taunt_prop_scenes: &i.taunt_prop_scenes,
         taunt_scene_paths: &i.taunt_scene_paths,
         workshop: i.workshop,
+        added: i.added,
         styles: i
             .styles
             .iter()

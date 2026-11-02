@@ -340,14 +340,19 @@ impl VpkSet {
         ["items_game.txt", "workbench_items.txt"].iter().find_map(|name| std::fs::read(dir.join(name)).ok()).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
     }
 
-    /// The manifests (`manifest.txt`) of the mounted workshop zips, with the zip's file name.
-    pub fn workshop_manifests(&self) -> Vec<(String, String)> {
+    /// The manifests (`manifest.txt`) of the mounted workshop zips, with the zip's file name and the time it was last written (seconds since
+    /// 1970; what the file list of Windows shows as Date modified).
+    pub fn workshop_manifests(&self) -> Vec<(String, String, u64)> {
         self.workshop
             .read()
             .unwrap()
             .zips
             .iter()
-            .filter_map(|z| Some((z.path.file_stem()?.to_string_lossy().into_owned(), z.manifest()?)))
+            .filter_map(|z| {
+                let modified = std::fs::metadata(&z.path).and_then(|m| m.modified()).ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
+                Some((z.path.file_stem()?.to_string_lossy().into_owned(), z.manifest()?, modified))
+            })
             .collect()
     }
 
