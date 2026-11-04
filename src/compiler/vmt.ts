@@ -126,6 +126,18 @@ export interface MaterialSettings {
   rimMask: boolean;
   halfLambert: boolean;
   baseAlphaPhongMask: boolean;
+  /** `$phongalbedotint`: the phong highlight takes the colour of the diffuse texture (written to the VMT; the preview's shader ignores it). */
+  phongAlbedoTint: boolean;
+  /** `$phongfresnelranges`: how strong the highlight is face on, in between and at glancing angles (the importer fixes it at .25 .5 1). */
+  phongFresnel: [number, number, number];
+  /** `$phongtint`, 0-255: tints the highlight; null leaves it out. */
+  phongTint: [number, number, number] | null;
+  /** `$phongwarptexture`: a game texture that shapes the highlight ("" leaves it out). */
+  phongWarp: string;
+  /** `$envmapfresnel`, `$envmapcontrast`, `$envmapsaturation`: how the reflection fades at the edges, its contrast and its colour (0, 0, 1 are the shader's own). */
+  envmapFresnel: number;
+  envmapContrast: number;
+  envmapSaturation: number;
   /** Takes the paint of the item (Team Spirit...): blends it over the texture where the base alpha says so. */
   paintable: boolean;
   blendTintColorOverBase: number;
@@ -146,7 +158,7 @@ export interface MaterialSettings {
 
 export const DEFAULT_MATERIAL: Readonly<MaterialSettings> = {
   lightwarp: LIGHTWARPS[0].path, phongExponent: 25, phongBoost: 0.1, rimLight: true, rimExponent: 4, rimBoost: 2, rimMask: false,
-  halfLambert: false, baseAlphaPhongMask: false, paintable: false, blendTintColorOverBase: 0, colorTintBase: [255, 255, 255],
+  halfLambert: false, baseAlphaPhongMask: false, phongAlbedoTint: false, phongFresnel: [0.25, 0.5, 1], phongTint: null, phongWarp: "", envmapFresnel: 0, envmapContrast: 0, envmapSaturation: 1, paintable: false, blendTintColorOverBase: 0, colorTintBase: [255, 255, 255],
   translucent: false, alphaTest: false, additive: false, selfIllum: false, selfIllumTint: [255, 255, 255],
   envmap: "", envmapMask: "", envmapTint: [255, 255, 255], customProxies: [],
 };
@@ -187,6 +199,7 @@ export function buildVmt(settings: Readonly<MaterialSettings>, textures: Readonl
   set(kv, "$rimmask", flag(s.rimMask));
   set(kv, "$halflambert", flag(s.halfLambert));
   set(kv, "$basemapalphaphongmask", flag(s.baseAlphaPhongMask));
+  if (s.phongAlbedoTint) set(kv, "$phongalbedotint", "1");
   if (s.blendTintColorOverBase !== 0) set(kv, "$blendtintcoloroverbase", float(Math.min(1, Math.max(0, s.blendTintColorOverBase))));
   if (s.colorTintBase.some((v, i) => v !== d.colorTintBase[i])) set(kv, "$colortint_base", color255(s.colorTintBase));
   set(kv, "$translucent", flag(s.translucent));
@@ -205,6 +218,16 @@ export function buildVmt(settings: Readonly<MaterialSettings>, textures: Readonl
   set(kv, "$bumpmap", textures.normal ?? "");
   set(kv, "$phongexponenttexture", textures.phongexponent ?? "");
   set(kv, "$selfillummask", textures.illum ?? "");
+
+  if (s.phongFresnel.some((v, i) => v !== d.phongFresnel[i])) set(kv, "$phongfresnelranges", `[${s.phongFresnel.map((v) => String(Number(v.toFixed(3)))).join(" ")}]`);
+  // (0-255 in braces, as most of the game's cosmetics that tint their highlight write it)
+  if (s.phongTint) set(kv, "$phongtint", color255(s.phongTint));
+  if (s.phongWarp) set(kv, "$phongwarptexture", s.phongWarp);
+  if (s.envmap) {
+    if (s.envmapFresnel !== 0) set(kv, "$envmapfresnel", float(s.envmapFresnel));
+    if (s.envmapContrast !== 0) set(kv, "$envmapcontrast", float(s.envmapContrast));
+    if (s.envmapSaturation !== 1) set(kv, "$envmapsaturation", float(s.envmapSaturation));
+  }
 
   removeUnnecessary(kv, s.paintable, !!textures.phongexponent);
   // the artist's own proxies run after the importer's

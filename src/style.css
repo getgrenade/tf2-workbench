@@ -659,6 +659,7 @@ td.n { text-align: right; font-variant-numeric: tabular-nums; }
 .compilerPane .cmpLods .row2 input.text { min-width: 0; }
 .compilerPane .cmpMaterials { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; align-items: stretch; }
 .compilerPane .cmpMaterials .cmpMaterial { margin-top: 8px; min-width: 0; }
+.compilerPane .cmpMaterials .cmpMaterial:only-child { grid-column: 1 / -1; } /* one material: it takes the whole width */
 .compilerPane .cmpMaterials .cmpMaterial .row2 input.text { min-width: 0; }
 .compilerPane .cmpMaterials .cmpName, .compilerPane .cmpMaterials .hint { overflow-wrap: anywhere; }
 .compilerPane .cmpPicker { width: 100%; height: 22px; padding: 0 2px; border: 1px solid var(--line); border-radius: var(--ui-radius); background: var(--bg); cursor: pointer; }
@@ -776,6 +777,9 @@ td.n { text-align: right; font-variant-numeric: tabular-nums; }
 .compilerPane .cmpCheckRow { display: flex; align-items: center; gap: 6px; }
 .compilerPane .cmpCheckRow .cmpCheck { margin: 4px 0 0; flex: 1; }
 .compilerPane .cmpCheckRow .cmpPicker { width: 34px; height: 20px; flex: none; margin-top: 4px; }
+.compilerPane .cmpReset { width: 20px; height: 20px; flex: none; margin: 4px 0 0; padding: 0; display: grid; place-items: center; border-color: transparent; background: transparent; color: var(--dim); }
+.compilerPane .cmpReset:hover { background: var(--ui-hover); color: inherit; }
+.compilerPane .cmpReset svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
 
 /* The backpack icon studio: the view is framed square (its full height); the lines are the rows the picture must stay between */
 #iconFrame { position: absolute; top: 0; bottom: 0; left: 50%; aspect-ratio: 1; transform: translateX(-50%); z-index: 6; pointer-events: none; border: 1px solid #ffffff66; box-shadow: 0 0 0 100vmax var(--ui-shade-3); }
@@ -1380,3 +1384,23 @@ body.dndActive.dndRefused * { cursor: no-drop !important; }
 .bdAsk { position: fixed; z-index: 1000; padding: 6px; background: var(--ui-float, var(--panel)); border: 1px solid var(--line); border-radius: var(--ui-radius-l); box-shadow: 0 6px 20px rgba(0, 0, 0, .45); }
 .bdAsk input { width: 190px; height: var(--ui-h); padding: 0 8px; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: var(--ui-radius); }
 .bdHint { margin: 0; color: var(--dim); font-size: var(--ui-fs-small); }
+
+/* The colour picker of every colour input (colorWheel.ts): a hue ring around a saturation/value square */
+.colorWheel { position: fixed; z-index: 10000; display: flex; flex-direction: column; gap: 8px; padding: 8px; background: var(--panel); border: 1px solid var(--ui-line-strong); border-radius: var(--ui-radius-l); box-shadow: 0 6px 18px var(--ui-shade-3); }
+.colorWheel canvas { display: block; touch-action: none; cursor: crosshair; }
+.colorWheel .cwGrid { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 6px; width: 200px; }
+.colorWheel .cwSwatch { display: flex; height: 22px; border: 1px solid var(--line); border-radius: var(--ui-radius); overflow: hidden; }
+.colorWheel .cwOld { flex: 1; padding: 0; border: 0; border-radius: 0; cursor: pointer; }
+.colorWheel .cwNow { flex: 1; }
+.colorWheel .cwHex { width: 100%; min-width: 0; height: 22px; padding: 0 6px; font: inherit; font-size: var(--ui-fs-small); font-family: ui-monospace, monospace; color: inherit; background: var(--ui-input); border: 1px solid var(--line); border-radius: var(--ui-radius); }
+.colorWheel .cwSeg { display: flex; gap: 2px; }
+.colorWheel .cwSeg button { flex: 1; padding: 1px 0; font-size: var(--ui-fs-small); }
+.colorWheel .cwSeg button.on { border-color: var(--ui-accent-line); background: var(--ui-accent-soft); color: var(--fg); }
+.colorWheel .cwNums { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.colorWheel .cwNums label { display: flex; align-items: center; gap: 4px; min-width: 0; font-size: var(--ui-fs-small); color: var(--dim); }
+.colorWheel .cwNums input { flex: 1; min-width: 0; width: 100%; height: 22px; padding: 0 4px; font: inherit; color: var(--fg); background: var(--ui-input); border: 1px solid var(--line); border-radius: var(--ui-radius); }
+.colorWheel .cwDropper { width: 100%; height: 22px; padding: 0; display: grid; place-items: center; color: var(--dim); }
+.colorWheel .cwNums input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.colorWheel .cwDropper:hover { background: var(--ui-hover); color: inherit; }
+.colorWheel .cwDropper svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.cwCover { position: fixed; inset: 0; z-index: 100000; cursor: crosshair; }

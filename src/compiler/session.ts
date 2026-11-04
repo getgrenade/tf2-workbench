@@ -28,11 +28,27 @@ import { classSiblings, lodSiblings, materialDiffuse, textureDirsFor, textureSib
 export type Prefab = "hat" | "misc";
 export const PREFABS: Prefab[] = ["hat", "misc"];
 
-/** The equip regions an item can take (the importer reads these from the schema). */
+/** The equip regions of every class: equip_regions_list of items_game.txt, without its "shared" groups. */
 export const EQUIP_REGIONS = [
-  "hat", "whole_head", "face", "glasses", "beard", "lenses", "ears", "shirt", "pants", "feet", "grenades", "belt_misc", "backpack",
-  "back", "arms", "hands", "medal", "necklace", "earbuds", "head_skin", "arms_misc", "zombie_body", "sleeves",
+  "whole_head", "hat", "face", "glasses", "lenses", "pants", "beard", "shirt", "medal", "arms", "back", "feet", "necklace", "grenades",
+  "arm_tattoos", "flair", "head_skin", "ears", "left_shoulder", "belt_misc", "disconnected_floating_item", "zombie_body", "sleeves", "right_shoulder",
 ];
+
+/**
+ * The class regions: the "shared" groups of equip_regions_list, by the class (its model name) the region belongs to. A shared group is one
+ * region bit with a name for each class, so these never clash across classes.
+ */
+export const CLASS_EQUIP_REGIONS: Record<string, string[]> = {
+  scout: ["scout_bandages", "scout_backpack", "scout_hands", "scout_wings", "scout_pants"],
+  soldier: ["soldier_gloves", "soldier_pocket", "soldier_coat", "soldier_cigar", "soldier_legs"],
+  pyro: ["pyro_spikes", "pyro_wings", "pyro_tail", "pyro_head_replacement"],
+  demo: ["demo_eyepatch", "demo_belt", "demoman_collar", "demo_head_replacement"],
+  heavy: ["heavy_belt_back", "heavy_pocket", "heavy_belt", "heavy_towel", "heavy_hair", "heavy_bullets", "heavy_hip"],
+  engineer: ["engineer_pocket", "engineer_belt", "engineer_left_arm", "engineer_wings", "engineer_hair"],
+  medic: ["medigun_accessories", "medic_gloves", "medic_pipe", "medigun_backpack", "medic_hip"],
+  sniper: ["sniper_quiver", "sniper_bullets", "sniper_legs", "sniper_headband", "sniper_vest", "sniper_pocket_left", "sniper_pocket"],
+  spy: ["spy_gloves", "spy_coat"],
+};
 
 /** kBodygroupArray of the importer: the parts of the class an item may hide. */
 export const BODYGROUPS = ["backpack", "dogtags", "grenades", "hands", "hat", "head", "headphones", "shoes", "shoes_socks", "bullets"];

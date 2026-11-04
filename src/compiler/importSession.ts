@@ -15,8 +15,9 @@ export class ImportSessionError extends Error {}
 const truthy = (v: string | undefined) => v !== undefined && v !== "" && v !== "0" && Number(v) !== 0 && v.toLowerCase() !== "false";
 const num = (v: string | undefined, fallback: number) => { const n = Number(v); return v !== undefined && v !== "" && Number.isFinite(n) ? n : fallback; };
 
-/** "{ 255 128 0 }" or "[1 0.5 0]" (a 0-1 colour when \`unit\`) as 0-255 numbers, or the fallback. */
+/** "{ 255 128 0 }" or "[1 0.5 0]" (a 0-1 colour when \`unit\`; braces are 0-255 whatever the parameter, as the engine reads them) as 0-255 numbers, or the fallback. */
 function colour(v: string | undefined, unit: boolean, fallback: [number, number, number]): [number, number, number] {
+  if (v?.trim().startsWith("{")) unit = false;
   const parts = (v ?? "").replace(/[{}\[\]]/g, " ").trim().split(/\s+/).map(Number);
   if (parts.length !== 3 || parts.some((p) => !Number.isFinite(p))) return [...fallback];
   return parts.map((p) => Math.min(255, Math.max(0, Math.round(unit ? p * 255 : p)))) as [number, number, number];
@@ -37,6 +38,13 @@ export function settingsFromVmt(root: KvNode[]): MaterialSettings {
     rimMask: truthy(p["$rimmask"]),
     halfLambert: truthy(p["$halflambert"]),
     baseAlphaPhongMask: truthy(p["$basemapalphaphongmask"]),
+    phongAlbedoTint: truthy(p["$phongalbedotint"]),
+    phongFresnel: (() => { const n = (p["$phongfresnelranges"] ?? "").match(/-?\d*\.?\d+/g)?.map(Number); return n && n.length === 3 ? [n[0], n[1], n[2]] as [number, number, number] : [...d.phongFresnel] as [number, number, number]; })(),
+    phongTint: p["$phongtint"] !== undefined ? colour(p["$phongtint"], true, [255, 255, 255]) : null,
+    phongWarp: p["$phongwarptexture"] ?? "",
+    envmapFresnel: num(p["$envmapfresnel"], d.envmapFresnel),
+    envmapContrast: num(p["$envmapcontrast"], d.envmapContrast),
+    envmapSaturation: num(p["$envmapsaturation"], d.envmapSaturation),
     // the importer keeps the paint switch in the session, not in the text: a text with paint colours is taken as paintable until it is told
     paintable: p["$colortint_base"] !== undefined,
     blendTintColorOverBase: num(p["$blendtintcoloroverbase"], d.blendTintColorOverBase),

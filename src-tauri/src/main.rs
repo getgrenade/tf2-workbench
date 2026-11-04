@@ -8,6 +8,7 @@ mod thumbcache;
 mod state;
 mod native_particles;
 mod play_mouse;
+mod screen_color;
 
 fn main() {
     tauri::Builder::default()
@@ -20,6 +21,7 @@ fn main() {
             blender::export_blend_rig,
             play_mouse::play_mouse_start,
             play_mouse::play_mouse_stop,
+            screen_color::pick_screen_color,
             commands::find_tf2,
             commands::index_tf2,
             commands::list_dir,

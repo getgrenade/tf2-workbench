@@ -50,10 +50,12 @@ export interface ItemsHooks {
   apply: (loadout: Equipped[]) => Promise<void>;
   /** Whether items that share an equip region may be worn together (a setting; off: equipping one replaces the others). */
   allowOverlap: () => boolean;
-  /** The item being built in the compiler while it is worn by the displayed character, or null. */
-  temporary?: () => { name: string } | null;
+  /** The item being built in the compiler while it is worn by the displayed character, or null; it is painted like a cosmetic (to preview paints on it). */
+  temporary?: () => { name: string; paintable: boolean; paint: PaintInfo | null } | null;
   /** Takes the temporary item off. */
   removeTemporary?: () => void;
+  /** Paints the temporary item (null takes the paint off). */
+  paintTemporary?: (paint: PaintInfo | null) => void;
   /** Opens just this item, alone, in a scene of its own. */
   inspect: (item: ItemInfo) => void;
   /** Opens the Styles panel of a workshop item (its styles, and the zips linked to it as styles) at a screen position. */
@@ -65,6 +67,9 @@ export interface ItemsHooks {
 }
 
 const MAX_ROWS = 600;
+
+/** The id the item being built in the compiler goes by while it is worn (no item of the game or the workshop has it): what a click on it picks. */
+export const TEMPORARY_ITEM = -1;
 
 const SORTS = {
   newest: newestFirst,
@@ -221,10 +226,15 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
     const temp = hooks.temporary?.();
     if (temp) {
       const card = document.createElement("div");
-      card.className = "equip temp";
-      card.innerHTML = `<div class="equipIcon"><b class="x" title="Remove">✕</b></div><div class="equipName">${escapeHtml(temp.name)}</div><div class="equipName dim">temporary</div>`;
-      card.title = "The item from the Compiler tab; it stays until removed here or the compiler item is emptied";
-      card.onclick = (ev) => { if ((ev.target as HTMLElement).classList.contains("x")) hooks.removeTemporary?.(); };
+      card.className = "equip temp" + (selection.has(TEMPORARY_ITEM) ? " active" : "");
+      const dot = temp.paint ? `<i class="dot" style="background:${paintFill(temp.paint)}" title="${escapeHtml(temp.paint.displayName)}"></i>` : "";
+      card.innerHTML = `<div class="equipIcon">${dot}<b class="x" title="Remove">✕</b></div><div class="equipName">${escapeHtml(temp.name)}</div><div class="equipName dim">temporary</div>`;
+      card.title = `The item from the Compiler tab; it stays until removed here or the compiler item is emptied. ${temp.paintable ? "Click to pick a paint (Shift + click selects several)" : "Cannot be painted: no material of it is Paintable"}`;
+      card.onclick = (ev) => {
+        if ((ev.target as HTMLElement).classList.contains("x")) { hooks.removeTemporary?.(); return; }
+        const r = card.getBoundingClientRect();
+        openPaintMenu(TEMPORARY_ITEM, r.left, r.bottom + 4, ev.shiftKey);
+      };
       els.equipped.appendChild(card);
     }
   }
@@ -292,7 +302,7 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
    * is added to the selection (or taken out of it when it is in it) and the chart stays where it is.
    */
   function openPaintMenu(itemId: number, x: number, y: number, extend = false) {
-    if (!visible().some((e) => e.item.id === itemId)) return;
+    if (!paintTargets().some((e) => e.item.id === itemId)) return;
     closeStyleMenu();
     activeId = itemId;
     if (extend && paintMenu) {
@@ -308,9 +318,15 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
     showPaintMenu(x, y);
   }
 
+  /** What the chart can paint: the worn cosmetics, and the temporary compiler item as one more (under TEMPORARY_ITEM; its paint is kept by the hooks). */
+  function paintTargets(): { item: Pick<ItemInfo, "id" | "displayName" | "paintable">; paint: PaintInfo | null }[] {
+    const temp = hooks.temporary?.();
+    return temp ? [...visible(), { item: { id: TEMPORARY_ITEM, displayName: temp.name, paintable: temp.paintable }, paint: temp.paint }] : visible();
+  }
+
   /** Selects every equipped cosmetic and opens the paint chart for all of them. */
   function selectAllEquipped(x: number, y: number) {
-    const all = visible();
+    const all = paintTargets();
     if (all.length === 0) return;
     closeStyleMenu();
     closePaintMenu();
@@ -334,7 +350,7 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
 
   function renderPaintMenu() {
     const menu = paintMenu;
-    const chosen = visible().filter((e) => selection.has(e.item.id));
+    const chosen = paintTargets().filter((e) => selection.has(e.item.id));
     if (!menu || chosen.length === 0) {
       closePaintMenu();
       return;
@@ -361,8 +377,10 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
       b.textContent = paint ? "" : "✕";
       b.onclick = () => {
         for (const e of paintable) e.paint = paint;
+        if (paintable.some((e) => e.item.id === TEMPORARY_ITEM)) hooks.paintTemporary?.(paint);
         changed();
-        hooks.restyled?.(paintable.map((e) => ({ item: e.item.id, paint })));
+        const worn = paintable.filter((e) => e.item.id !== TEMPORARY_ITEM);
+        if (worn.length) hooks.restyled?.(worn.map((e) => ({ item: e.item.id, paint })));
       };
       return b;
     };

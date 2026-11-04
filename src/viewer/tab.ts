@@ -8,7 +8,7 @@ import { propLabel } from "../props/propList";
 import { forgetThumbnail } from "../props/propThumbs";
 import { decodeTga, encodeTga, iconProblem, ICON_SAFE_ROWS } from "../compiler/tga";
 import { fadeAmount, maskIcon, type IconFade } from "../compiler/iconMask";
-import { importSourceDir, readItemSession, readPropSession, saveItemIcon, buildItem, buildProp, loadTextureFrames, readSourceFile, revealFile, sourceSiblings, sourceStamp, mountItemZips } from "../api";
+import { searchPaths, importSourceDir, readItemSession, readPropSession, saveItemIcon, buildItem, buildProp, loadTextureFrames, readSourceFile, revealFile, sourceSiblings, sourceStamp, mountItemZips } from "../api";
 import { FILE_DROP_EVENT, type FileDropDetail } from "../fileDrop";
 import { parseTextureFrames } from "./sourceMaterials";
 import { getWeaponProfile, importEffectZip, removeCustomEffect, type WeaponProfile, type UnusualEffectInfo } from "../api";
@@ -25,7 +25,7 @@ import { parseScene, type SceneEntity, type SceneFile } from "./scene";
 import { deletePoseFile, openPosesFolder, readPoses, refreshWorkshop as refreshWorkshopCommand, savePoseFile, workshopStamp as workshopStampCommand } from "../api";
 import { applyHandFile, parsePoseFile, poseForSkeleton, toHandFile, toPoseFile, type PoseData, type PoseFile } from "./poseRig";
 import * as THREE from "three";
-import { createItemsUi, type Equipped, type ItemsEls } from "./itemsUi";
+import { createItemsUi, TEMPORARY_ITEM, type Equipped, type ItemsEls } from "./itemsUi";
 import { unpackRgb } from "./proxies";
 import { PlayController } from "./play";
 import { createNavGizmo } from "./navGizmo";
@@ -412,6 +412,8 @@ export function createViewTab(els: Els) {
   let selected: Entity | null = null;
   // --- the compiler: the item under construction, shown on the selected character ---
   let compilerPreview: PreviewApplication | null = null;
+  /** The paint picked for the compiler's item in the paint chart (kept while the item is worn, also as it is rebuilt). */
+  let compilerPaint: PaintInfo | null = null;
   let compilerTarget: Entity | null = null;
   let compilerOn = false;
   /** The bone of the item being built that is drawn with its axes and constraints (see the jiggle bone editor). */
@@ -463,6 +465,7 @@ export function createViewTab(els: Els) {
     const stale = new Set([...(compilerPreview?.materials.keys() ?? []), ...(preview?.materials.keys() ?? [])]);
     if (stale.size) viewer?.mats.purge((path) => stale.has(path));
     compilerPreview = preview;
+    if (!preview) compilerPaint = null;
     const previous = compilerTarget;
     compilerTarget = preview ? selected : null;
     if (previous && previous !== compilerTarget && entities.includes(previous)) void applyLoadout(previous, previous.applied);
@@ -504,8 +507,14 @@ export function createViewTab(els: Els) {
     },
     setPreview: showCompilerItem,
     pick: async (kind, current) => {
-      const picked = await open({ multiple: false, directory: false, defaultPath: current || undefined, filters: [{ name: kind === "fbx" ? "Model" : kind === "smd" ? "Collision model" : "Texture", extensions: kind === "fbx" ? [...MODEL_EXTENSIONS] : [kind] }] });
+      const filter = kind === "fbx" ? { name: "Model", extensions: [...MODEL_EXTENSIONS] }
+        : { name: kind === "smd" ? "Collision model" : "Texture", extensions: [kind] };
+      const picked = await open({ multiple: false, directory: false, defaultPath: current || undefined, filters: [filter] });
       return typeof picked === "string" ? picked : null;
+    },
+    searchTextures: async (query) => {
+      const found = await searchPaths(query.toLowerCase(), 600);
+      return found.filter((p) => /^materials\/.*\.vtf$/i.test(p)).map((p) => p.replace(/^materials\//i, "").replace(/\.vtf$/i, ""));
     },
     pickFolder: async (current) => {
       const picked = await open({ multiple: false, directory: true, defaultPath: current || undefined });
@@ -891,7 +900,8 @@ export function createViewTab(els: Els) {
     // the item being built in the compiler is worn like any other cosmetic, by the character it is shown on
     if (compilerPreview && e === compilerTarget && compilerPreview.cls === e.cls) {
       for (const [path, material] of compilerPreview.materials) materials.set(path, material);
-      list.push({ data: compilerPreview.data, paint: null, skin: team, clip: null });
+      const rgb = compilerPaint && compilerPreview.paintable ? (team === 1 ? compilerPaint.rgb2 ?? compilerPaint.rgb : compilerPaint.rgb) : null;
+      list.push({ data: compilerPreview.data, paint: rgb === null ? null : unpackRgb(rgb), skin: team, clip: null, itemId: TEMPORARY_ITEM });
     }
     e.actor.setCosmetics(list);
     e.actor.setProp(prop);
@@ -1035,7 +1045,10 @@ export function createViewTab(els: Els) {
     inspect: (item) => void inspectItem(item, false),
     workshopStyles: (item, x, y) => openItemStyles(itemStylesHost, item.name, { x, y }),
     allowOverlap: () => settings().allowOverlappingCosmetics,
-    temporary: () => (compilerPreview && selected && selected === compilerTarget && compilerPreview.cls === selected.cls ? { name: compilerPreview.name } : null),
+    temporary: () => (compilerPreview && selected && selected === compilerTarget && compilerPreview.cls === selected.cls ? { name: compilerPreview.name, paintable: compilerPreview.paintable, paint: compilerPaint } : null),
+    paintTemporary: (paint) => {
+      compilerPaint = paint;
+    },
     removeTemporary: () => showCompilerItem(null),
   });
 

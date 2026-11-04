@@ -19,6 +19,7 @@ import { installFileDrop } from "./fileDrop";
 import { codeName, binding, hotkeyMatches } from "./hotkeys";
 import { applyTheme } from "./theme";
 import { installSliderWheel } from "./sliderWheel";
+import { installColorWheel } from "./colorWheel";
 import { installNoNativeMenu } from "./noNativeMenu";
 
 // files dropped from the file explorer go to the rows that take them; the page's own drags are made with the pointer (see dnd.ts)
@@ -604,6 +605,7 @@ $("tabView").onclick = () => showTab("view");
 $("tabCompiler").onclick = () => showTab("compiler");
 $("tabSettings").onclick = () => showTab("settings");
 installSliderWheel();
+installColorWheel();
 installNoNativeMenu();
 void createSettingsUi($("settings"));
 void loadSettings().then((s) => { applyTheme(s.uiBase, s.uiAccent); refreshHotkeyTitles(); startUiScale(); });

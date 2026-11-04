@@ -1,5 +1,5 @@
 import type { MaterialData, ModelData } from "../viewer/payload";
-import { BODYGROUPS, EQUIP_REGIONS, PREFABS, TRIANGLE_BUDGET, CompilerSession, blankMaterial, type CompilerMaterial, type SessionIo } from "./session";
+import { BODYGROUPS, CLASS_EQUIP_REGIONS, EQUIP_REGIONS, PREFABS, TRIANGLE_BUDGET, CompilerSession, blankMaterial, type CompilerMaterial, type SessionIo } from "./session";
 import { ENVMAPS, LIGHTWARPS, type MaterialSettings } from "./vmt";
 import type { ItemBuildRequest, PropBuildRequest } from "../api";
 import { makeBuildRequest } from "./request";
@@ -25,6 +25,8 @@ export interface PreviewApplication {
   materials: Map<string, MaterialData>;
   /** The body groups of the class the item hides (name -> 1), like the ones a cosmetic's schema entry names. */
   bodygroups: Record<string, number>;
+  /** A material of it takes paint (its Paintable switch): the viewer lets it be painted like a cosmetic. */
+  paintable: boolean;
 }
 
 /** What the compiler needs of the viewer it sits in. */
@@ -57,6 +59,8 @@ export interface CompilerHost {
   setPreview(preview: PreviewApplication | null): void;
   /** The open dialog for a source file; the chosen path, or null. */
   pick(kind: "fbx" | "tga" | "smd", current: string): Promise<string | null>;
+  /** Game textures (paths under materials, without folder and extension) whose path contains a text: for the light ramp, reflection and phong warp boxes. */
+  searchTextures?(query: string): Promise<string[]>;
   /** The open dialog for a folder (where a prop is written to). Props are of the desktop program only. */
   pickFolder?(current: string): Promise<string | null>;
   /** Shows the prop being compiled in the scene (null takes it away). */
@@ -195,6 +199,15 @@ export function createCompilerUi(host: CompilerHost) {
     return h("label", { className: "cmpCheck", title }, input, ` ${label}`);
   }
 
+  /** A small button that puts settings back to their defaults (the icon is Lucide's rotate-ccw, ISC). */
+  function resetButton(title: string, run: () => void) {
+    const b = h("button", { type: "button", className: "cmpReset", title });
+    b.setAttribute("aria-label", title);
+    b.innerHTML = '<svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>';
+    b.onclick = run;
+    return b;
+  }
+
   /**
    * A slider with a box to type the number in (which may go past the slider's end); the mouse wheel over either moves it, as every slider's
    * does (see sliderWheel.ts). Changes are not redrawn through `render`: that would rebuild the slider under the pointer in the middle of a drag.
@@ -237,6 +250,43 @@ export function createCompilerUi(host: CompilerHost) {
     return h("label", { className: "cmpNum" }, h("span", { textContent: label }), el);
   }
 
+  let datalistId = 0;
+  /**
+   * A game texture setting: the importer's presets, or any texture of the game by its path (typing searches the game's files). The path is what
+   * goes into the material; the preview loads it from the game when it can.
+   */
+  function gameTexture(label: string, value: string, presets: { name: string; path: string }[], hint: string, change: (v: string) => void, title = "") {
+    const OTHER = "\u0000other";
+    const preset = presets.some((p) => p.path === value);
+    const sel = h("select", {});
+    for (const p of presets) sel.append(h("option", { value: p.path, textContent: p.name, selected: preset && p.path === value }));
+    sel.append(h("option", { value: OTHER, textContent: "other game texture...", selected: !preset }));
+    const id = `cmpGame${++datalistId}`;
+    const list = h("datalist", { id });
+    const input = h("input", { className: "text", type: "text", value: preset ? "" : value, placeholder: `path, e.g. ${hint}`, spellcheck: false, hidden: preset });
+    input.setAttribute("list", id);
+    let timer = 0;
+    const search = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(async () => {
+        const found = await host.searchTextures?.(input.value.trim() || hint).catch(() => []) ?? [];
+        list.replaceChildren(...found.slice(0, 60).map((f) => h("option", { value: f })));
+      }, 200);
+    };
+    input.oninput = search;
+    input.onfocus = search;
+    // a path as the material wants it: forward slashes, no materials/ folder, no extension (a VMT has no escapes, so a backslash would be kept as typed)
+    input.onchange = () => {
+      const path = input.value.trim().replace(/\\/g, "/").replace(/^\/+/, "").replace(/^materials\//i, "").replace(/\.(vtf|vmt)$/i, "");
+      input.value = path;
+      change(path);
+    };
+    sel.onchange = () => {
+      if (sel.value === OTHER) { input.hidden = false; input.focus(); } else { input.hidden = true; change(sel.value); }
+    };
+    return h("div", {}, h("label", { className: "cmpNum", title }, h("span", { textContent: label }), sel), input, list);
+  }
+
   const foldedParts = new Set<string>();
   /** A part of a material's panel that folds. */
   function fold(title: string, key: string, body: HTMLElement) {
@@ -255,7 +305,7 @@ export function createCompilerUi(host: CompilerHost) {
     return h("div", { className: "cmpFold" }, head, body);
   }
 
-  function materialSettings(m: CompilerMaterial) {
+  function materialSettings(m: CompilerMaterial, name: string) {
     const s = m.settings;
     const team = session.data.teamColors;
     const set = (patch: Partial<MaterialSettings>) => { Object.assign(m.settings, patch); changed(false); };
@@ -263,7 +313,7 @@ export function createCompilerUi(host: CompilerHost) {
     const live = (patch: Partial<MaterialSettings>) => { Object.assign(m.settings, patch); quiet(); };
     const settings = h("div", { className: "cmpSettingsBody" });
     appendAll(settings,
-      select("Light ramp", s.lightwarp, LIGHTWARPS.map((w) => ({ value: w.path, label: w.name })), (v) => set({ lightwarp: v })),
+      gameTexture("Light ramp", s.lightwarp, LIGHTWARPS, "lightwarp", (v) => set({ lightwarp: v }), "The gradient that shades the item. Any gradient texture of the game works by its path."),
       slider("Phong exponent", s.phongExponent, 0, 150, 1, (v) => live({ phongExponent: v })),
       slider("Phong boost", s.phongBoost, 0, 10, 0.05, (v) => live({ phongBoost: v })),
       checkbox("Rim light", s.rimLight, (v) => set({ rimLight: v })),
@@ -284,12 +334,32 @@ export function createCompilerUi(host: CompilerHost) {
       checkbox("Self-illumination", s.selfIllum, (v) => set({ selfIllum: v })),
       gate(s.selfIllum, colorRow(team ? "Glow colour RED" : "Glow colour", s.selfIllumTint, (v) => set({ selfIllumTint: v }))),
       team ? gate(s.selfIllum, colorRow("Glow colour BLU", (m.blueTint ?? s).selfIllumTint, (v) => { m.blueTint = { colorTintBase: (m.blueTint ?? s).colorTintBase, selfIllumTint: v }; changed(false); })) : null,
-      select("Reflection", s.envmap, ENVMAPS.map((e) => ({ value: e.path, label: e.name })), (v) => set({ envmap: v })),
+      gameTexture("Reflection", s.envmap, ENVMAPS, "cube", (v) => set({ envmap: v }), "A cubemap of the game, by its path"),
       gate(!!s.envmap, select("Reflection mask", s.envmapMask, [
         { value: "", label: "none" }, { value: "$basealphaenvmapmask", label: "diffuse alpha" }, { value: "$normalmapalphaenvmapmask", label: "normal map alpha" },
       ], (v) => set({ envmapMask: v }))),
       gate(!!s.envmap, colorRow("Reflection tint", s.envmapTint, (v) => set({ envmapTint: v }))),
     );
+    const advanced = h("div", { className: "cmpSettingsBody" });
+    // (the tint from the diffuse texture is masked by the exponent texture's green channel: without one it does nothing)
+    const exponentTexture = !!session.data.materials[name]?.phongexponent;
+    appendAll(advanced,
+      h("div", { className: "cmpCheckRow" },
+        checkbox("Phong albedo tint", s.phongAlbedoTint, (v) => set({ phongAlbedoTint: v }), exponentTexture
+          ? "$phongalbedotint: the highlight takes the colour of the diffuse texture where the exponent texture's green channel says so"
+          : "$phongalbedotint: the highlight takes the colour of the diffuse texture where the exponent texture's green channel says so. This material has no exponent texture, so it does nothing."),
+        resetButton("Reset fresnel to 0.25, 0.5, 1", () => set({ phongFresnel: [0.25, 0.5, 1] }))),
+      // (the game's own items go well past the importer's [.25 .5 1]: the Business Casual's grazing range is 8)
+      slider("Fresnel low", s.phongFresnel[0], 0, 10, 0.05, (v) => live({ phongFresnel: [v, s.phongFresnel[1], s.phongFresnel[2]] })),
+      slider("Fresnel mid", s.phongFresnel[1], 0, 10, 0.05, (v) => live({ phongFresnel: [s.phongFresnel[0], v, s.phongFresnel[2]] })),
+      slider("Fresnel high", s.phongFresnel[2], 0, 10, 0.05, (v) => live({ phongFresnel: [s.phongFresnel[0], s.phongFresnel[1], v] })),
+      h("div", { className: "cmpCheckRow" },
+        checkbox("Phong tint", !!s.phongTint, (v) => set({ phongTint: v ? [255, 255, 255] : null }), "$phongtint: the colour of the highlight"),
+        gate(!!s.phongTint, colorInput(s.phongTint ?? [255, 255, 255], (v) => set({ phongTint: v }), "Highlight colour"))),
+      gameTexture("Phong warp", s.phongWarp, [{ name: "none", path: "" }], "warp", (v) => set({ phongWarp: v }), "$phongwarptexture: a game texture that shapes and colours the highlight"),
+      gate(!!s.envmap, slider("Refl. fresnel", s.envmapFresnel, 0, 1, 0.05, (v) => live({ envmapFresnel: v }))),
+      gate(!!s.envmap, slider("Refl. contrast", s.envmapContrast, 0, 1, 0.05, (v) => live({ envmapContrast: v }))),
+      gate(!!s.envmap, slider("Refl. saturation", s.envmapSaturation, 0, 2, 0.05, (v) => live({ envmapSaturation: v }))));
     // the proxies the artist adds (a pulsing glow, a scrolling texture): kept with the material, run by the preview, written into the VMT
     const proxies = createProxyEditor({
       proxies: () => m.settings.customProxies ?? [],
@@ -297,7 +367,7 @@ export function createCompilerUi(host: CompilerHost) {
       selfIllum: () => m.settings.selfIllum,
     });
     const count = m.settings.customProxies?.length ?? 0;
-    return h("div", { className: "cmpSettings" }, fold("Settings", "settings", settings), fold(count ? `Proxies (${count})` : "Proxies", "proxies", proxies));
+    return h("div", { className: "cmpSettings" }, fold("Settings", "settings", settings), fold("Advanced settings", "advanced", advanced), fold(count ? `Proxies (${count})` : "Proxies", "proxies", proxies));
   }
 
   // --- the jiggle bones -------------------------------------------------------------------------------------------------
@@ -494,7 +564,6 @@ export function createCompilerUi(host: CompilerHost) {
     for (const p of PREFABS) prefab.append(h("option", { value: p, textContent: p === "hat" ? "Hat" : "Misc", selected: d.prefab === p }));
     prefab.onchange = () => { d.prefab = prefab.value as typeof d.prefab; changed(false); };
     const region = h("select", {});
-    for (const r of EQUIP_REGIONS) region.append(h("option", { value: r, textContent: r.replace(/_/g, " "), selected: d.region === r }));
     region.onchange = () => { d.region = region.value; changed(false); };
     const teamSwitch = checkbox("Team colours", d.teamColors, (on) => { session.setTeamColors(on); changed(true); }, "A RED and a BLU skin: each material gets a BLU diffuse texture and its own tints; the other textures are shared");
     const smartFill = checkbox("Smart fill", d.smartFill, (on) => { d.smartFill = on; changed(false); }, SMART_FILL_RULES);
@@ -509,6 +578,11 @@ export function createCompilerUi(host: CompilerHost) {
 
     // the class being edited is the selected character's: its models are the ones the rows below hold
     const cls = sel?.cls ?? session.primaryClass() ?? "sniper";
+    // the class regions offered are those of the shown class and of every class with a model (and the item's own, whatever it is)
+    const regionClasses = new Set([cls, ...session.classesWithModels()]);
+    const regions = [...EQUIP_REGIONS, ...Object.entries(CLASS_EQUIP_REGIONS).flatMap(([c, list]) => (regionClasses.has(c) ? list : []))];
+    if (d.region && !regions.includes(d.region)) regions.push(d.region);
+    for (const r of regions) region.append(h("option", { value: r, textContent: r, selected: d.region === r }));
     const files = session.lods(cls);
     const lods = [0, 1, 2].map((i) => {
       const model = session.model(cls, i);
@@ -568,7 +642,7 @@ export function createCompilerUi(host: CompilerHost) {
             row("Normal", "normal"),
             row("Exponent", "phongexponent"),
             gate(m.settings.selfIllum, row("Glow mask", "illum"))),
-          materialSettings(m));
+          materialSettings(m, n));
       })
       : [h("div", { className: "dim hint", textContent: "The materials of the model appear here once it is added." })];
     const materialGrid = h("div", { className: "cmpMaterials" }, ...materials);
@@ -623,7 +697,7 @@ Choose another .tga` : "Choose the backpack icon (.tga)" });
       h("div", { className: "cmpTop" },
         h("div", { className: "cmpTopMain" },
           h("label", { className: "cmpNum" }, h("span", { textContent: "Type" }), prefab),
-          h("label", { className: "cmpNum" }, h("span", { textContent: "Region" }), region),
+          h("label", { className: "cmpNum" }, h("span", { textContent: "Equip region" }), region),
           teamSwitch,
           smartFill,
           tempLods,
@@ -721,7 +795,7 @@ Choose another .tga` : "Choose the backpack icon (.tga)" });
       itemBones = skeleton;
       if (selectedBone && !skeleton.some((b) => b.name === selectedBone)) selectedBone = "";
       host.setBoneHelper(flyoutTab === "bones" && selectedBone ? { bone: selectedBone, setup: session.data.jiggles[selectedBone] ?? null } : null);
-      host.setPreview(preview ? { name: session.data.name.trim() || session.itemName || "New item", cls: sel.cls, data: preview.data, materials: preview.materials, bodygroups: preview.bodygroups } : null);
+      host.setPreview(preview ? { name: session.data.name.trim() || session.itemName || "New item", cls: sel.cls, data: preview.data, materials: preview.materials, bodygroups: preview.bodygroups, paintable: Object.values(session.data.materials).some((m) => m.settings.paintable) } : null);
       if (!same) render();
     } catch (error) {
       console.error("Item preview failed", error);

@@ -218,6 +218,8 @@ export const listCustomContent = () => invoke<CustomContent[]>("list_custom_cont
 export const addCustomContent = (path: string) => invoke<CustomContent[]>("add_custom_content", { path });
 export const removeCustomContent = (root: string) => invoke<void>("remove_custom_content", { root });
 export const revealFile = (path: string) => invoke<void>("reveal_file", { path });
+/** Waits for a click anywhere on the screen and gives the colour under it (0-255); null when Escape was pressed. */
+export const pickScreenColor = () => invoke<[number, number, number] | null>("pick_screen_color");
 /** When a source file last changed (ms since the epoch), or null while it is missing. */
 export const sourceStamp = (path: string) => invoke<number | null>("source_stamp", { path });
 /** Writes raw bytes (a PNG screenshot) to a path the user picked. */
