@@ -40,7 +40,6 @@ function close() {
 function show(input: HTMLInputElement) {
   close();
   let [h, s, v] = rgbToHsv(hexToRgb(input.value));
-  const before = input.value;
 
   const popup = document.createElement("div");
   popup.className = "colorWheel";
@@ -53,14 +52,9 @@ function show(input: HTMLInputElement) {
 
   const swatch = document.createElement("div");
   swatch.className = "cwSwatch";
-  const old = document.createElement("button");
-  old.type = "button";
-  old.className = "cwOld";
-  old.title = "Back to the colour it had";
-  old.style.background = before;
   const now = document.createElement("span");
   now.className = "cwNow";
-  swatch.append(old, now);
+  swatch.append(now);
   const hex = document.createElement("input");
   hex.className = "cwHex";
   hex.spellcheck = false;
@@ -219,7 +213,6 @@ function show(input: HTMLInputElement) {
     else hex.value = rgbToHex(hsvToRgb(h, s, v));
   };
   hex.onkeydown = (ev) => { if (ev.key === "Enter") hex.blur(); };
-  old.onclick = () => setRgb(hexToRgb(before));
   dropper.onclick = async () => {
     // a cover over the app takes the click that picks, so it does nothing else here
     const cover = document.createElement("div");

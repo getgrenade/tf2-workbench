@@ -1390,7 +1390,6 @@ body.dndActive.dndRefused * { cursor: no-drop !important; }
 .colorWheel canvas { display: block; touch-action: none; cursor: crosshair; }
 .colorWheel .cwGrid { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 6px; width: 200px; }
 .colorWheel .cwSwatch { display: flex; height: 22px; border: 1px solid var(--line); border-radius: var(--ui-radius); overflow: hidden; }
-.colorWheel .cwOld { flex: 1; padding: 0; border: 0; border-radius: 0; cursor: pointer; }
 .colorWheel .cwNow { flex: 1; }
 .colorWheel .cwHex { width: 100%; min-width: 0; height: 22px; padding: 0 6px; font: inherit; font-size: var(--ui-fs-small); font-family: ui-monospace, monospace; color: inherit; background: var(--ui-input); border: 1px solid var(--line); border-radius: var(--ui-radius); }
 .colorWheel .cwSeg { display: flex; gap: 2px; }
