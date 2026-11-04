@@ -51,9 +51,10 @@ if errorlevel 1 goto :fail
   echo.
   echo Free of charge. LICENSE, NOTICE.md and the licenses folder ^(Valve's Source 1 SDK license and notices^) must stay with every copy.
 ) > share\TF2Workbench\README.txt
-rem The zip is made from a copy with an empty poses folder, so the poses saved on this machine never end up in it.
+rem The zip is made from a copy without what running the exe from this folder leaves beside it (saved poses, light setups, backpack icons,
+rem the thumbnail cache), so nothing of this machine ends up in it; the poses folder goes in empty.
 if exist "share\zip-staging" rmdir /s /q "share\zip-staging"
-robocopy "share\TF2Workbench" "share\zip-staging\TF2Workbench" /E /XD poses /NFL /NDL /NJH /NJS /NP >nul
+robocopy "share\TF2Workbench" "share\zip-staging\TF2Workbench" /E /XD poses cache icons light-setups /NFL /NDL /NJH /NJS /NP >nul
 if errorlevel 8 goto :fail
 mkdir "share\zip-staging\TF2Workbench\poses"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path 'share\zip-staging\TF2Workbench' -DestinationPath 'share\TF2Workbench.zip' -Force -ErrorAction Stop"

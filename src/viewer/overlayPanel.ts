@@ -4,21 +4,14 @@
  * element to put it somewhere else (the border is always in front, the background picture always behind). The one that is picked has its
  * settings in the Properties panel and is marked in the frame.
  */
+import { icon as svgIcon, type IconName } from "../icons";
 import { showContextMenu } from "./contextMenu";
 import { itemIcon } from "./itemIcons";
 import { attachNumberDrag } from "./numberDrag";
 import { openMenu } from "./popMenu";
 import type { CameraOverlay, OverlayEntryKind } from "./cameraOverlay";
 
-const PATHS: Record<OverlayEntryKind, string> = {
-  border: "M3 3h12v12H3z M5.500 5.500h7v7h-7z",
-  background: "M2.500 3.500h13v11h-13z M2.500 12l4-4 3 3 2-2 4 4",
-  image: "M2.500 4h13v10h-13z M5.500 7.500h.01 M2.500 12.500l4-3.500 3 2.500 2.500-2 3.500 3",
-  icon: "M9 2.500l1.900 4.300 4.600.4-3.500 3 1.100 4.600L9 12.400l-4.100 2.400L6 10.200 2.500 7.200l4.600-.4z",
-  text: "M4 4.500h10M9 4.500v9.500M7 14h4",
-};
-const svg = (d: string, size = 16) => `<svg viewBox="0 0 18 18" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="${d}"/></svg>`;
-const CROSS = "M4 4l10 10 M14 4L4 14";
+const ICONS: Record<OverlayEntryKind, IconName> = { border: "frame", background: "wallpaper", image: "image", icon: "star", text: "type" };
 /** The entries that are elements, and so can be dragged to another place in the order. */
 const MOVABLE = new Set<OverlayEntryKind>(["icon", "image", "text"]);
 
@@ -89,7 +82,7 @@ export function createOverlayPanel(options: {
       row.dataset.overlay = entry.id;
       const icon = document.createElement("span");
       icon.className = "hierIcon";
-      icon.innerHTML = svg(PATHS[entry.kind]);
+      icon.innerHTML = svgIcon(ICONS[entry.kind]);
       if (entry.image) {
         // an icon of an item shows its own picture
         const image = document.createElement("img");
@@ -105,7 +98,7 @@ export function createOverlayPanel(options: {
       const remove = document.createElement("button");
       remove.className = "hierTool hierRemove";
       remove.title = `Remove ${entry.label}`;
-      remove.innerHTML = svg(CROSS, 14);
+      remove.innerHTML = svgIcon("x");
       remove.onclick = (e) => { e.stopPropagation(); overlay!.remove(entry.id); };
       row.append(icon, label, kind, remove);
       row.onclick = () => overlay!.select(entry.id);
@@ -159,15 +152,15 @@ export function createOverlayPanel(options: {
     const overlay = options.overlay(); if (!overlay?.isEditing) return;
     const icons = [...new Map(overlay.items().map((item) => [item.image, item])).values()];
     openMenu(add, [
-      { label: "Border", icon: PATHS.border, run: () => overlay.addBorder() },
-      { label: "Background picture…", icon: PATHS.background, hint: "behind the scene", run: () => overlay.chooseBackground() },
-      { label: "Image…", icon: PATHS.image, hint: "from disk", separator: true, run: () => overlay.chooseImage() },
+      { label: "Border", icon: ICONS.border, run: () => overlay.addBorder() },
+      { label: "Background picture…", icon: ICONS.background, hint: "behind the scene", run: () => overlay.chooseBackground() },
+      { label: "Image…", icon: ICONS.image, hint: "from disk", separator: true, run: () => overlay.chooseImage() },
       {
         label: "Icon",
-        icon: PATHS.icon,
+        icon: ICONS.icon,
         children: icons.length ? icons.map((item) => ({ label: item.label, run: () => overlay.placeIcon(item) })) : [{ label: "Equip a cosmetic or a taunt first", disabled: true }],
       },
-      { label: "Text", icon: PATHS.text, run: () => overlay.placeText() },
+      { label: "Text", icon: ICONS.text, run: () => overlay.placeText() },
     ]);
   };
 

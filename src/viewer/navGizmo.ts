@@ -1,3 +1,4 @@
+import { icon } from "../icons";
 import * as THREE from "three";
 
 /**
@@ -48,13 +49,13 @@ function el<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, 
   return e;
 }
 
-const ZOOM_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.500" cy="10.500" r="6.500"/><path d="M15.500 15.500 21 21M10.500 7.500v6M7.500 10.500h6"/></svg>';
-const HAND_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 13V5.500a1.500 1.500 0 0 1 3 0V11M11 10.500V4.500a1.500 1.500 0 0 1 3 0V11M14 10.500V6a1.500 1.500 0 0 1 3 0v8c0 4-2 7-6 7-3 0-4.500-1.500-6-4l-1.500-3a1.500 1.500 0 0 1 2.500-1.500L8 14"/></svg>';
+const ZOOM_ICON = icon("zoomIn");
+const HAND_ICON = icon("hand");
 
-const CAMERA_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="6.500" r="2.800"/><circle cx="13.500" cy="6.500" r="2.800"/><rect x="3" y="10" width="12.500" height="9" rx="1.800"/><path d="M15.500 13.500 21 11v8l-5.500-2.500"/></svg>';
+const CAMERA_ICON = icon("video");
 /** A grid seen in perspective (the way the view is now), and a flat one (an orthographic view). */
-const PERSPECTIVE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5h10l4 14H3zM10.300 5 9 19M13.700 5 15 19M5.700 9.700h12.600M4.300 14.300h15.400"/></svg>';
-const ORTHOGRAPHIC_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4zM9.300 4v16M14.700 4v16M4 9.300h16M4 14.700h16"/></svg>';
+const PERSPECTIVE_ICON = icon("cuboid");
+const ORTHOGRAPHIC_ICON = icon("square");
 
 /** Builds the widgets into `parent`; call `update` every frame to keep the axes turned with the camera. */
 export function createNavGizmo(parent: HTMLElement, host: NavHost): { update: () => void } {

@@ -1,3 +1,4 @@
+import { icon } from "../icons";
 import type { MaterialData, ModelData } from "../viewer/payload";
 import { BODYGROUPS, CLASS_EQUIP_REGIONS, EQUIP_REGIONS, PREFABS, TRIANGLE_BUDGET, CompilerSession, blankMaterial, type CompilerMaterial, type SessionIo } from "./session";
 import { ENVMAPS, LIGHTWARPS, type MaterialSettings } from "./vmt";
@@ -117,10 +118,13 @@ export function createCompilerUi(host: CompilerHost) {
   let selectedBone = "";
   /** Whether the selected bone has its rotation gizmo in the view: off until asked, so dragging the view cannot turn a bone by mistake. */
   let turnWithGizmo = false;
-  /** What the materials panel shows: the materials, or the jiggle bones (one at a time: neither needs the other). Remembered. */
-  type FlyoutTab = "materials" | "bones";
-  let flyoutTab: FlyoutTab = "materials";
-  try { if (localStorage.getItem("tf2workbench.compilerFlyoutTab") === "bones") flyoutTab = "bones"; } catch { /* the materials */ }
+  /** What the materials panel shows: one of the (at most two) materials, or the jiggle bones. Remembered. */
+  type FlyoutTab = "material0" | "material1" | "bones";
+  let flyoutTab: FlyoutTab = "material0";
+  try {
+    const saved = localStorage.getItem("tf2workbench.compilerFlyoutTab");
+    if (saved === "bones" || saved === "material1") flyoutTab = saved;
+  } catch { /* the first material */ }
   /** A jiggle setup copied from a bone, to paste onto others. */
   let copiedJiggle: JiggleSetup | null = null;
   const root = host.root;
@@ -199,11 +203,11 @@ export function createCompilerUi(host: CompilerHost) {
     return h("label", { className: "cmpCheck", title }, input, ` ${label}`);
   }
 
-  /** A small button that puts settings back to their defaults (the icon is Lucide's rotate-ccw, ISC). */
+  /** A small button that puts settings back to their defaults. */
   function resetButton(title: string, run: () => void) {
     const b = h("button", { type: "button", className: "cmpReset", title });
     b.setAttribute("aria-label", title);
-    b.innerHTML = '<svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>';
+    b.innerHTML = icon("rotateCcw");
     b.onclick = run;
     return b;
   }
@@ -645,7 +649,9 @@ export function createCompilerUi(host: CompilerHost) {
           materialSettings(m, n));
       })
       : [h("div", { className: "dim hint", textContent: "The materials of the model appear here once it is added." })];
-    const materialGrid = h("div", { className: "cmpMaterials" }, ...materials);
+    // a second material's tab is there (greyed out) when the item has one material, so the tabs always look the same
+    if (flyoutTab === "material1" && names.length < 2) flyoutTab = "material0";
+    const materialGrid = h("div", { className: "cmpMaterials" }, materials[flyoutTab === "material1" ? 1 : 0]);
 
     const iconNote = issue("icon")?.text ?? session.failures.get(d.icon) ?? (session.icon ? "" : "512x512 with alpha; the picture inside the safe zone");
     const setIcon = (p: string) => void session.setIcon(p).then(() => changed(false));
@@ -723,10 +729,14 @@ Choose another .tga` : "Choose the backpack icon (.tga)" });
       render();
     };
     const jiggling = Object.keys(session.data.jiggles).length;
-    const tabs = h("div", { className: "cmpTabs", role: "tablist" },
-      h("button", { textContent: "Materials", className: flyoutTab === "materials" ? "on" : "", onclick: () => choose("materials") }),
-      h("button", { textContent: jiggling ? `Jiggle bones (${jiggling})` : "Jiggle bones", className: flyoutTab === "bones" ? "on" : "", onclick: () => choose("bones") }));
-    flyout.replaceChildren(tabs, flyoutTab === "materials" ? materialGrid : h("div", { className: "cmpBones" }, ...bonesSection()));
+    const materialTab = (i: 0 | 1) => h("button", {
+      textContent: `Material ${i + 1}`, title: names[i] ?? (i ? "The item has one material" : "No material yet"),
+      className: flyoutTab === `material${i}` ? "on" : "", disabled: i === 1 && names.length < 2, onclick: () => choose(`material${i}`),
+    });
+    const tabs = h("div", { className: "cmpTabs even", role: "tablist" },
+      materialTab(0), materialTab(1),
+      h("button", { textContent: jiggling ? `Jiggles (${jiggling})` : "Jiggles", className: flyoutTab === "bones" ? "on" : "", onclick: () => choose("bones") }));
+    flyout.replaceChildren(tabs, flyoutTab === "bones" ? h("div", { className: "cmpBones" }, ...bonesSection()) : materialGrid);
     accordify(root, "compiler");
     // the bone being set up is drawn on the character while its menu is open
     host.setBoneHelper(flyoutTab === "bones" && selectedBone ? { bone: selectedBone, setup: session.data.jiggles[selectedBone] ?? null } : null);

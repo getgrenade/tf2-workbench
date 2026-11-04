@@ -1,3 +1,4 @@
+import { icon } from "./icons";
 import { open } from "@tauri-apps/plugin-dialog";
 import "./tokens.css";
 import { accordify } from "./accordion";
@@ -28,8 +29,8 @@ void installFileDrop().catch((error) => console.error("File drop is not availabl
 const app = document.getElementById("app")!;
 app.innerHTML = `
   <header>
-    <button id="sceneMenu" hidden class="barBtn" title="Scene: save or load a scene file" aria-label="Scene menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
-    <button id="layoutMenu" hidden class="barBtn" title="Layout: show or hide the panels, put the layout back as it was" aria-label="Layout menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1.500"/><path d="M9 4v16M9 12h12"/></svg></button>
+    <button id="sceneMenu" hidden class="barBtn" title="Scene: save or load a scene file" aria-label="Scene menu">${icon("menu")}</button>
+    <button id="layoutMenu" hidden class="barBtn" title="Layout: show or hide the panels, put the layout back as it was" aria-label="Layout menu">${icon("layoutPanelLeft")}</button>
     <nav>
       <button id="tabView" class="on">Viewer</button>
       <button id="tabCompiler">Compiler</button>
@@ -141,6 +142,7 @@ app.innerHTML = `
       </div>
       </section>
       <section id="compilerPane" class="dockSection compilerPane" hidden></section>
+      <div id="compilerSplit" class="dockSplit" role="separator" title="Drag to resize the compiler and the panels under it"></div>
     </aside>
     <div id="viewMain">
     <div id="canvasWrap">
@@ -163,9 +165,10 @@ app.innerHTML = `
       <div id="viewModes">
         <button id="hudGrid" title="Show / hide the floor grid" aria-label="Floor grid"></button>
         <button id="hudOutline" title="Show / hide the outline around what is selected" aria-label="Selection outline"></button>
+        <button id="hudGround" title="Show / hide the ground plane (its colour and fade are in the World panel)" aria-label="Ground plane"></button>
         <button id="hudLights" title="Show / hide the light indicators (click one to edit that light)" aria-label="Light indicators"></button>
         <button id="modeWire" title="Wireframe: the edges drawn over the view" aria-label="Wireframe"></button>
-        <button id="viewOverlaysMore" class="moreBtn" aria-haspopup="true" aria-expanded="false" title="Settings of the wireframe, the floor grid and the selection outline" aria-label="Overlay settings"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button id="viewOverlaysMore" class="moreBtn" aria-haspopup="true" aria-expanded="false" title="Settings of the wireframe, the floor grid and the selection outline" aria-label="Overlay settings">${icon("chevronDown")}</button>
         <span class="sep"></span>
         <button id="modeShaded" title="Shaded: the materials as lit in the game" aria-label="Shaded"></button>
         <button id="modeDiffuse" title="Diffuse: just the base texture colour, unlit" aria-label="Diffuse"></button>
@@ -181,8 +184,8 @@ app.innerHTML = `
       <div id="viewToolbar">
       <div id="viewSelect"><button id="boxSelect" title="Box select: stays on until you switch it off. The Q key does one box and switches itself off. Drag in the view to select what the box covers. Shift adds, Ctrl takes away. Alt + drag still orbits" aria-label="Box select" aria-pressed="false"></button></div>
       <div id="gizmoParts"><button id="gizMove" title="Move gizmo (W); edit by mouse (Shift+W); reset position (Alt+W)" aria-label="Move gizmo"></button><button id="gizRotate" title="Rotation gizmo (E); edit by mouse (Shift+E); reset rotation (Alt+E)" aria-label="Rotation gizmo"></button><button id="gizScale" title="Scale gizmo (R); edit by mouse (Shift+R); reset scale (Alt+R)" aria-label="Scale gizmo"></button><button id="gizView" title="View Rotation Gizmo: a ring that turns the control about your line of sight, with a dot in the middle to drag the control around in the view plane" aria-label="View Rotation Gizmo"></button><button id="gizOrient" title="" aria-label="Gizmo orientation"></button></div>
-      <div id="viewFocus"><button id="focusFace" title="Focus on the selected character's face" aria-label="Focus face"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V3h5M16 3h5v5M21 16v5h-5M8 21H3v-5"/><path fill="currentColor" stroke="none" d="M12 6.5c2.7 0 4 2.1 4 4.8 0 3.2-1.7 5.7-4 5.7s-4-2.5-4-5.7c0-2.7 1.3-4.8 4-4.8z"/></svg><span class="btnLabel">Focus face</span></button><button id="focusBody" title="Frame the selected character" aria-label="Frame character"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V3h5M16 3h5v5M21 16v5h-5M8 21H3v-5"/><path fill="currentColor" stroke="none" d="M12 6a2.2 2.2 0 1 1 0 4.4A2.2 2.2 0 0 1 12 6zM7 18l.5-4.3c.2-1.7 1.8-2.9 4.5-2.9s4.3 1.2 4.5 2.9L17 18h-2.5v-3.5L14 18h-4l-.5-3.5V18z"/></svg><span class="btnLabel">Frame character</span></button><button id="focusAll" title="Frame all characters" aria-label="Frame all characters"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V3h5M16 3h5v5M21 16v5h-5M8 21H3v-5"/><path d="m8.5 17 3.5-9.5 3.5 9.5M9.8 13.8h4.4"/></svg><span class="btnLabel">Frame all</span></button></div>
-      <div id="viewCapture"><button id="shot" title="Screenshot: saves a PNG of the view (size and transparency are in Settings)" aria-label="Screenshot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l1.500-2.500h7L17 8h3v11H4z"/><circle cx="12" cy="13" r="3.500"/></svg><span class="btnLabel">Screenshot</span></button><button id="shotPsd" title="Layered PSD: saves a Photoshop file with the post-processing effects on layers of their own, with the blend modes that put them back (size is in Settings)" aria-label="Layered PSD"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-9 5 9 5 9-5z"/><path d="m3 12 9 5 9-5"/><path d="m3 16 9 5 9-5"/></svg><span class="btnLabel">PSD</span></button><button id="shotVideo" title="Video: records the view or a turntable round the character as MP4, WebM or an optimized GIF (never larger than the view)" aria-label="Video"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10.500 5-3v9l-5-3"/></svg><span class="btnLabel">Video</span></button><button id="paintChart" title="Paint chart: the selected character's paintable cosmetic in every paint at once, all orbiting together; lay it out and save it as a PNG" aria-label="Paint chart"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 11-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2c.8.8 2 .8 2.8 0L19 11Z"/><path d="m5 2 5 5"/><path d="M2 13h15"/><path d="M22 20a2 2 0 1 1-4 0c0-1.6 1.7-2.4 2-4 .3 1.6 2 2.4 2 4Z"/></svg><span class="btnLabel">Paint chart</span></button><button id="randomLoadout" title="Random loadout: rolls cosmetics (and poses) by your rules, as often as you like; up to five characters at once" aria-label="Random loadout"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.2" fill="currentColor"/><circle cx="16" cy="8" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="8" cy="16" r="1.2" fill="currentColor"/><circle cx="16" cy="16" r="1.2" fill="currentColor"/></svg><span class="btnLabel">Random loadout</span></button><button id="promo" title="Promo images: a set of items (one or more) pictured every way (main pictures, paint charts, styles, loadouts, thumbnails), to tweak and export in the Promo tab" aria-label="Promo images"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="m3 15 5-5 4 4 3-3 6 6"/><circle cx="16" cy="8.5" r="1.5"/><path d="M7 21h10"/></svg><span class="btnLabel">Promo</span></button></div>
+      <div id="viewFocus"><button id="focusFace" title="Focus on the selected character's face" aria-label="Focus face">${icon("scanFace")}<span class="btnLabel">Focus face</span></button><button id="focusBody" title="Frame the selected character" aria-label="Frame character">${icon("personStanding")}<span class="btnLabel">Frame character</span></button><button id="focusAll" title="Frame all characters" aria-label="Frame all characters">${icon("users")}<span class="btnLabel">Frame all</span></button></div>
+      <div id="viewCapture"><button id="shot" title="Screenshot: saves a PNG of the view (size and transparency are in Settings)" aria-label="Screenshot">${icon("camera")}<span class="btnLabel">Screenshot</span></button><button id="shotPsd" title="Layered PSD: saves a Photoshop file with the post-processing effects on layers of their own, with the blend modes that put them back (size is in Settings)" aria-label="Layered PSD">${icon("layers")}<span class="btnLabel">PSD</span></button><button id="shotVideo" title="Video: records the view or a turntable round the character as MP4, WebM or an optimized GIF (never larger than the view)" aria-label="Video">${icon("video")}<span class="btnLabel">Video</span></button><button id="paintChart" title="Paint chart: the selected character's paintable cosmetic in every paint at once, all orbiting together; lay it out and save it as a PNG" aria-label="Paint chart">${icon("paintBucket")}<span class="btnLabel">Paint chart</span></button><button id="randomLoadout" title="Random loadout: rolls cosmetics (and poses) by your rules, as often as you like; up to five characters at once" aria-label="Random loadout">${icon("dices")}<span class="btnLabel">Random loadout</span></button><button id="promo" title="Promo images: a set of items (one or more) pictured every way (main pictures, paint charts, styles, loadouts, thumbnails), to tweak and export in the Promo tab" aria-label="Promo images">${icon("images")}<span class="btnLabel">Promo</span></button></div>
       </div>
       <div id="dockFolds">
         <button id="foldL" class="foldBtn" title="Fold the left panel" aria-label="Fold the left panel"></button>
@@ -205,7 +208,7 @@ app.innerHTML = `
       <div id="itemTools" class="row2"><button id="itemSelectAll" title="Select every equipped cosmetic, then pick one paint for all of them">Select all</button></div>
       <div id="itemEquipped" class="chips"></div>
       <div id="itemList" class="itemlist"></div>
-      <div class="itemFoot" id="itemFoot"><button id="itemMedals" class="iconBtn" title="Show medals &amp; badges" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M6.500 2h4l1.500 6.500-3 1.500zM17.500 2h-4L12 8.500l3 1.500z"/><circle cx="12" cy="15.500" r="6"/></svg></button><button id="itemWorkshopRefresh" class="iconBtn" title="Reload the workshop cosmetics from tf/workshop/import_source (this also happens when you come back to this window and the zips changed)" aria-label="Reload workshop cosmetics"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.5-5.800M20 4v5h-5"/></svg></button><span id="itemCount" class="dim hint"></span></div>
+      <div class="itemFoot" id="itemFoot"><button id="itemMedals" class="iconBtn" title="Show medals &amp; badges" aria-pressed="false">${icon("medal")}</button><button id="itemWorkshopRefresh" class="iconBtn" title="Reload the workshop cosmetics from tf/workshop/import_source (this also happens when you come back to this window and the zips changed)" aria-label="Reload workshop cosmetics">${icon("refreshCw")}</button><span id="itemCount" class="dim hint"></span></div>
       </section>
       <section id="weaponsPane" class="dockSection">
         <h3 class="first">Weapons</h3>
@@ -553,6 +556,24 @@ $("layoutMenu").onclick = () => {
 }
 
 
+/** The tab of the Textures panel's group the viewer had before the compiler opened it (put back when the compiler is left). */
+let viewerTabBeforeTextures: string | null = null;
+let compilerShown = false;
+/** The compiler shows the Textures panel (of the item being built); leaving it, the group goes back to the tab the viewer had. */
+function texturesForCompiler(on: boolean) {
+  if (on === compilerShown) return;
+  compilerShown = on;
+  const layout = docks.snapshot();
+  const group = Object.values(layout.docks).flatMap((d) => d.groups).find((g) => g.tabs.includes("textures"));
+  if (on) {
+    viewerTabBeforeTextures = group && group.active !== "textures" ? group.active : null;
+    if (group) docks.activate("textures");
+  } else {
+    if (viewerTabBeforeTextures && group?.tabs.includes(viewerTabBeforeTextures)) docks.activate(viewerTabBeforeTextures);
+    viewerTabBeforeTextures = null;
+  }
+}
+
 function showTab(which: "view" | "compiler" | "settings") {
   const inView = which === "view" || which === "compiler";
   $("view").hidden = !inView;
@@ -574,9 +595,40 @@ function showTab(which: "view" | "compiler" | "settings") {
   // the materials slide out over the 3D view from the left panel; the view underneath keeps its size
   $("canvasWrap").classList.toggle("compiling", which === "compiler");
   viewTab.setCompiler(which === "compiler");
+  texturesForCompiler(which === "compiler");
   if (inView) void viewTab.onShown();
   else setFullscreen(false);
 }
+
+/** In the compiler, the divider between the compiler and the panels kept under it (World / Light): dragged like the docks' own. Remembered. */
+function installCompilerSplit() {
+  const dock = $("dockLeft");
+  const split = $("compilerSplit");
+  const KEY = "tf2workbench.compilerLowerHeight";
+  try { const saved = Number(localStorage.getItem(KEY)); if (saved > 0) dock.style.setProperty("--cmpLowerH", `${saved}px`); } catch { /* 38% */ }
+  split.onpointerdown = (down) => {
+    down.preventDefault();
+    split.setPointerCapture(down.pointerId);
+    split.classList.add("dragging");
+    let height = 0;
+    const move = (e: PointerEvent) => {
+      const r = dock.getBoundingClientRect();
+      height = Math.round(Math.min(Math.max(r.bottom - e.clientY, 70), r.height - 120));
+      dock.style.setProperty("--cmpLowerH", `${height}px`);
+    };
+    const up = () => {
+      split.removeEventListener("pointermove", move);
+      split.removeEventListener("pointerup", up);
+      split.removeEventListener("pointercancel", up);
+      split.classList.remove("dragging");
+      try { if (height) localStorage.setItem(KEY, String(height)); } catch { /* not remembered */ }
+    };
+    split.addEventListener("pointermove", move);
+    split.addEventListener("pointerup", up);
+    split.addEventListener("pointercancel", up);
+  };
+}
+installCompilerSplit();
 
 /** Tab: hide the header and all docks so the render fills the window; Tab again to come back. */
 function setFullscreen(on: boolean) {

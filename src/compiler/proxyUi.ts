@@ -1,3 +1,4 @@
+import { icon } from "../icons";
 import { openMenu, type MenuItem } from "../viewer/popMenu";
 import { COMMON_TARGETS, PROXY_PRESETS, PROXY_TYPES, cloneProxies, newProxy, proxiesFromText, proxiesToText, proxyProblems, proxyType, type CustomProxy } from "./proxyModel";
 
@@ -21,12 +22,7 @@ function h<K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<HTMLEle
 /** Whether the text box is open (kept when the panel is drawn again). */
 let showText = false;
 const TARGETS_ID = "cmpProxyTargets";
-const ICON = {
-  up: '<svg viewBox="0 0 16 16"><path d="M4 10l4-4 4 4"/></svg>',
-  down: '<svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg>',
-  copy: '<svg viewBox="0 0 16 16"><rect x="5.500" y="5.500" width="8" height="8" rx="1.500"/><path d="M10.500 5.500v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></svg>',
-  remove: '<svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
-};
+const ICON = { up: icon("chevronUp"), down: icon("chevronDown"), copy: icon("copy"), remove: icon("x") };
 
 function iconButton(icon: string, title: string, run: () => void, disabled = false) {
   const b = h("button", { type: "button", className: "cmpProxyBtn", title, disabled });

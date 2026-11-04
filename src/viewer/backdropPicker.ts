@@ -4,6 +4,7 @@
  * The same picker is the world's (behind the scene) and the promo's (behind every picture); the host says where the value lives. Picking a
  * preset fades to it; what the picked one needs (a colour, the controls of a custom gradient) shows under the row.
  */
+import { icon, type IconName } from "../icons";
 import { BACKDROP_PICTURE_SIDE, loadBackdropPicture, paintBackdrop, type Backdrop } from "./promo";
 import { SHIPPED_GRADIENTS } from "./shippedBackdrops";
 import { colourBackdrop, customBackdrop, deleteGradient, fadeBackdrop, gradientPresets, renameGradient, saveGradient } from "./backdropPresets";
@@ -103,8 +104,8 @@ function choosePicture(): Promise<string | null> {
 }
 
 /** The icons of the buttons that are not a colour: the toolbar's line icons (see #viewToolbar), on a 24 grid. */
-const IMAGE_ICON = '<rect x="3" y="4" width="18" height="14" rx="2"/><path d="m3 15 5-5 4 4 3-3 6 6"/><circle cx="16" cy="8.5" r="1.5"/>';
-const TUNE_ICON = '<path d="M4 7h6M14 7h6M4 12h2M10 12h10M4 17h9M17 17h3"/><circle cx="12" cy="7" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="15" cy="17" r="2"/>';
+const IMAGE_ICON: IconName = "image";
+const TUNE_ICON: IconName = "slidersHorizontal";
 
 export function createBackdropPicker(host: BackdropPickerHost): { el: HTMLElement; refresh: () => void } {
   const el = document.createElement("div");
@@ -163,14 +164,14 @@ export function createBackdropPicker(host: BackdropPickerHost): { el: HTMLElemen
   }
 
   /** A button with an icon, like those of the toolbar of the 3D view (no colour of its own: it is lit when picked). */
-  function iconButton(icon: string, on: boolean, click: () => void, title: string): HTMLButtonElement {
+  function iconButton(name: IconName, on: boolean, click: () => void, title: string): HTMLButtonElement {
     const b = document.createElement("button");
     b.type = "button";
     b.className = `bdThumb bdIcon${on ? " on" : ""}`;
     b.title = title;
     b.setAttribute("aria-label", title);
     b.setAttribute("aria-pressed", String(on));
-    b.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${icon}</svg>`;
+    b.innerHTML = icon(name);
     b.onclick = click;
     return b;
   }

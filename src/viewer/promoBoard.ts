@@ -4,6 +4,7 @@
  * live in the promo scene); on the right the picked picture's settings and the selected shot's; on the left the look every picture
  * shares (the backdrop and the border stroke). Export writes the pictures at full size.
  */
+import { icon } from "../icons";
 import { showContextMenu } from "./contextMenu";
 import { rotateLightDirection } from "./lighting";
 import { shotEffectsOf, SHADOW_BLENDS, type ShadowBlend, DEFAULT_SHOT_EFFECTS, LINEUP_SPACING, PROMO_FOV, solidOf } from "./promo";
@@ -64,16 +65,8 @@ const corners = (r: { x: number; y: number; w: number; h: number }): [number, nu
 /** Right-drag turns the camera this many degrees per pixel. */
 const TURN_PER_PIXEL = 0.4;
 
-// the icons of the layer list (an 18 grid, drawn as lines: those of the post effects' list)
-const EYE_ICON = "M1 9s3-5 8-5 8 5 8 5-3 5-8 5-8-5-8-5z M11.500 9a2.500 2.500 0 1 0-5 0 2.500 2.500 0 1 0 5 0";
-const HIDDEN_ICON = "M2 2l14 14 M1 9s3-5 8-5c5 0 8 5 8 5s-3 5-8 5-8-5-8-5z";
-const LINK_ICON = "M7.500 10.500l3-3 M8 5.500l1.500-1.500a2.800 2.800 0 0 1 4 4L12 9.500 M10 12.500l-1.500 1.500a2.800 2.800 0 0 1-4-4L6 8.500";
-const SHOT_ICON = "M9 3a2 2 0 1 0 0 4 2 2 0 1 0 0-4z M5 15c0-3 1.800-5.500 4-5.500s4 2.500 4 5.500";
-const TEXT_ICON = "M4 4h10 M9 4v10 M7 14h4";
-const CHART_ICON = "M3 3h5v5H3z M10 3h5v5h-5z M3 10h5v5H3z M10 10h5v5h-5z";
-const BORDER_ICON = "M2.500 2.500h13v13h-13z M5 5h8v8H5z";
-const BACKDROP_ICON = "M2.500 3.500h13v11h-13z M2.500 11.500l4-3.500 3 2.500 2.500-2 3.500 3";
-const icon = (d: string) => `<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.400" stroke-linecap="round" stroke-linejoin="round"><path d="${d}"/></svg>`;
+// the icons of the layer list
+const EYE_ICON = "eye", HIDDEN_ICON = "eyeOff", LINK_ICON = "link", SHOT_ICON = "userRound", TEXT_ICON = "type", CHART_ICON = "layoutGrid", BORDER_ICON = "frame", BACKDROP_ICON = "image";
 
 /** The keys of the boards (undo and redo, copy and paste, delete), caught before the view's own; a board that is not showing lets them by. */
 const boardKeys = new Set<(ev: KeyboardEvent) => void>();

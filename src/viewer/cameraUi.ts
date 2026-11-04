@@ -1,3 +1,4 @@
+import { icon } from "../icons";
 import * as THREE from "three";
 import { CAMERA_RATIOS, FOV_MAX, FOV_MIN, cameraSize, cameraSizes, horizontalFov, verticalFov, type CameraRatio, type SceneCamera } from "./cameraData";
 import type { CameraRig } from "./cameraRig";
@@ -40,9 +41,9 @@ export function createCameraUi(root: HTMLElement, getRig: () => CameraRig, prepa
       const row = document.createElement("div");
       const label = document.createElement("span"); label.className = "entName";
       const view = document.createElement("button"); view.title = "Show / hide camera transform gizmos (G / R; cameras have no scale)";
-      view.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1v14M1 8h14M8 1 6 3M8 1l2 2M8 15l-2-2M8 15l2-2M1 8l2-2M1 8l2 2M15 8l-2-2M15 8l-2 2"/></svg>';
+      view.innerHTML = icon("move");
       const overlay = document.createElement("button"); overlay.title = "Edit camera overlay: border, item icons and text";
-      overlay.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="1.5" width="13" height="13" rx="1"/><path d="M4 5h8M8 5v7M5.5 12h5"/></svg>';
+      overlay.innerHTML = icon("frame");
       const remove = document.createElement("button"); remove.className = "entX"; remove.textContent = "✕"; remove.title = "Delete camera"; remove.setAttribute("aria-label", `Delete ${data.name}`);
       const select = () => {
         if (rig.active === data.id) { selected = ""; deselected = true; rig.exit(); }

@@ -3,6 +3,7 @@
  * times as the renderer can lay them over each other), switched on and off with its eye and taken out with its cross; the one that is
  * picked shows its settings in the Properties panel.
  */
+import { icon } from "../icons";
 import { openMenu } from "./popMenu";
 import { canAdd, countOf, POST_GROUPS, POST_KINDS, POST_KIND_ORDER, postLabel, type PostItem, type PostKind } from "./postStack";
 
@@ -17,10 +18,6 @@ interface PostUiOptions {
   addKind(kind: PostKind): void;
 }
 
-const EYE = "M1 9s3-5 8-5 8 5 8 5-3 5-8 5-8-5-8-5z M11.500 9a2.500 2.500 0 1 0-5 0 2.500 2.500 0 1 0 5 0";
-const HIDDEN = "M2 2l14 14 M1 9s3-5 8-5c5 0 8 5 8 5s-3 5-8 5-8-5-8-5z";
-const CROSS = "M4 4l10 10 M14 4L4 14";
-const svg = (d: string) => `<svg viewBox="0 0 18 18" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="${d}"/></svg>`;
 
 export function createPostUi(options: PostUiOptions) {
   const { list, add } = options;
@@ -52,12 +49,12 @@ export function createPostUi(options: PostUiOptions) {
       eye.className = "hierEye";
       eye.title = on ? `Turn ${name.toLowerCase()} off` : `Turn ${name.toLowerCase()} on`;
       eye.setAttribute("aria-pressed", String(!on));
-      eye.innerHTML = svg(on ? EYE : HIDDEN);
+      eye.innerHTML = icon(on ? "eye" : "eyeOff");
       eye.onclick = (e) => { e.stopPropagation(); options.toggle(item.id, !on); refresh(); };
       const remove = document.createElement("button");
       remove.className = "hierTool hierRemove";
       remove.title = `Take ${name.toLowerCase()} out of the scene`;
-      remove.innerHTML = svg(CROSS);
+      remove.innerHTML = icon("x");
       remove.onclick = (e) => { e.stopPropagation(); options.remove(item.id); refresh(); };
       row.append(label, remove, eye);
       row.onclick = () => { options.select(item.id); refresh(); };

@@ -1,9 +1,10 @@
+import { icon as svgIcon, type IconName } from "../icons";
 /** A drop-down menu panel with sub-menus that open to the side when you hover (or click) an entry, like the Add menu of 3D editors. */
 
 export interface MenuItem {
   label: string;
   /** SVG path data on an 18 x 18 grid (stroked), shown before the label. */
-  icon?: string;
+  icon?: IconName;
   /** Dim text after the label. */
   hint?: string;
   /** Sub-menu: opens beside the entry. */
@@ -72,8 +73,8 @@ export function openMenu(anchor: HTMLElement | { x: number; y: number }, items: 
       const icon = document.createElement("span");
       icon.className = "popIcon";
       const mark = () => {
-        if (item.checked !== undefined) icon.innerHTML = item.checked ? '<svg viewBox="0 0 18 18" aria-hidden="true"><path d="M4 9.500l3.500 3.500L14 5.500"/></svg>' : "";
-        else if (item.icon) icon.innerHTML = `<svg viewBox="0 0 18 18" aria-hidden="true"><path d="${item.icon}"/></svg>`;
+        if (item.checked !== undefined) icon.innerHTML = item.checked ? svgIcon("check") : "";
+        else if (item.icon) icon.innerHTML = svgIcon(item.icon);
       };
       mark();
       const label = document.createElement("span");

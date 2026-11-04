@@ -23,8 +23,8 @@ export function defaultLayout({ props = true }: { props?: boolean } = {}): DockL
   const l = emptyLayout();
   l.docks.left.groups = [
     { tabs: ["outliner"], active: "outliner", weight: 0.73 },
-    { tabs: ["properties", "textures"], active: "properties", weight: 1.33 },
-    { tabs: ["lighting", "lightsetups"], active: "lighting", weight: 0.94 },
+    { tabs: ["properties"], active: "properties", weight: 1.33 },
+    { tabs: ["lighting", "lightsetups", "textures"], active: "lighting", weight: 0.94 },
   ];
   l.docks.right.groups = [
     { tabs: ["cosmetics"], active: "cosmetics", weight: 1.34 },

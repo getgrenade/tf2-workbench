@@ -15,7 +15,7 @@ export interface GroundState {
   softness: number;
 }
 
-export const DEFAULT_GROUND: GroundState = { enabled: false, color: "#6b6b6b", opacity: 1, distance: 12, softness: 0.6 };
+export const DEFAULT_GROUND: GroundState = { enabled: true, color: "#6b6b6b", opacity: 1, distance: 4, softness: 1 };
 
 export function parseGround(raw: unknown): GroundState | undefined {
   const v = raw as Partial<GroundState> | null;

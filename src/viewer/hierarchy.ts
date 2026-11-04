@@ -1,3 +1,4 @@
+import { icon as svgIcon, type IconName } from "../icons";
 import { showContextMenu } from "./contextMenu";
 import { hotkeyMatches } from "../hotkeys";
 import { flatten, isInside, withDescendants, type HierarchyGroup, type NodeKind, type TreeItem, type TreeNode } from "./hierarchyTree";
@@ -66,19 +67,10 @@ export interface HierarchyHooks {
 }
 
 const ICONS = {
-  folder: "M2 5h5l2-2h7v12H2z M2 7h14",
-  eye: "M1 9s3-5 8-5 8 5 8 5-3 5-8 5-8-5-8-5z M11.500 9a2.500 2.500 0 1 0-5 0 2.500 2.500 0 1 0 5 0",
-  hidden: "M2 2l14 14 M1 9s3-5 8-5c5 0 8 5 8 5s-3 5-8 5-8-5-8-5z",
-  plus: "M9 3v12 M3 9h12",
-  fog: "M2 5h10M5 8h11M2 11h9M13 11h3",
-  reset: "M3 8a5 5 0 1 1 0 5M3 3v5h5",
-  cross: "M4 4l10 10 M14 4L4 14",
-  search: "M12 7a5 5 0 1 0-10 0 5 5 0 1 0 10 0 M11 11l5 5",
-  bulb: "M9 2a4.500 4.500 0 0 0-2.500 8.200V12h5v-1.800A4.500 4.500 0 0 0 9 2z M7 14.500h4 M7.800 16.500h2.400",
-  camera: "M2 5.500h3l1.200-2h5.600l1.200 2h3v9H2z M9 12.500a2.500 2.500 0 1 0 0-5 2.500 2.500 0 0 0 0 5z",
-  viewfinder: "M2 6V2h4 M12 2h4v4 M16 12v4h-4 M6 16H2v-4 M9 7.500a1.500 1.500 0 1 0 0 3 1.500 1.500 0 0 0 0-3z",
-};
-const icon = (name: keyof typeof ICONS) => `<svg viewBox="0 0 18 18" aria-hidden="true"><path d="${ICONS[name]}"/></svg>`;
+  folder: "folder", eye: "eye", hidden: "eyeOff", plus: "plus", fog: "cloudFog", reset: "rotateCcw", cross: "x", search: "search", bulb: "lightbulb",
+  camera: "video", viewfinder: "focus",
+} as const satisfies Record<string, IconName>;
+const icon = (name: keyof typeof ICONS) => svgIcon(ICONS[name]);
 
 /** What a drag carries: the things (a list of picks), or a folder; and a tag when all the things are characters (only they can be put in order). */
 const ITEMS_MIME = "application/x-workbench-items";

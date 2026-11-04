@@ -1,3 +1,4 @@
+import { icon as svgIcon, ICONS as LUCIDE, type IconName } from "../icons";
 import { shadowLayer, shadowOf, solidOf, type ShotEffects } from "./promo";
 import { picturePsd } from "./promoPsd";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -348,6 +349,9 @@ export function createViewTab(els: Els) {
   function setGroundState(next: GroundState) {
     ground = { ...next };
     groundUi?.sync();
+    const button = document.getElementById("hudGround");
+    button?.classList.toggle("on", ground.enabled);
+    button?.setAttribute("aria-pressed", String(ground.enabled));
     viewer?.setGround(ground);
   }
   /** Shows the sky of `sky` in the view. */
@@ -1379,10 +1383,10 @@ export function createViewTab(els: Els) {
     gray: document.getElementById("modeGray") as HTMLButtonElement,
   };
   const modeWire = document.getElementById("modeWire") as HTMLButtonElement;
-  modeButtons.shaded.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm-2.5 3.2a6 6 0 0 1 3.6-.4 6 6 0 0 0-5.7 8.6A6 6 0 0 1 9.5 6.200z" opacity=".95"/><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>';
-  modeButtons.diffuse.innerHTML = '<svg viewBox="0 0 24 24"><path d="M4 4h8v8H4zM12 12h8v8h-8z"/><path d="M12 4h8v8h-8zM4 12h8v8H4z" opacity=".35"/></svg>';
-  modeButtons.gray.innerHTML = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 3.8a8.200 8.200 0 0 1 0 16.400z"/></svg>';
-  modeWire.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 3 20 7.500v9L12 21l-8-4.500v-9zM12 3v18M4 7.500l16 9M20 7.500l-16 9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+  modeButtons.shaded.innerHTML = svgIcon("sun");
+  modeButtons.diffuse.innerHTML = svgIcon("image");
+  modeButtons.gray.innerHTML = svgIcon("contrast");
+  modeWire.innerHTML = svgIcon("box");
   let shading: "shaded" | "diffuse" | "gray" = "shaded";
   try {
     const saved = localStorage.getItem("tf2workbench.shading");
@@ -1419,16 +1423,14 @@ export function createViewTab(els: Els) {
     scale: document.getElementById("gizScale") as HTMLButtonElement,
     view: document.getElementById("gizView") as HTMLButtonElement,
   };
-  gizmoButtons.move.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg>';
-  // a ring with an arrow on each side, turning
-  gizmoButtons.rotate.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="7.500"/><path d="M10 2l3 2.500-3 2.500M14 17l-3 2.500 3 2.500"/></svg>';
-  // a circle with a dot in it
-  gizmoButtons.view.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.600" fill="currentColor" stroke="none"/></svg>';
+  gizmoButtons.move.innerHTML = svgIcon("move");
+  gizmoButtons.rotate.innerHTML = svgIcon("rotate3d");
+  gizmoButtons.view.innerHTML = svgIcon("circleDot");
   // by default only the view ring (with its dot) shows
-  gizmoButtons.scale.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="13" width="7" height="7"/><path d="M13 4h7v7M20 4l-8 8"/></svg>';
+  gizmoButtons.scale.innerHTML = svgIcon("scaling");
   // the orientation of every gizmo ("Normal" in Blender): the button after the four tools, remembered
   const orientButton = document.getElementById("gizOrient") as HTMLButtonElement;
-  orientButton.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19V5M5 19h14M5 19l8-8"/></svg>';
+  orientButton.innerHTML = svgIcon("axis3d");
   let gizmoLocal = true;
   try {
     gizmoLocal = localStorage.getItem("tf2workbench.gizmoLocal") !== "0";
@@ -1542,11 +1544,10 @@ export function createViewTab(els: Els) {
 
   // The sound button next to the view modes: the voice lines' mute, which is remembered. Lit while muted, so a silent view is no surprise.
   const hudMute = document.getElementById("hudMute") as HTMLButtonElement | null;
-  const SPEAKER = '<svg viewBox="0 0 24 24" style="fill:none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4z" fill="currentColor"/>';
   const syncMuteButton = () => {
     const muted = voiceMuted();
     if (hudMute) {
-      hudMute.innerHTML = SPEAKER + (muted ? '<path d="m16 9 5 6M21 9l-5 6"/>' : '<path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.500a9 9 0 0 1 0 13"/>') + "</svg>";
+      hudMute.innerHTML = svgIcon(muted ? "volumeX" : "volume2");
       hudMute.classList.toggle("on", muted);
       hudMute.setAttribute("aria-pressed", String(muted));
       hudMute.title = muted ? "Sound is off: click to hear the voice lines" : "Sound is on: click to mute the voice lines";
@@ -1557,7 +1558,7 @@ export function createViewTab(els: Els) {
 
   // The floor grid button in the corner of the 3D view; the choice is remembered.
   const hudGrid = document.getElementById("hudGrid") as HTMLButtonElement;
-  const ICON_GRID = '<svg viewBox="0 0 24 24"><path d="M8.2 4 6.4 20H4.4l1.8-16zM16 4l1.8 16h-2L14 4zM2.5 9h19v1.8h-19zM1.5 15h21v1.8h-21z"/></svg>';
+  const ICON_GRID = svgIcon("grid3x3");
   let gridOn = false;
   try {
     gridOn = localStorage.getItem("tf2workbench.grid") === "1";
@@ -1579,7 +1580,7 @@ export function createViewTab(els: Els) {
 
   // The selection outline button beside the floor grid: an outline around the selected characters, lights and cameras; remembered, on by default.
   const hudOutline = document.getElementById("hudOutline") as HTMLButtonElement;
-  hudOutline.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><g transform="translate(-3.6 -2.9) scale(1.3)" stroke-width="1.4"><circle cx="12" cy="8.2" r="2.2"/><path d="M7 18l.5-4.3c.2-1.7 1.8-2.9 4.5-2.9s4.3 1.2 4.5 2.9L17 18h-2.5v-3.5L14 18h-4l-.5-3.5V18z"/></g></svg>';
+  hudOutline.innerHTML = svgIcon("squareDashed");
   let outlineOn = false;
   try {
     outlineOn = localStorage.getItem("tf2workbench.selectionOutline") === "1";
@@ -1600,9 +1601,16 @@ export function createViewTab(els: Els) {
     }
   };
 
+  // The ground plane button (the switch of the World panel's Ground section; saved with the scene like the rest of it)
+  const hudGround = document.getElementById("hudGround") as HTMLButtonElement;
+  hudGround.innerHTML = svgIcon("landPlot");
+  hudGround.classList.toggle("on", ground.enabled);
+  hudGround.setAttribute("aria-pressed", String(ground.enabled));
+  hudGround.onclick = () => setGroundState({ ...ground, enabled: !ground.enabled });
+
   // The light indicators button beside the floor grid: whether the lights show in the view (and can be clicked); remembered, on by default.
   const hudLights = document.getElementById("hudLights") as HTMLButtonElement;
-  hudLights.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-4 12.700V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.300A7 7 0 0 0 12 2zM9.500 20h5v1.500a1 1 0 0 1-1 1h-3a1 1 0 0 1-1-1z"/></svg>';
+  hudLights.innerHTML = svgIcon("lightbulb");
   let lightsOn = true;
   try {
     lightsOn = localStorage.getItem("tf2workbench.lightIndicators") !== "0";
@@ -1666,7 +1674,7 @@ export function createViewTab(els: Els) {
         void addProp(path, { clientX: ev.clientX, clientY: ev.clientY });
       });
       const boxButton = document.getElementById("boxSelect") as HTMLButtonElement;
-      boxButton.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h3M10 4h4M17 4h3M20 7v3M20 14v3M4 7v3M4 14v3M4 20h3M10 20h2" stroke-dasharray="0"/><path d="M14 13l7 3-3 1.600L16 21z" fill="currentColor"/></svg>';
+      boxButton.innerHTML = svgIcon("squareDashedMousePointer");
       boxTool = createBoxSelect<Actor>({
         canvas: viewer.renderer.domElement,
         wrap: els.wrap,
@@ -2351,24 +2359,21 @@ export function createViewTab(els: Els) {
     const counts: { name: string; tris: number; verts: number }[] = [];
     if (e) {
       const cls = gameClassOf(e.cls);
-      for (const { item, style } of e.applied) {
-        const path = itemModelFor(item, cls, style);
-        const data = path ? models.get(path) : undefined;
-        if (!data) continue;
+      // one worn model: its counts, and its materials with their textures and UVs
+      const add = (label: string, data: ModelData, materialOf: (m: ModelData["bodyParts"][number]["models"][number]["meshes"][number]) => string, lookup: (path: string) => MaterialData | null | undefined) => {
         let tris = 0, verts = 0;
         for (const bp of data.bodyParts) for (const m of bp.models[0]?.meshes ?? []) {
           tris += m.indices.length / 3;
           verts += m.positions.length / 3;
         }
-        counts.push({ name: item.displayName, tris, verts });
-        const skin = itemSkinFor(item, e.team, style) ?? e.team;
+        counts.push({ name: label, tris, verts });
         const seen = new Set<string>();
         const list: PreviewItem["materials"] = [];
         for (const bp of data.bodyParts) {
           for (const m of bp.models[0]?.meshes ?? []) {
-            const p = itemMaterialOverride(item) ?? m.materials[skin] ?? m.material;
+            const p = materialOf(m);
             if (!m.indices.length) continue;
-            const mat = materials.get(p);
+            const mat = lookup(p);
             if (!mat) continue;
             let entry = seen.has(p) ? list.find((x) => x.path === p) : undefined;
             if (!entry) {
@@ -2379,7 +2384,19 @@ export function createViewTab(els: Els) {
             entry.meshes.push({ uvs: m.uvs, indices: m.indices });
           }
         }
-        if (list.length) items.push({ label: item.displayName, materials: list });
+        if (list.length) items.push({ label, materials: list });
+      };
+      for (const { item, style } of e.applied) {
+        const path = itemModelFor(item, cls, style);
+        const data = path ? models.get(path) : undefined;
+        if (!data) continue;
+        const skin = itemSkinFor(item, e.team, style) ?? e.team;
+        add(item.displayName, data, (m) => itemMaterialOverride(item) ?? m.materials[skin] ?? m.material, (p) => materials.get(p));
+      }
+      // the item being built in the compiler, while this character wears it (its materials are its own, not the game's)
+      const preview = compilerPreview;
+      if (preview && e === compilerTarget && preview.cls === e.cls) {
+        add(preview.name || "Compiler item", preview.data, (m) => m.materials[e.team] ?? m.material, (p) => preview.materials.get(p) ?? materials.get(p));
       }
     }
     texPreview.show(items);
@@ -3727,12 +3744,10 @@ export function createViewTab(els: Els) {
   const hudPlay = document.getElementById("hudPlay") as HTMLButtonElement;
   const hudPose = document.getElementById("hudPose") as HTMLButtonElement;
   const hudGame = document.getElementById("hudGame") as HTMLButtonElement;
-  // a gamepad: play mode
-  const ICON_GAME = '<svg viewBox="0 0 24 24"><path d="M7.5 6h9A5.5 5.5 0 0 1 22 11.5v1A4.5 4.5 0 0 1 17.5 17a4 4 0 0 1-3-1.4L13.4 14.5h-2.8l-1.1 1.1a4 4 0 0 1-3 1.4A4.5 4.5 0 0 1 2 12.500v-1A5.500 5.500 0 0 1 7.500 6zM7 8.500v1.500H5.500v1.500H7V13h1.500v-1.500H10V10H8.500V8.500zM16 9.200a1.100 1.100 0 1 0 0 2.200 1.100 1.100 0 0 0 0-2.200zm2.500 2.300a1.100 1.100 0 1 0 0 2.200 1.100 1.100 0 0 0 0-2.200z"/></svg>';
-  const ICON_PLAY = '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>';
-  const ICON_PAUSE = '<svg viewBox="0 0 24 24"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>';
-  // a standing figure with its arms out: the pose icon
-  const ICON_POSE = '<svg viewBox="0 0 24 24"><circle cx="12" cy="4.5" r="2.4"/><path d="M4 8.5l8 1.6 8-1.6.6 2.2-6.1 1.6v3.2l2.1 6.2-2.2.8L12 16.2 9.6 22.5l-2.2-.8 2.1-6.2v-3.2L3.4 10.7z"/></svg>';
+  const ICON_GAME = svgIcon("gamepad2");
+  const ICON_PLAY = svgIcon("play");
+  const ICON_PAUSE = svgIcon("pause");
+  const ICON_POSE = svgIcon("personStanding");
   let hudState = "";
   function syncHud() {
     let clearedParticles=false;
@@ -3921,9 +3936,9 @@ export function createViewTab(els: Els) {
   }
 
   // a pose without a picture shows a figure (a hand pose a hand), drawn in the colour of the tiles' own empty state
-  const figure = (paths: string, stroke = false) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" ${stroke ? 'fill="none" stroke="#5b6475" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"' : 'fill="#5b6475"'}>${paths}</svg>`)}`;
-  const PLACEHOLDER_THUMB = figure('<circle cx="12" cy="4.5" r="2.4"/><path d="M4 8.5l8 1.6 8-1.6.6 2.2-6.1 1.6v3.2l2.1 6.2-2.2.8L12 16.2 9.6 22.5l-2.2-.8 2.1-6.2v-3.2L3.4 10.7z"/>');
-  const HAND_PLACEHOLDER = figure('<path d="M8 13V5.500a1.500 1.500 0 0 1 3 0V11M11 10V4.500a1.500 1.500 0 0 1 3 0V11M14 10.500V6a1.500 1.500 0 0 1 3 0v8c0 4-2 7-6 7-3 0-4.500-1.500-6-4l-1.500-3a1.500 1.500 0 0 1 2.500-1.500L8 14"/>', true);
+  const figure = (name: IconName) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#5b6475" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${LUCIDE[name]}</svg>`)}`;
+  const PLACEHOLDER_THUMB = figure("personStanding");
+  const HAND_PLACEHOLDER = figure("hand");
   /** The look (thumbnails or list, and their size) is the one of the other browsers, kept for this one. */
   createBrowserView(P.foot, P.library, "poses");
 
@@ -7174,16 +7189,9 @@ export function createViewTab(els: Els) {
 
   // The Add menu of the outliner: a character, a buildable, a light or a camera
   const ICON = {
-    character: "M9 3.500a2.500 2.500 0 1 0 0 5 2.500 2.500 0 0 0 0-5zM4 15v-1.500A3.500 3.500 0 0 1 7.500 10h3a3.500 3.500 0 0 1 3.500 3.500V15z",
-    buildable: "M2 6.500 9 3l7 3.500v6L9 16l-7-3.500zM2 6.500l7 3.500 7-3.500M9 10v6",
-    light: "M9 2.500a4.500 4.500 0 0 0-2.500 8.200V12.500h5v-1.800A4.500 4.500 0 0 0 9 2.500zM7 14.500h4M7.800 16.500h2.400",
-    camera: "M2 5.500h3l1.200-2h5.600l1.200 2h3v9H2zM9 12.500a2.500 2.500 0 1 0 0-5 2.500 2.500 0 0 0 0 5z",
-    sun: "M9 6a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM9 1.500v2M9 14.500v2M1.500 9h2M14.500 9h2M3.700 3.700l1.400 1.400M12.900 12.900l1.400 1.400M3.700 14.300l1.400-1.400M12.900 5.100l1.400-1.400",
-    point: "M9 2.500a6.500 6.500 0 1 0 0 13 6.500 6.500 0 0 0 0-13zM9 7.500a1.500 1.500 0 1 0 0 3 1.500 1.500 0 0 0 0-3z",
-    spot: "M7 2.500h4v3H7zM8 5.500 3.500 15.500M10 5.500l4.500 10M3.500 15.500h11",
-    area: "M2 3.500h14v4H2zM4 7.500 2.500 15.500M9 7.500v8M14 7.500l1.500 8",
-    folder: "M2 5h5l2-2h7v12H2zM2 7h14",
-  };
+    character: "userRound", buildable: "wrench", prop: "box", light: "lightbulb", camera: "video", sun: "sun", point: "circleDot", spot: "flashlight",
+    area: "rectangleHorizontal", folder: "folder",
+  } as const satisfies Record<string, IconName>;
   const propsRoot = document.getElementById("propsPane");
   if (propsRoot) createPropPanel(propsRoot, { add: (path, at) => void addProp(path, at) });
   els.entities.add.onclick = () => {
@@ -7198,7 +7206,7 @@ export function createViewTab(els: Els) {
           { label: "Teleporter", run: () => void addBuilding("teleporter") },
         ],
       },
-      { label: "Prop…", icon: ICON.buildable, hint: "opens the prop browser", run: () => document.dispatchEvent(new CustomEvent("workbench:reveal-panel", { detail: "props" })) },
+      { label: "Prop…", icon: ICON.prop, hint: "opens the prop browser", run: () => document.dispatchEvent(new CustomEvent("workbench:reveal-panel", { detail: "props" })) },
       {
         label: "Light",
         icon: ICON.light,

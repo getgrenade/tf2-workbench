@@ -1,3 +1,4 @@
+import { icon as svgIcon, type IconName } from "../icons";
 import { POSE_MAP, POSE_MAP_VIEWBOX } from "./poseMapData";
 import type { LimbId } from "./poseRig";
 
@@ -10,19 +11,11 @@ import type { LimbId } from "./poseRig";
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 const ICONS = {
-  show: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
-  mirror: '<path d="M12 3v18M8 7 3 12l5 5zM16 7l5 5-5 5z"/>',
-  eye: '<circle cx="12" cy="12" r="7.500"/><circle cx="12" cy="12" r="2.200"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',
-  orient: '<path d="M5 19V5M5 19h14M5 19l8-8"/>',
-  groups: '<path d="M4 6h8M18 6h2M4 12h2M12 12h8M4 18h10M20 18h0"/><circle cx="15" cy="6" r="2.200"/><circle cx="9" cy="12" r="2.200"/><circle cx="17" cy="18" r="2.200"/>',
-  undo: '<path d="M9 14 4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3"/>',
-  redo: '<path d="m15 14 5-5-5-5M20 9H10a6 6 0 0 0 0 12h3"/>',
-  resetBone: '<path d="M3 12a9 9 0 1 0 3-6.700L3 8M3 3v5h5"/>',
-  resetAll: '<path d="M4 4v6h6M20 20v-6h-6M20 10A8 8 0 0 0 6 6L4 10M4 14a8 8 0 0 0 14 4l2-4"/>',
-  library: '<path d="M5 4h3v16H5zM10 4h3v16h-3zM16 6.500l3-.9 3 13.400-3 .9z"/>',
-};
+  show: "eye", mirror: "flipHorizontal2", eye: "crosshair", orient: "axis3d", groups: "slidersHorizontal", undo: "undo2", redo: "redo2",
+  resetBone: "rotateCcw", resetAll: "refreshCcw", library: "library",
+} as const satisfies Record<string, IconName>;
 
-const icon = (name: keyof typeof ICONS) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
+const icon = (name: keyof typeof ICONS) => svgIcon(ICONS[name]);
 
 /** Where the IK / FK switch of each limb and the pole dot of its IK sit on the map (viewBox units). */
 const LIMB_MARKS: Record<LimbId, { switchAt: [number, number]; poleAt: [number, number] }> = {

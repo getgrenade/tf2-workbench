@@ -1,3 +1,5 @@
+import { icon } from "../icons";
+
 /** The thumbnails / list switch and the size slider of the cosmetics and weapons browsers, and the tiles they draw. */
 
 export type BrowserMode = "grid" | "list";
@@ -28,8 +30,8 @@ export function parseLook(text: string | null): BrowserLook {
   }
 }
 
-const GRID_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 2h5v5H2zM9 2h5v5H9zM2 9h5v5H2zM9 9h5v5H9z"/></svg>';
-const LIST_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3h2v2H2zM6 3.500h8M2 7h2v2H2zM6 7.500h8M2 11h2v2H2zM6 11.500h8"/></svg>';
+const GRID_ICON = icon("layoutGrid");
+const LIST_ICON = icon("list");
 
 /**
  * Puts a mode button and a size slider at the start of `bar`, and makes `list` follow them. The choice is kept per browser
@@ -84,8 +86,8 @@ export function createBrowserView(bar: HTMLElement, list: HTMLElement, key: stri
 
 export type BrowserSort = "newest" | "alpha";
 
-const NEWEST_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.500"/><path d="M8 4.800V8l2.200 1.400"/></svg>';
-const ALPHA_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 12.500 4.500 4l2.500 8.500M3.100 9.500h2.800M9 4h4.500L9 12.500h4.500"/></svg>';
+const NEWEST_ICON = icon("clock");
+const ALPHA_ICON = icon("arrowDownAZ");
 
 /**
  * A button at the start of `bar` that switches the order of a browser between newest first and A–Z; its icon shows the order the
