@@ -346,8 +346,18 @@ export function createViewTab(els: Els) {
   document.getElementById("worldBackdrop")?.append(worldPicker.el);
   let ground: GroundState = { ...DEFAULT_GROUND };
   let groundUi: ReturnType<typeof createGroundUi> | null = null;
-  function setGroundState(next: GroundState) {
-    ground = { ...next };
+  // Whether the ground plane shows is a choice of the app's, like the grid and the outline (remembered, the same in every scene); its look
+  // (colour, opacity, fade) goes with the scene.
+  let groundOn = true;
+  try { groundOn = localStorage.getItem("tf2workbench.groundPlane") !== "0"; } catch { /* on */ }
+  ground.enabled = groundOn;
+  /** `user`: the switch was flipped (remembered for every scene); a scene's own state takes the remembered switch; `off`: none here (the icon studio). */
+  function setGroundState(next: GroundState, how: "user" | "scene" | "off" = "scene") {
+    if (how === "user") {
+      groundOn = next.enabled;
+      try { localStorage.setItem("tf2workbench.groundPlane", groundOn ? "1" : "0"); } catch { /* not remembered */ }
+    }
+    ground = { ...next, enabled: how === "off" ? false : groundOn };
     groundUi?.sync();
     const button = document.getElementById("hudGround");
     button?.classList.toggle("on", ground.enabled);
@@ -1606,7 +1616,7 @@ export function createViewTab(els: Els) {
   hudGround.innerHTML = svgIcon("landPlot");
   hudGround.classList.toggle("on", ground.enabled);
   hudGround.setAttribute("aria-pressed", String(ground.enabled));
-  hudGround.onclick = () => setGroundState({ ...ground, enabled: !ground.enabled });
+  hudGround.onclick = () => setGroundState({ ...ground, enabled: !ground.enabled }, "user");
 
   // The light indicators button beside the floor grid: whether the lights show in the view (and can be clicked); remembered, on by default.
   const hudLights = document.getElementById("hudLights") as HTMLButtonElement;
@@ -6787,7 +6797,8 @@ export function createViewTab(els: Els) {
       setPostItems([]);
       void setSkyState(DEFAULT_SKY);
       void setReflectionState(DEFAULT_REFLECTION).catch(() => {});
-    setGroundState(DEFAULT_GROUND);
+      // no ground plane in an icon
+      setGroundState(DEFAULT_GROUND, "off");
       els.wire.checked = false;
       v.setWireframe(false);
       syncWireButton();
@@ -7971,7 +7982,7 @@ export function createViewTab(els: Els) {
   });
   groundUi = createGroundUi(document.querySelector<HTMLElement>("#lightPane .worldGround")!, {
     get: () => ground,
-    set: (next) => setGroundState(next),
+    set: (next) => setGroundState(next, "user"),
   });
   // the controls of the selected light live in the properties panel
   propsEl("propLight").append(document.getElementById("lightPane")!.querySelector(".lightingControls")!);
