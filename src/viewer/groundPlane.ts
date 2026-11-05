@@ -13,9 +13,14 @@ export interface GroundState {
   distance: number;
   /** How much of that distance the fade takes up, 0 (an edge) to 1 (from the middle). */
   softness: number;
+  /**
+   * Laid over what is behind it (a gradient, a picture, the sky) as a shade of it instead of a colour of its own: the colour darkens what
+   * is behind by as much as it is dark (white leaves it as it is), so the ground takes the colours of the background wherever it is.
+   */
+  blend: boolean;
 }
 
-export const DEFAULT_GROUND: GroundState = { enabled: true, color: "#6b6b6b", opacity: 1, distance: 4, softness: 1 };
+export const DEFAULT_GROUND: GroundState = { enabled: false, color: "#6b6b6b", opacity: 1, distance: 4, softness: 1, blend: false };
 
 export function parseGround(raw: unknown): GroundState | undefined {
   const v = raw as Partial<GroundState> | null;
@@ -27,6 +32,7 @@ export function parseGround(raw: unknown): GroundState | undefined {
     opacity: n(v.opacity, DEFAULT_GROUND.opacity, 0, 1),
     distance: n(v.distance, DEFAULT_GROUND.distance, 1, 100),
     softness: n(v.softness, DEFAULT_GROUND.softness, 0, 1),
+    blend: v.blend === true,
   };
 }
 
@@ -42,9 +48,10 @@ export class GroundPlane {
 
   constructor(scene: THREE.Scene) {
     this.material = new THREE.ShaderMaterial({
-      uniforms: { uColor: { value: new THREE.Color() }, uOpacity: { value: 1 }, uCenter: { value: new THREE.Vector2() }, uFade: { value: new THREE.Vector2(0, 1) } },
+      uniforms: { uColor: { value: new THREE.Color() }, uOpacity: { value: 1 }, uCenter: { value: new THREE.Vector2() }, uFade: { value: new THREE.Vector2(0, 1) }, uBlend: { value: 0 } },
       vertexShader: "varying vec2 vXZ; void main() { vec4 w = modelMatrix * vec4(position, 1.0); vXZ = w.xz; gl_Position = projectionMatrix * viewMatrix * w; }",
-      fragmentShader: "uniform vec3 uColor; uniform float uOpacity; uniform vec2 uCenter; uniform vec2 uFade; varying vec2 vXZ; void main() { float d = length(vXZ - uCenter); gl_FragColor = vec4(uColor, uOpacity * (1.0 - smoothstep(uFade.x, uFade.y, d))); }",
+      // blended, the colour multiplies what is behind (white where the ground has faded out); otherwise it is laid over it
+      fragmentShader: "uniform vec3 uColor; uniform float uOpacity; uniform vec2 uCenter; uniform vec2 uFade; uniform float uBlend; varying vec2 vXZ; void main() { float d = length(vXZ - uCenter); float a = uOpacity * (1.0 - smoothstep(uFade.x, uFade.y, d)); gl_FragColor = uBlend > 0.5 ? vec4(mix(vec3(1.0), uColor, a), 1.0) : vec4(uColor, a); }",
       transparent: true,
       depthWrite: false,
       side: THREE.DoubleSide,
@@ -66,7 +73,18 @@ export class GroundPlane {
     this.mesh.visible = state.enabled && state.opacity > 0;
     if (!this.mesh.visible) return;
     const { start, end } = groundFade(state, unit);
-    this.material.uniforms.uColor.value.set(state.color);
+    // blended, the colour is a factor as the picker shows it (mid grey halves what is behind), not the colour light would have
+    if (state.blend) this.material.uniforms.uColor.value.setStyle(state.color, THREE.LinearSRGBColorSpace);
+    else this.material.uniforms.uColor.value.set(state.color);
+    this.material.uniforms.uBlend.value = state.blend ? 1 : 0;
+    const blending = state.blend ? THREE.CustomBlending : THREE.NormalBlending;
+    if (this.material.blending !== blending) {
+      this.material.blending = blending;
+      this.material.blendEquation = THREE.AddEquation;
+      this.material.blendSrc = THREE.ZeroFactor;
+      this.material.blendDst = THREE.SrcColorFactor;
+      this.material.needsUpdate = true;
+    }
     this.material.uniforms.uOpacity.value = state.opacity;
     this.material.uniforms.uCenter.value.set(cx, cz);
     this.material.uniforms.uFade.value.set(start, end);

@@ -93,7 +93,7 @@ export function buildPreviewModel(imported: ImportedModel, classData: ModelData,
       flexRules: flex.rules,
       skinCount: 2,
       eyeAttachment: null,
-      bones: [...classData.bones, ...ownBones],
+      bones: [...itemBinds(imported, classData.bones), ...ownBones],
       includeModels: [],
       bodyParts: [body],
       lod: 0,
@@ -102,6 +102,23 @@ export function buildPreviewModel(imported: ImportedModel, classData: ModelData,
     customBones,
     skeleton,
   };
+}
+
+/**
+ * The class's bones, bound where the item's own skeleton has them: studiomdl binds the mesh to the item's reference skeleton, so an item
+ * whose skeleton sits a little off the class's moves by that much in the game, and the preview moves it the same.
+ */
+function itemBinds(imported: ImportedModel, classBones: BoneData[]): BoneData[] {
+  const byName = new Map(imported.skeleton.map((b) => [b.name.toLowerCase(), b]));
+  const m = new THREE.Matrix4();
+  return classBones.map((bone) => {
+    const own = byName.get(bone.name.toLowerCase());
+    if (!own) return bone;
+    const e = m.fromArray(own.world).invert().elements;
+    const poseToBone: number[] = [];
+    for (let r = 0; r < 3; r++) for (let c = 0; c < 4; c++) poseToBone.push(e[c * 4 + r]);
+    return { ...bone, poseToBone };
+  });
 }
 
 /** The item's own bones (those the class lacks that carry weight, and what is above them up to a class bone), parents first, as bones of the preview. */

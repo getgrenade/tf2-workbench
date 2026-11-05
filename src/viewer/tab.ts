@@ -348,8 +348,8 @@ export function createViewTab(els: Els) {
   let groundUi: ReturnType<typeof createGroundUi> | null = null;
   // Whether the ground plane shows is a choice of the app's, like the grid and the outline (remembered, the same in every scene); its look
   // (colour, opacity, fade) goes with the scene.
-  let groundOn = true;
-  try { groundOn = localStorage.getItem("tf2workbench.groundPlane") !== "0"; } catch { /* on */ }
+  let groundOn = false;
+  try { groundOn = localStorage.getItem("tf2workbench.groundPlane") === "1"; } catch { /* off */ }
   ground.enabled = groundOn;
   /** `user`: the switch was flipped (remembered for every scene); a scene's own state takes the remembered switch; `off`: none here (the icon studio). */
   function setGroundState(next: GroundState, how: "user" | "scene" | "off" = "scene") {
