@@ -28,6 +28,7 @@ export const HOTKEYS = [
   { id: "view.focusAll", label: "Frame everything", group: "Selection and view", hint: "Moves the camera back to show all the characters (with the pointer over the view).", default: "KeyA", kind: "key" },
   { id: "view.fullscreen", label: "Hide the panels", group: "Selection and view", hint: "Hides the header and the docks so the 3D view fills the window; the same key brings them back.", default: "Tab", kind: "key" },
   { id: "play.toggle", label: "Play / pause", group: "Selection and view", hint: "Starts or pauses the animation.", default: "Space", kind: "key" },
+  { id: "play.toggleAll", label: "Play / pause everyone", group: "Selection and view", hint: "Starts or pauses the animations of all the characters together (as Ctrl + clicking the play button).", default: "Ctrl+Space", kind: "key" },
   { id: "edit.copy", label: "Copy", group: "Editing", hint: "Copies the selected characters, lights or cameras.", default: "Ctrl+KeyC", kind: "key" },
   { id: "edit.paste", label: "Paste", group: "Editing", hint: "Pastes what was copied.", default: "Ctrl+KeyV", kind: "key" },
   { id: "edit.undo", label: "Undo", group: "Editing", hint: "Takes back the last placement, or the last change of the pose while posing.", default: "Ctrl+KeyZ", kind: "key" },

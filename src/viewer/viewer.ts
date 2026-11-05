@@ -1041,6 +1041,13 @@ void main() {
     return actor;
   }
 
+  /** A character's place in the row; one that has none (it was pasted in place) is given the first free one. */
+  private slotOf(actor: Actor): number {
+    let slot = this.slots.get(actor);
+    if (slot === undefined) { slot = freeSlot(this.slots.values()); this.slots.set(actor, slot); }
+    return slot;
+  }
+
   /** Removes a character from the scene. */
   removeActor(actor: Actor) {
     const i = this.actorList.indexOf(actor);
@@ -1088,7 +1095,7 @@ void main() {
   /** Puts a detached character back into the scene, where it stood (shown; the list's own hiding is applied again by its owner). */
   attachActor(actor: Actor) {
     if (this.actorList.includes(actor)) return;
-    this.slots.set(actor, freeSlot(this.slots.values()));
+    if (!this.placed.has(actor)) this.slots.set(actor, freeSlot(this.slots.values()));
     this.actorList.push(actor);
     actor.setListHidden(false);
     actor.changed = true;
@@ -1785,7 +1792,7 @@ void main() {
             if(tool==="scale") a.setScale(new THREE.Vector3(1,1,1));
             else if(tool==="rotate") {a.setPlacement(a.offset.x,a.offset.y,a.offset.z,0);a.setTilt(0,0);}
             else {
-              a.setPlacement(this.slotX(this.slots.get(a)??0),0,0,a.yaw);
+              a.setPlacement(this.slotX(this.slotOf(a)),0,0,a.yaw);
               this.placed.delete(a);
             }
           }
@@ -3140,6 +3147,14 @@ void main() {
     this.rig.setActor(null);
   }
 
+  /** Gives a character the place, turn and size of another (a copy pasted in place). */
+  copyPlacement(from: Actor, to: Actor) {
+    this.applyPlacement(to, { ...this.entitySnapshot(from), placed: true });
+    // it stands where it was pasted, not in the row: the next character added takes the place in the row it would have had
+    this.slots.delete(to);
+    this.frame(false);
+  }
+
   /** Whether a character was placed by hand (and so ignores the row spacing). */
   isPlaced(actor: Actor): boolean {
     return this.placed.has(actor);
@@ -3394,6 +3409,11 @@ void main() {
     if (box.isEmpty()) return;
     const size = box.getSize(new THREE.Vector3());
     this.cameras.frameBall(box.getCenter(new THREE.Vector3()), Math.max(size.x, size.y, size.z) * 0.5);
+  }
+
+  /** After characters were added or taken away: the scene is measured again, and the camera stays where it is (unless it was never placed). */
+  charactersChanged() {
+    this.frame(!this.cameraPlaced);
   }
 
   /** Camera back on all the characters, from where it looks now. */

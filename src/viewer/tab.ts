@@ -430,6 +430,8 @@ export function createViewTab(els: Els) {
   let compilerPaint: PaintInfo | null = null;
   let compilerTarget: Entity | null = null;
   let compilerOn = false;
+  /** What each character was doing when the compiler paused them all (null: the compiler did not pause them). */
+  let playingBeforeCompiler: Map<Actor, boolean> | null = null;
   /** The bone of the item being built that is drawn with its axes and constraints (see the jiggle bone editor). */
   let boneGizmoSpec: { bone: string; turn: () => import("../compiler/boneAxes").BoneTurn; onTurn: (turn: import("../compiler/boneAxes").BoneTurn) => void; onEnd: () => void } | null = null;
   let boneHelperSpec: { bone: string; setup: import("../compiler/jiggleBones").JiggleSetup | null } | null = null;
@@ -2790,7 +2792,7 @@ export function createViewTab(els: Els) {
           if (!e) continue;
           selectEntity(e);
           const before = new Set(entities.map((x) => x.id));
-          await addEntity(true, false);
+          await addEntity(true, false, settings().pasteInPlace);
           const fresh = entities.find((x) => !before.has(x.id));
           if (fresh) made.push({ kind: "character", id: String(fresh.id) });
         } else if (p.kind === "light") {
@@ -2873,7 +2875,7 @@ export function createViewTab(els: Els) {
     const picks = caps.filter((c) => stillThere(c)).map((c): Pick => ({ kind: c.kind, id: String(c.id) }));
     renderEntities();
     if (picks.length) selectPicks(picks, picks[picks.length - 1]);
-    v.focusAll();
+    v.charactersChanged();
   }
 
   /** What the outliner shows of the things in it, that edits of the outliner change (the folders, the order, the names ...). */
@@ -3314,7 +3316,8 @@ export function createViewTab(els: Els) {
   }
 
   /** Adds a character next to the others, of the selected one's class and team, and selects it. */
-  async function addEntity(copy = false, record = true) {
+  /** `inPlace`: the copy takes the place, turn and size of the one it copies (a paste), instead of a free spot in the row. */
+  async function addEntity(copy = false, record = true, inPlace = false) {
     const v = ensureViewer();
     const base = selected;
     if (base) saveUi(base);
@@ -3323,6 +3326,7 @@ export function createViewTab(els: Els) {
     const e = newEntity(v.addActor(), base?.cls ?? CLASSES[0][1], base?.team ?? 0);
     e.group = hierarchy().activeGroup() ?? (copy ? base?.group : undefined);
     if (copy && base) e.actor.setScale(base.actor.scale);
+    if (copy && base && inPlace) v.copyPlacement(base.actor, e.actor);
     // Ctrl + Add: a copy with the same cosmetics, paints, styles, weapon, expression and animation
     const source = copy && base ? base : undefined;
     if (source) {
@@ -3340,7 +3344,7 @@ export function createViewTab(els: Els) {
     renderEntities();
     if (record) recordAdd(copy ? "Copy model" : "Add model", [{ kind: "character", id: String(e.id) }]);
     await show(e, e.cls, source ? { seq: source.anim.seq, seqName: source.anim.seqName, encoded: source.anim.encoded.slice(), playback: () => source.actor.playback, pose } : undefined);
-    v.focusAll(); // fit everyone in view
+    v.charactersChanged(); // the camera stays where it is
   }
 
   function removeEntity(e: Entity) {
@@ -3358,7 +3362,7 @@ export function createViewTab(els: Els) {
       restoreUi(selected);
     }
     renderEntities();
-    viewer?.focusAll();
+    viewer?.charactersChanged();
   }
   // --- posing ------------------------------------------------------------------------------------------------
 
@@ -3853,11 +3857,14 @@ export function createViewTab(els: Els) {
   });
   window.addEventListener("keydown", (ev) => {
     const target = ev.target as HTMLElement | null;
-    if (!hotkeyMatches("play.toggle", ev) || (target && /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(target.tagName))) return;
+    const all = hotkeyMatches("play.toggleAll", ev);
+    if ((!all && !hotkeyMatches("play.toggle", ev)) || (target && /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(target.tagName))) return;
     if (document.getElementById("view")?.hidden) return;
     if (play?.active || hudPlay.disabled) return;
     ev.preventDefault();
-    hudPlay.click();
+    // everyone: the Ctrl + click of the play button
+    if (all) hudPlay.dispatchEvent(new MouseEvent("click", { ctrlKey: true }));
+    else hudPlay.click();
   });
   syncHud();
 
@@ -7382,7 +7389,7 @@ export function createViewTab(els: Els) {
     renderEntities();
     recordAdd("Add building", [{ kind: "character", id: String(e.id) }]);
     await show(e, e.cls);
-    v.focusAll();
+    v.charactersChanged();
   }
 
   /** Swaps a building's model for another level or stage, keeping its place, team and animation clock. */
@@ -7992,6 +7999,18 @@ export function createViewTab(els: Els) {
     setCompiler(on: boolean) {
       if (on === compilerOn) return;
       compilerOn = on;
+      // the compiler holds everyone still; the viewer gets back what was playing
+      if (on && settings().pauseInCompiler) {
+        playingBeforeCompiler = new Map(entities.map((e) => [e.actor, e.actor.playback.playing]));
+        for (const e of entities) e.actor.playback.playing = false;
+      } else if (!on && playingBeforeCompiler) {
+        for (const [actor, playing] of playingBeforeCompiler) actor.playback.playing = playing;
+        playingBeforeCompiler = null;
+      }
+      if (playingBeforeCompiler || !on) {
+        if (selected) els.anim.play.textContent = selected.actor.playback.playing ? "Pause" : "Play";
+        syncHud();
+      }
       if (on) {
         // the compiler drives the viewer's bone helper itself: close the read-only inspector's drawing first
         selectedJiggle = null;

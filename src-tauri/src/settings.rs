@@ -28,6 +28,10 @@ pub struct Settings {
     pub confirm_close_scene: bool,
     /// Equipping a cosmetic leaves the ones in the same equip region on (off by default: the game's rule, the newer one replaces them).
     pub allow_overlapping_cosmetics: bool,
+    /// A pasted character takes the place, turn and size of the one it was copied from (on by default; off: it gets a place of its own).
+    pub paste_in_place: bool,
+    /// Entering the compiler pauses every character; leaving it puts back what was playing (on by default).
+    pub pause_in_compiler: bool,
     /// The base tone of the interface and its highlight ("#rrggbb"); every colour of the interface is mixed from these two.
     pub ui_base: String,
     /// The size of the interface: 0 fits it to the screen (the layout is made for 1440p), otherwise a factor (0.5–2).
@@ -62,6 +66,8 @@ impl Default for Settings {
             restore_last_scene: true,
             confirm_close_scene: true,
             allow_overlapping_cosmetics: false,
+            paste_in_place: true,
+            pause_in_compiler: true,
             ui_base: "#222226".into(),
             ui_scale: 0.0,
             ui_accent: "#e08a3c".into(),

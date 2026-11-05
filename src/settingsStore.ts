@@ -12,6 +12,8 @@ export const DEFAULTS: Settings = {
   restoreLastScene: true,
   confirmCloseScene: true,
   allowOverlappingCosmetics: false,
+  pasteInPlace: true,
+  pauseInCompiler: true,
   uiBase: "#222226",
   uiScale: 0,
   uiAccent: "#e08a3c",

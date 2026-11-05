@@ -650,7 +650,7 @@ function refreshHotkeyTitles() {
     const k = key(id);
     $(button).title = binding(id) ? `${name} gizmo (${k}); edit by mouse (Shift+${k}); reset ${reset} (Alt+${k})` : `${name} gizmo (no key)`;
   }
-  $("hudPlay").title = `Play / pause the animation of the selected character (${key("play.toggle")})`;
+  $("hudPlay").title = `Play / pause the animation of the selected character (${key("play.toggle")}; ${key("play.toggleAll")} or Ctrl + click: everyone)`;
 }
 onSettingsChange(refreshHotkeyTitles);
 $("tabView").onclick = () => showTab("view");

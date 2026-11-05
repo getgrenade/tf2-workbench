@@ -29,6 +29,10 @@ export interface Settings {
   confirmCloseScene: boolean;
   /** Equipping a cosmetic does not replace the ones that share its equip region. */
   allowOverlappingCosmetics: boolean;
+  /** A pasted character takes the place, turn and size of the one it was copied from. */
+  pasteInPlace: boolean;
+  /** Entering the compiler pauses every character; leaving it puts back what was playing. */
+  pauseInCompiler: boolean;
   /** Interface colours of the 3D view ("#rrggbb" display colours and opacities 0..1): the wireframe overlay and the floor grid. */
   /** The base tone of the interface and its highlight ("#rrggbb"). */
   uiBase: string;
