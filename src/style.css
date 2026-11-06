@@ -1483,3 +1483,15 @@ body.dndActive.dndRefused * { cursor: no-drop !important; }
 .colorWheel .cwDropper:hover { background: var(--ui-hover); color: inherit; }
 .colorWheel .cwDropper svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .cwCover { position: fixed; inset: 0; z-index: 100000; cursor: crosshair; }
+.promoChartPop { width: 330px; }
+.promoChartPop .chartList { display: flex; flex-direction: column; max-height: 340px; overflow-y: auto; gap: 1px; }
+.promoChartPop .chartList h4 { margin: var(--ui-2) 0 var(--ui-1); font-size: var(--ui-fs-small); color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
+.promoChartPop .chartList h4:first-child { margin-top: 0; }
+.promoChartPop .chartList button { display: block; flex: none; width: 100%; height: auto; min-height: 24px; line-height: 1.35; font-size: var(--ui-fs-small, 12px); justify-content: flex-start; text-align: left; padding: 4px var(--ui-3); border: 0; border-radius: var(--ui-radius-l); background: transparent; color: var(--fg); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.promoChartPop .chartList button:hover { background: var(--ui-wash-2); }
+.promoChartPop .chartList button.on { background: var(--accent); color: #fff; }
+.promoChartPop .chartList button.on .dim { color: #fff; opacity: .8; }
+.promoThumb.dragging { position: relative; z-index: 2; opacity: .85; }
+.promoThumb .renameKind { width: 100%; min-width: 0; height: 20px; padding: 0 4px; font-size: var(--ui-fs-small); text-align: center; }
+.promoThumb.dropBefore { box-shadow: inset 3px 0 0 var(--accent); }
+.promoThumb.dropAfter { box-shadow: inset -3px 0 0 var(--accent); }

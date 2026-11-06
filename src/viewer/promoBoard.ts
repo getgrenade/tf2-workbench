@@ -60,7 +60,14 @@ export interface BoardHost {
   newShot(chars: { cls: string; team: 0 | 1 }[], x: number, y: number, w: number, h: number): Promise<PromoLayer>;
   /** The name a shot of characters added by hand has: its class and team, or a group's classes left to right. */
   shotName(spec: ShotSpec): string;
+  /** The paintable cosmetics a paint chart can be made of: those worn in the open scenes, and the workshop's (newest first). */
+  chartItems(): Promise<{ scene: ChartItem[]; workshop: ChartItem[] }>;
+  /** A paint chart of an item (one of its styles) as a layer of a 1920 × 1080 page, and the item's name. */
+  newChart(item: number, style: number): Promise<{ layer: PromoLayer; item: string }>;
 }
+
+/** A cosmetic a paint chart can be made of: its id, its name, and its styles' names (none when it has one look). */
+export interface ChartItem { id: number; name: string; styles: string[] }
 
 /** The thumbnails are this tall (CSS pixels; drawn at twice that for sharpness). */
 const THUMB_H = 120;
@@ -945,10 +952,36 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
   }
   const lookBackdrop = $(".promoLookBackdrop");
   // the backdrop of every picture: a category and thumbnails to pick from (a step of a fade only draws, the last one is kept)
-  const lookPicker = createBackdropPicker({ get: () => look.backdrop, set: (b, live) => { look.backdrop = b; if (live) drawAll(); else changedLook(); }, picture: true });
-  lookBackdrop.append(lookPicker.el);
-  const showLookBackdrop = () => lookPicker.refresh();
-  $(".promoShuffle").onclick = () => { look.backdrop = randomBackdrop(); showLookBackdrop(); changedLook(); };
+  // (or, when the page shown has a backdrop of its own, that one: the switch under it says which)
+  const ownBackdrop = () => picked?.backdrop ? picked : null;
+  const setBackdrop = (b: Backdrop, live = false) => {
+    const own = ownBackdrop();
+    if (own) { own.backdrop = b; draw(own); if (!live) host.changed(); return; }
+    look.backdrop = b;
+    if (live) drawAll(); else changedLook();
+  };
+  const lookPicker = createBackdropPicker({ get: () => ownBackdrop()?.backdrop ?? look.backdrop, set: (b, live) => setBackdrop(b, live), picture: true });
+  const ownRow = document.createElement("div");
+  const ownNote = $(".promoNote");
+  const showLookBackdrop = () => {
+    lookPicker.refresh();
+    ownRow.replaceChildren();
+    const p = picked;
+    if (!p) return;
+    const c = check(ownRow, "Only this page", !!p.backdrop, (v) => {
+      const was = snapshot();
+      p.backdrop = v ? { ...look.backdrop } : null;
+      pushUndo(was);
+      draw(p);
+      host.changed();
+      showLookBackdrop();
+      showInspector();
+    }, "This page's own backdrop, in place of the one every picture has (the picker above then changes this page's)");
+    c.closest("label")?.classList.add("promoOwnBackdrop");
+    ownNote.textContent = p.backdrop ? "The backdrop of this page alone; the rest is the look of every picture." : "The look of every picture of the set.";
+  };
+  lookBackdrop.append(lookPicker.el, ownRow);
+  $(".promoShuffle").onclick = () => { setBackdrop(randomBackdrop()); lookPicker.refresh(); };
   // (the border's settings show on the right, when Border is picked in the layers)
   const strokeBox = document.createElement("div");
   function showLookStroke() {
@@ -1059,7 +1092,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
   for (const p of pictures) for (const l of p.layers) if (!l.opaque) measureContent(l);
   /** A picture's name on a card and in its tooltip: its item and what it is. */
   const cardTitle = (p: PromoPicture) => `${p.item ? `${p.item} · ` : ""}${p.kind} · ${p.name}`;
-  // the cards, grouped by item (the item's name over its pictures); pictures of no item come first, ungrouped
+  // the cards, grouped by item (the item's name over its pictures); pictures of no item come first, under the board's name
   function showThumbs() {
   thumbsBox.replaceChildren();
   thumbs.clear();
@@ -1069,12 +1102,14 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     const box = document.createElement("div");
     box.className = "promoThumbGroup";
     box.setAttribute("role", "group");
-    if (item) {
-      box.setAttribute("aria-label", item);
+    // (the pictures of no item are under the board's own name)
+    const name = item || title;
+    if (name) {
+      box.setAttribute("aria-label", name);
       const head = document.createElement("div");
       head.className = "promoThumbGroupName";
-      head.textContent = item;
-      head.title = item;
+      head.textContent = name;
+      head.title = name;
       box.appendChild(head);
     }
     const cards = document.createElement("div");
@@ -1091,7 +1126,10 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       card.append(canvas, caption);
       cards.appendChild(card);
       thumbs.set(p, canvas);
-      card.onclick = () => pick(p);
+      card.onclick = () => { if (dragged) { dragged = false; return; } pick(p); };
+      dragCard(card, p, cards);
+      caption.title = "Double-click to rename";
+      caption.ondblclick = (e) => { e.stopPropagation(); renameCard(card, caption, p); };
       card.oncontextmenu = (e) => {
         e.preventDefault();
         showContextMenu(e.clientX, e.clientY, [
@@ -1106,22 +1144,152 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
   // a new blank page, the size of the one shown
   const add = document.createElement("button");
   add.className = "promoThumbAdd";
-  add.title = "A new blank page (the size of the one shown)";
+  add.title = "A new page: blank, with this page's overlays, a copy of it, a square thumbnail or a paint chart";
   add.setAttribute("aria-label", "New page");
   add.innerHTML = icon("plus");
   add.style.height = `${THUMB_H}px`;
-  add.onclick = () => addPage(picked);
+  add.onclick = () => {
+    const r = add.getBoundingClientRect();
+    const like = picked;
+    const overlays = !!like?.layers.some((l) => l.overlay);
+    showContextMenu(r.left, r.bottom + 4, [
+      { label: "Blank page", run: () => addPage(like) },
+      { label: "With this page's overlays", disabled: !overlays, run: () => addPage(like, "overlays") },
+      { label: "Copy of this page", disabled: !like, run: () => addPage(like, "all") },
+      "-",
+      { label: "Square thumbnail (512 × 512)", run: () => addPage(like, "blank", { w: 512, h: 512, kind: "Thumbnail" }) },
+      { label: "Square thumbnail with the overlays", disabled: !overlays, run: () => addPage(like, "overlays", { w: 512, h: 512, kind: "Thumbnail" }) },
+      "-",
+      { label: "Paint chart…", run: () => chartPopup(r.left, r.bottom + 4) },
+    ]);
+  };
   thumbsBox.appendChild(add);
   for (const p of pictures) if (picked === p) thumbs.get(p)?.parentElement?.classList.add("on");
   }
   showThumbs();
-  /** A blank page after `after` (the last when absent), in its group, the size of it; it is shown. */
-  function addPage(after: PromoPicture | null) {
-    const like = after ?? pictures.at(-1);
+  /** The label under a card becomes a box to type its new name in (Enter or a click away keeps it, Escape leaves it as it was). */
+  function renameCard(card: HTMLElement, caption: HTMLElement, p: PromoPicture) {
+    const input = document.createElement("input");
+    input.className = "renameKind";
+    input.value = p.kind;
+    input.setAttribute("aria-label", "Page name");
+    let done = false;
+    const finish = (keep: boolean) => {
+      if (done) return;
+      done = true;
+      const v = input.value.trim();
+      if (keep && v && v !== p.kind) { p.kind = v; host.changed(); }
+      caption.textContent = p.kind;
+      card.title = cardTitle(p);
+      input.replaceWith(caption);
+      if (picked === p) showInspector();
+    };
+    for (const ev of ["pointerdown", "click", "dblclick"]) input.addEventListener(ev, (e) => e.stopPropagation());
+    input.onkeydown = (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") { e.preventDefault(); finish(true); }
+      else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+    };
+    input.onblur = () => finish(true);
+    caption.replaceWith(input);
+    input.focus();
+    input.select();
+  }
+  /** A card was just dragged: the click that ends the drag does not pick it. */
+  let dragged = false;
+  /**
+   * Cards are dragged along their group to put the pages in another order: a line shows where it goes (before the card under the pointer,
+   * or after the last one).
+   */
+  function dragCard(card: HTMLElement, p: PromoPicture, cards: HTMLElement) {
+    card.addEventListener("pointerdown", (down) => {
+      if (down.button !== 0) return;
+      const x0 = down.clientX;
+      let moving = false;
+      let target: { q: PromoPicture; after: boolean } | null = null;
+      const others = () => [...cards.children].filter((c) => c !== card) as HTMLElement[];
+      const clear = () => { for (const c of cards.children) c.classList.remove("dropBefore", "dropAfter"); };
+      const move = (m: PointerEvent) => {
+        if (!moving) {
+          if (Math.abs(m.clientX - x0) < 6) return;
+          moving = true;
+          card.setPointerCapture(down.pointerId);
+          card.classList.add("dragging");
+        }
+        card.style.transform = `translateX(${m.clientX - x0}px)`;
+        clear();
+        const list = others();
+        if (!list.length) { target = null; return; }
+        const before = list.find((c) => { const r = c.getBoundingClientRect(); return m.clientX < r.left + r.width / 2; });
+        const el = before ?? list.at(-1)!;
+        el.classList.add(before ? "dropBefore" : "dropAfter");
+        const q = [...thumbs].find(([, cv]) => cv.parentElement === el)?.[0];
+        target = q ? { q, after: !before } : null;
+      };
+      const up = () => {
+        card.removeEventListener("pointermove", move);
+        card.removeEventListener("pointerup", up);
+        card.removeEventListener("pointercancel", up);
+        if (!moving) return;
+        dragged = true;
+        setTimeout(() => { dragged = false; }); // (no click follows a drag that ends off the card)
+        card.classList.remove("dragging");
+        card.style.transform = "";
+        clear();
+        if (!target) return;
+        const from = pictures.indexOf(p);
+        pictures.splice(from, 1);
+        pictures.splice(pictures.indexOf(target.q) + (target.after ? 1 : 0), 0, p);
+        if (pictures.indexOf(p) === from) return;
+        showThumbs();
+        drawAll();
+        host.changed();
+      };
+      card.addEventListener("pointermove", move);
+      card.addEventListener("pointerup", up);
+      card.addEventListener("pointercancel", up);
+    });
+  }
+  /** A name no picture has yet: `base`, then `base_2`, `base_3`… (or numbered from `n` with `numbered`). */
+  const freeName = (base: string, numbered?: number) => {
     const taken = new Set(pictures.map((q) => q.name));
-    let n = pictures.length + 1;
-    while (taken.has(`Page_${n}`)) n++;
-    const p: PromoPicture = { name: `Page_${n}`, item: like?.item, kind: `Page ${n}`, w: like?.w ?? 1920, h: like?.h ?? 1080, layers: [], texts: [], backdrop: null };
+    if (numbered === undefined) {
+      if (!taken.has(base)) return base;
+      let n = 2;
+      while (taken.has(`${base}_${n}`)) n++;
+      return `${base}_${n}`;
+    }
+    let n = numbered;
+    while (taken.has(`${base}_${n}`)) n++;
+    return `${base}_${n}`;
+  };
+  /** A layer as a copy of its own (its shot, chart, text and settings its own, not linked with the one it is of). */
+  const ownCopy = (src: PromoLayer): PromoLayer => ({
+    ...src, box: { ...src.box }, hidden: src.hidden,
+    mask: src.mask ? structuredClone(src.mask) : undefined, overlay: src.overlay ? structuredClone(src.overlay) : undefined,
+    shot: src.shot ? structuredClone(src.shot) : undefined, chart: src.chart ? structuredClone(src.chart) : undefined, text: src.text ? { ...src.text } : undefined,
+    link: src.text || src.overlay ? undefined : newLink(), shared: undefined,
+  });
+  /**
+   * A page after `after` (the last when absent), in its group, the size of it (or `size`): blank, with its background overlays and ground
+   * (made again at the new size), or a copy of all of it. It is shown.
+   */
+  function addPage(after: PromoPicture | null, from: "blank" | "overlays" | "all" = "blank", size?: { w: number; h: number; kind: string }) {
+    const like = after ?? pictures.at(-1);
+    const square = size?.kind === "Thumbnail";
+    const name = freeName(square ? "Thumbnail" : "Page", square ? 1 : pictures.length + 1);
+    const p: PromoPicture = { name, item: like?.item, kind: square ? "Thumbnail" : `Page ${name.split("_").pop()}`, w: size?.w ?? like?.w ?? 1920, h: size?.h ?? like?.h ?? 1080, layers: [], texts: [], backdrop: null };
+    if (like && from === "all") {
+      p.layers = like.layers.map(ownCopy);
+      p.texts = like.texts.map((t) => ({ ...t }));
+      p.strokeAt = like.strokeAt;
+      p.backdrop = like.backdrop ? { ...like.backdrop } : null;
+      if (!/^Page \d+$/.test(like.kind)) p.kind = like.kind; // (a copy of a numbered page has its own number)
+    } else if (like && from === "overlays") {
+      p.layers = like.layers.filter((l) => l.overlay).map(ownCopy);
+    }
+    // overlays fill their picture: on a page of another size they are made again at its size
+    if (p.w !== like?.w || p.h !== like?.h) for (const l of p.layers) if (l.overlay) { l.box = { x: 0, y: 0, w: p.w, h: p.h }; l.opaque = { x0: 0, y0: 0, x1: p.w, y1: p.h }; l.dx = 0; l.dy = 0; l.scale = 1; void retile(p, l); }
     const at = like ? pictures.indexOf(like) + 1 : pictures.length;
     pictures.splice(at, 0, p);
     showThumbs();
@@ -1446,6 +1614,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     for (const [q, c] of thumbs) c.parentElement!.classList.toggle("on", q === p);
     drawPreview();
     showInspector();
+    showLookBackdrop();
   }
 
   const pictureBox = document.createElement("div");
@@ -1474,18 +1643,6 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       thumbs.get(p)!.parentElement!.title = cardTitle(p);
     };
     field(pictureBox, "File name", name);
-    const ownBox = document.createElement("div");
-    const showOwn = () => {
-      ownBox.innerHTML = "";
-      if (!p.backdrop) return;
-      const ownPicker = createBackdropPicker({ get: () => p.backdrop!, set: (b) => { p.backdrop = b; draw(p); }, picture: true });
-      ownBox.appendChild(ownPicker.el);
-      buttons(ownBox, [{ label: "Shuffle", title: "Another random neutral gradient", run: () => { p.backdrop = randomBackdrop(); showOwn(); draw(p); } }]);
-    };
-    check(pictureBox, "A backdrop of its own", !!p.backdrop, (v) => { p.backdrop = v ? { ...look.backdrop } : null; draw(p); showInspector(); },
-      "This picture's own backdrop, in place of the one every picture has");
-    pictureBox.appendChild(ownBox);
-    showOwn();
     // the layers, top first as in an image editor: the border over everything, the captions, the shots (drag one up or down to put
     // it over or under the others, the eye shows or hides it, Shift-click selects more), the backdrop under everything
     const lh = document.createElement("h3");
@@ -1710,6 +1867,98 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     window.addEventListener("pointerdown", outside, true);
     window.addEventListener("keydown", esc, true);
   }
+  /**
+   * The window that picks what a new paint chart page is of: the paintable cosmetics worn in the open scenes, then the workshop's, with a
+   * search; an item of several styles has a choice of the style.
+   */
+  function chartPopup(x: number, y: number) {
+    document.querySelector(".promoCharsPop")?.remove();
+    const pop = document.createElement("div");
+    pop.className = "promoCharsPop promoChartPop";
+    pop.style.left = `${Math.round(Math.min(x, window.innerWidth - 340))}px`;
+    pop.style.top = `${Math.round(y)}px`;
+    const close = () => { pop.remove(); window.removeEventListener("pointerdown", outside, true); window.removeEventListener("keydown", esc, true); };
+    const outside = (e: PointerEvent) => { if (!pop.contains(e.target as Node)) close(); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); close(); } };
+    const search = document.createElement("input");
+    search.type = "search";
+    search.placeholder = "Search cosmetics…";
+    search.setAttribute("aria-label", "Search cosmetics");
+    const list = document.createElement("div");
+    list.className = "chartList";
+    list.setAttribute("role", "listbox");
+    list.innerHTML = `<p class="dim hint">Reading…</p>`;
+    const styleSel = document.createElement("select");
+    styleSel.setAttribute("aria-label", "Style");
+    styleSel.hidden = true;
+    const go = document.createElement("button");
+    go.type = "button";
+    go.className = "primary";
+    go.textContent = "Make the paint chart";
+    go.disabled = true;
+    let items: { scene: ChartItem[]; workshop: ChartItem[] } = { scene: [], workshop: [] };
+    let chosen: ChartItem | null = null;
+    const choose = (it: ChartItem) => {
+      chosen = it;
+      for (const b of list.querySelectorAll("button")) b.classList.toggle("on", (b as HTMLElement).dataset.id === String(it.id));
+      styleSel.replaceChildren(...it.styles.map((s, i) => new Option(s, String(i))));
+      styleSel.hidden = it.styles.length < 2;
+      go.disabled = false;
+    };
+    const show = () => {
+      list.replaceChildren();
+      const q = search.value.trim().toLowerCase();
+      const section = (title: string, of: ChartItem[], none: string) => {
+        const shown = q ? of.filter((i) => i.name.toLowerCase().includes(q)) : of;
+        const h = document.createElement("h4");
+        h.textContent = title;
+        list.append(h);
+        if (!shown.length) { const p = document.createElement("p"); p.className = "dim hint"; p.textContent = q ? "Nothing matches." : none; list.append(p); return; }
+        for (const it of shown.slice(0, 300)) {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.dataset.id = String(it.id);
+          b.setAttribute("role", "option");
+          b.textContent = it.name;
+          if (it.styles.length > 1) { const s = document.createElement("span"); s.className = "dim"; s.textContent = ` · ${it.styles.length} styles`; b.append(s); }
+          b.classList.toggle("on", chosen?.id === it.id);
+          b.onclick = () => choose(it);
+          b.ondblclick = () => { choose(it); go.click(); };
+          list.append(b);
+        }
+      };
+      section("In your scenes", items.scene, "Nothing paintable is worn in the open scenes.");
+      section("Workshop", items.workshop, "No paintable workshop cosmetics (tf/workshop/import_source).");
+    };
+    search.oninput = show;
+    go.onclick = () => { if (!chosen) return; const it = chosen, style = styleSel.hidden ? 0 : Number(styleSel.value); close(); void addChartPage(it, style); };
+    pop.append(search, list, styleSel, go);
+    document.body.append(pop);
+    search.focus();
+    window.addEventListener("pointerdown", outside, true);
+    window.addEventListener("keydown", esc, true);
+    void host.chartItems().then((got) => { items = got; show(); }).catch((err) => { list.innerHTML = ""; const p = document.createElement("p"); p.className = "dim hint"; p.textContent = `Could not read the cosmetics: ${String(err)}`; list.append(p); });
+  }
+  /** A new page of a paint chart of an item (after the page shown), shown once taken. */
+  async function addChartPage(it: ChartItem, style: number) {
+    const after = picked;
+    status.textContent = `Taking the paint chart of ${it.name}…`;
+    try {
+      const made = await host.newChart(it.id, style);
+      const base = `${it.name.replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "_") || "item"}_paints`;
+      const p: PromoPicture = { name: freeName(base), item: made.item, kind: it.styles.length > 1 ? `Paint chart: ${it.styles[style] ?? style + 1}` : "Paint chart", w: 1920, h: 1080, layers: [made.layer], texts: [], backdrop: null };
+      const at = after ? pictures.indexOf(after) + 1 : pictures.length;
+      pictures.splice(at, 0, p);
+      status.textContent = "";
+      showThumbs();
+      drawAll();
+      pick(p);
+      host.changed();
+      thumbs.get(p)?.parentElement?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    } catch (err) {
+      status.textContent = `Could not make the paint chart: ${String(err)}`;
+    }
+  }
   /** A background overlay: a game texture tiled over the whole picture, faint, under everything but the backdrop. */
   async function addOverlay(p: PromoPicture, texture: string) {
     status.textContent = "Reading the texture…";
@@ -1752,12 +2001,13 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     showInspector();
   }
   /** An overlay's image made again from its texture, as its settings now say (at once when the texture is read already). */
-  let retileRun = 0;
+  const retileRun = new WeakMap<PromoLayer, number>();
   async function retile(p: PromoPicture, l: PromoLayer) {
     if (!l.overlay) return;
-    const run = ++retileRun;
+    const run = (retileRun.get(l) ?? 0) + 1;
+    retileRun.set(l, run);
     const image = await overlayImage(l.overlay, p.w, p.h).catch(() => null);
-    if (!image || run !== retileRun) return;
+    if (!image || run !== retileRun.get(l)) return;
     l.image = image;
     draw(p);
     drawPreview();

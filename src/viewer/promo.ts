@@ -240,6 +240,8 @@ export interface ShotSpec extends ShotAim {
 /** How a paint chart was taken (the item on the promo scene's character `role`, in a style). */
 export interface ChartSpec extends ShotAim {
   role: number;
+  /** The class wearing the item (a model name); absent: the board's. */
+  cls?: string;
   item: number;
   style: number;
   /** How many times 1920 × 1080 the chart is rendered at (sized up, it is taken again larger, to stay sharp); 1 when absent. */

@@ -77,7 +77,7 @@ import type { PoseHud } from "./poseHud";
 import { createRigControls, type RigControls } from "../rig/rigControls";
 import type { LimbId } from "./poseRig";
 import { PLAY_ACTIONS, PLAY_DAMAGE_ACTIONS, PLAY_SLOTS, encodeParam, setsOf, type PlaySlot } from "./playLogic";
-import { itemImageFor, itemMaterialOverride, itemModelFor, slotForClass, weaponCategory, itemSkinFor, itemUsableBy, parseAnimInfo, parseMaterial, parsePayload, tauntPropSequence, tauntSequence, weaponIdleSequences, type ClipData, type ItemDb, type ItemInfo, type PaintInfo, type MaterialData, type ModelData } from "./payload";
+import { itemImageFor, newestFirst, itemMaterialOverride, itemModelFor, slotForClass, weaponCategory, itemSkinFor, itemUsableBy, parseAnimInfo, parseMaterial, parsePayload, tauntPropSequence, tauntSequence, weaponIdleSequences, type ClipData, type ItemDb, type ItemInfo, type PaintInfo, type MaterialData, type ModelData } from "./payload";
 import { createWeaponsUi, type WeaponsEls } from "./weaponsUi";
 import { loadSettings, onSettingsChange, settings, updateSetting } from "../settingsStore";
 import { accentHex } from "../theme";
@@ -5793,24 +5793,16 @@ export function createViewTab(els: Els) {
     viewer?.setFov(+els.fov.value); // the view's own lens again
     hidePromoTab(promo().roles.get(ed.spec.role));
     const { spec, ents } = ed;
-    if (set && ents.every((e) => entities.includes(e))) {
+    // characters added in the view, or taken out: the shot becomes a composition of those there now (or a shot of the one left)
+    const live = entities.filter((x) => !isBuildingCls(x.cls));
+    if (set && live.length && (live.length !== ents.length || live.some((x) => !ents.includes(x)))) {
+      regroupShot(spec, ents, live);
+    } else if (set && ents.every((e) => entities.includes(e))) {
       if (selected && ents.includes(selected)) saveUi(selected);
       // a composition takes each of its characters, a shot its one
       for (const [i, e] of ents.entries()) {
         const part = spec.group ? spec.group[i] : spec;
-        const game = gameClassOf(e.cls);
-        part.loadout = e.items.loadout.filter((x) => itemUsableBy(x.item, game)).map((x) => ({ item: x.item.id, name: x.item.displayName, paintable: x.item.paintable, paint: x.paint?.id ?? null, style: x.style }));
-        part.weapon = e.held?.id ?? null;
-        part.team = e.team;
-        part.cls = e.cls === promo().cls ? undefined : e.cls; // a class picked in 3D
-        part.bodygroups = e.bodyManual.size ? Object.fromEntries(e.bodyManual) : undefined;
-        // the pose it shows now: a custom one, or the frame of what it plays (and that, as its source: the board's Pose list and timeline)
-        part.poseOf = poseSourceAfterEdit(part, e);
-        if (e.actor.isPosing) e.actor.endPose(true);
-        const pose = e.actor.snapshotCustomPose() ?? e.actor.snapshotPose();
-        part.pose = pose ? { pos: Array.from(pose.pos), quat: Array.from(pose.quat), scale: pose.scale ? Array.from(pose.scale) : undefined } : undefined;
-        part.flex = currentFace(e);
-        part.eyesFollow = e.actor.followsCamera;
+        takePart(part, e);
         if (spec.group) {
           promo().dressed.set(part.role, dressKey(part));
           part.place = { x: e.actor.offset.x, y: e.actor.offset.y, z: e.actor.offset.z, yaw: e.actor.yaw };
@@ -5834,6 +5826,79 @@ export function createViewTab(els: Els) {
     }
     if (backToBoard && session?.board) showBoardTab(session.board);
     ed.done(set);
+  }
+
+  /** A character of a shot as it is in the view now: its class, team, loadout, weapon, bodygroups, pose and face. */
+  function takePart(part: ShotSpec, e: Entity) {
+    const game = gameClassOf(e.cls);
+    part.loadout = e.items.loadout.filter((x) => itemUsableBy(x.item, game)).map((x) => ({ item: x.item.id, name: x.item.displayName, paintable: x.item.paintable, paint: x.paint?.id ?? null, style: x.style }));
+    part.weapon = e.held?.id ?? null;
+    part.team = e.team;
+    part.cls = e.cls === promo().cls ? undefined : e.cls; // a class picked in 3D
+    part.bodygroups = e.bodyManual.size ? Object.fromEntries(e.bodyManual) : undefined;
+    // the pose it shows now: a custom one, or the frame of what it plays (and that, as its source: the board's Pose list and timeline)
+    part.poseOf = poseSourceAfterEdit(part, e);
+    if (e.actor.isPosing) e.actor.endPose(true);
+    const pose = e.actor.snapshotCustomPose() ?? e.actor.snapshotPose();
+    part.pose = pose ? { pos: Array.from(pose.pos), quat: Array.from(pose.quat), scale: pose.scale ? Array.from(pose.scale) : undefined } : undefined;
+    part.flex = currentFace(e);
+    part.eyesFollow = e.actor.followsCamera;
+  }
+
+  /**
+   * A shot edited in 3D with characters added or taken out: it becomes a composition of the characters there now, each standing where it
+   * was put and seen from the view's angle; or, with one left, a shot of that one alone. The scene it was edited in goes back to as many
+   * characters as its own shots have.
+   */
+  function regroupShot(spec: ShotSpec, ents: Entity[], live: Entity[]) {
+    if (selected && live.includes(selected)) saveUi(selected);
+    const cam = ensureViewer().getCamera();
+    const d = new THREE.Vector3(...cam.position).sub(new THREE.Vector3(...cam.target)).normalize();
+    const turn = (deg: number) => Math.round(((((deg + 180) % 360) + 360) % 360) - 180);
+    const viewYaw = (Math.atan2(d.x, d.z) * 180) / Math.PI;
+    const pitch = Math.round((Math.asin(Math.max(-1, Math.min(1, d.y))) * 180) / Math.PI);
+    const was = spec.group ?? [spec];
+    const parts = live.map((e): ShotSpec => {
+      const k = ents.indexOf(e);
+      const part: ShotSpec = k >= 0 ? structuredClone(was[k]) : { role: 0, loadout: [], weapon: null, regions: null, yaw: 0, pitch: 0, fill: 1, w: 1, h: 1 };
+      takePart(part, e);
+      part.place = { x: e.actor.offset.x, y: e.actor.offset.y, z: e.actor.offset.z, yaw: e.actor.yaw };
+      return part;
+    });
+    for (const part of was) promo().dressed.delete(part.role);
+    promo().dressed.delete(spec.role);
+    promo().laidOut.delete(spec.role);
+    // (the edited scene of a lone shot keeps its one character: the others added there were for this shot)
+    if (!spec.group) {
+      const v = ensureViewer();
+      const keep = live.find((x) => ents.includes(x)) ?? live[0];
+      for (const x of [...entities]) if (x !== keep && !isBuildingCls(x.cls)) { v.removeActor(x.actor); entities.splice(entities.indexOf(x), 1); }
+      if (selected && !entities.includes(selected)) selected = keep;
+    }
+    const s = spec as Partial<ShotSpec>;
+    delete s.frame; delete s.holdFrame; delete s.focus; delete s.scaleDistance;
+    if (parts.length === 1) {
+      // a shot of the one left: its camera at the front, the character turned by the angle it was seen from
+      const part = parts[0], e = live[0];
+      delete s.group; delete s.spacing;
+      Object.assign(spec, part, { w: spec.w, h: spec.h, fill: spec.fill, fov: spec.fov, effects: spec.effects, studio: spec.studio, particles: spec.particles });
+      delete s.place; delete s.turn;
+      spec.role = teamOf(part);
+      spec.yaw = turn(viewYaw - (e.actor.yaw * 180) / Math.PI);
+      spec.pitch = pitch;
+      return;
+    }
+    spec.group = parts.map((part, i) => ({ ...part, role: GROUP_FIRST_ROLE + i, yaw: 0, pitch: 0, w: 1, h: 1, turn: 0 }));
+    for (const part of spec.group) promo().dressed.delete(part.role);
+    promo().laidOut.delete(GROUP_ROLE);
+    spec.role = GROUP_ROLE;
+    spec.loadout = [];
+    spec.weapon = null;
+    spec.regions = null;
+    spec.yaw = turn(viewYaw);
+    spec.pitch = pitch;
+    spec.fov ??= 25;
+    for (const k of ["pose", "poseOf", "flex", "eyesFollow", "bodygroups", "cls", "team", "place", "turn"] as const) delete s[k];
   }
 
   /** Takes a shot as its spec says, on its character of the open promo scene. */
@@ -6106,6 +6171,32 @@ export function createViewTab(els: Els) {
     changed: () => { if (session) scheduleSave(session); },
     newSet: () => els.capture.promo.click(),
     shotName: (spec) => shotName(spec),
+    chartItems: async () => {
+      const db = await loadItemDb();
+      // what the characters of the open scenes wear (not the promo's own scenes)
+      const worn = new Set<number>();
+      for (const t of tabs) {
+        if (t.board || isPromoTab(t)) continue;
+        for (const en of t.scene?.entities ?? []) for (const w of en.loadout) worn.add(w.item);
+      }
+      const info = (i: ItemInfo) => ({ id: i.id, name: i.displayName, styles: i.styles.length > 1 ? i.styles.map((st, k) => st.name || `Style ${k + 1}`) : [] });
+      return {
+        scene: db.items.filter((i) => i.paintable && worn.has(i.id)).sort((a, b) => a.displayName.localeCompare(b.displayName)).map(info),
+        workshop: db.items.filter((i) => i.paintable && i.workshop).sort(newestFirst).map(info),
+      };
+    },
+    newChart: (itemId, style) => inPromoScene(async () => {
+      const db = await loadItemDb();
+      const item = db.items.find((i) => i.id === itemId);
+      if (!item) throw new Error("no such item");
+      // worn by the board's class when it can be, else by the first class that can wear it
+      const board = promo().cls;
+      const mdl = itemUsableBy(item, gameClassOf(board)) ? board : CLASSES.find(([, m]) => !isBuildingCls(m) && itemUsableBy(item, gameClassOf(m)))?.[1];
+      if (!mdl) throw new Error(`no class can wear ${item.displayName}`);
+      const spec: ChartSpec = { role: 2, cls: mdl === board ? undefined : mdl, item: item.id, style, yaw: 24, pitch: 13, fill: 0.9, options: structuredClone(DEFAULT_CHART) };
+      const taken = await takeChart(spec);
+      return { layer: { ...layer("Paints", taken.canvas, 0, 0, 1920, 1080), chart: spec, cells: taken.cells }, item: item.displayName };
+    }),
     classes: () => CLASSES.filter(([, mdl]) => !isBuildingCls(mdl)).map(([label, mdl]) => ({ label, cls: mdl })),
     boardClass: () => promo().cls,
     newShot: (chars, x, y, w, h) => inPromoScene(async () => {
