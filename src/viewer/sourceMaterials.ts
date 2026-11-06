@@ -283,7 +283,9 @@ export class SourceMaterials {
         uHasIllumMask: { value: !!illumMask },
         uSelfIllumEnvMaskAlpha: { value: flag("$selfillum_envmapmask_alpha") && !!envMask },
         uHalfLambert: { value: flag("$halflambert") },
-        uPhong: { value: phong },
+        // without the Skin shader there is no phong (nor rim light, which is part of it): VertexLitGeneric's own pixel shader has neither,
+        // so "$phong" "1" with no bump map, lightwarp or base-alpha phong mask is drawn plain (the Warrior's Spirit's claws)
+        uPhong: { value: skinPath },
         uSkinPath: { value: skinPath },
         uSpecTint: { value: new THREE.Vector3(tint[0], tint[1], tint[2]) },
         // with no $phongexponent the Skin shader reads the exponent map, white when there is none (150: a small, faint highlight)

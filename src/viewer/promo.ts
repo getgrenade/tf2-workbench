@@ -8,6 +8,7 @@ import { ensureOverlayFont, overlayFontFamily } from "./overlayFonts";
 import { sampleStops, sortedStops, unitGradientLine, type GradientStop } from "./gradientStops";
 import type { ItemInfo } from "./payload";
 import type { StudioLight } from "./studioLight";
+import { maskedImage, partsOf, type LayerMask } from "./promoMask";
 
 /** A backdrop: a linear gradient between two colours at an angle, a soft light behind the middle and darker corners. */
 export interface Backdrop {
@@ -134,6 +135,13 @@ export interface ShotAim {
    * the shot comes out the same each time it is taken. Absent: as they happen to be.
    */
   particles?: { seed: number; time: number };
+  /**
+   * Auto framing off: the camera keeps this framing (where it looks, from how far, at what zoom) and only goes round it as it is turned,
+   * not fitted to the subject again each time the shot is taken. Absent: fitted every time.
+   */
+  frame?: { distance: number; target: [number, number, number]; fill: number };
+  /** Auto framing is off (the framing is `frame`, taken the next time the shot is when it has none yet). */
+  holdFrame?: boolean;
 }
 
 /** The field of view of a promo shot or chart unless it says otherwise (`ShotSpec.fov`): degrees, vertical. */
@@ -151,6 +159,8 @@ export function aimDirection(a: { yaw: number; pitch: number }): [number, number
 /** How a shot of a character was taken, kept so it can be taken again with changes (on the promo scene's character `role`). */
 export interface ShotSpec extends ShotAim {
   role: number;
+  /** The class (its model name, as `scout`); absent: the board's. */
+  cls?: string;
   /** What it wears: item ids, paint ids (null: unpainted), styles; `name` and `paintable` for the board. */
   loadout: { item: number; name: string; paintable: boolean; paint: number | null; style: number }[];
   weapon: number | null;
@@ -198,6 +208,10 @@ export interface ShotSpec extends ShotAim {
   focusZone?: "head" | "body" | "legs";
   /** A thumbnail's body parts for its Item alone framing (kept while it is on the character, so that it can go back to it). */
   aloneRegions?: string[];
+  /** Taken without its ground shadow, whatever the board's shadows are (a shot that fades out has none under it). */
+  noShadow?: boolean;
+  /** Taken with a parts picture too (see `partsOf`): its layer's mask keeps parts of the character whole. */
+  parts?: boolean;
   /**
    * The point of its picture its shadows fan out from or converge to, in its image (shares of its width and height, from its top left;
    * the board sets it as the shot is taken): one point for the whole picture, so that every shot of it, whatever its camera, fans out or
@@ -302,7 +316,55 @@ export interface PromoLayer {
   text?: TextSpec;
   /** Turned (degrees, clockwise) about the middle of what is visible of it. */
   rotation?: number;
+  /** A gradient that fades it out (see promoMask.ts). */
+  mask?: LayerMask;
+  /** How much of it shows (0..1); absent: all of it. */
+  opacity?: number;
+  /** How it is laid over what is under it (a canvas blend); absent: normally. */
+  blend?: LayerBlend;
+  /** A background overlay: a game texture tiled over the whole picture (its image is the tiling, made from this; see promoOverlay.ts). */
+  overlay?: OverlaySpec;
 }
+
+/** The blends a layer can be laid over the others with (canvas names; the PSD's are mapped from them). */
+export const LAYER_BLENDS = [
+  ["source-over", "Normal"], ["multiply", "Multiply"], ["screen", "Screen"], ["overlay", "Overlay"], ["soft-light", "Soft light"], ["hard-light", "Hard light"], ["color-dodge", "Colour dodge"], ["color-burn", "Colour burn"], ["luminosity", "Luminosity"],
+] as const;
+export type LayerBlend = (typeof LAYER_BLENDS)[number][0];
+
+/** A background overlay: which texture (a path under materials/, without .vtf), how large its tiles are (1: its own pixels), grey or not. */
+export interface OverlaySpec {
+  texture: string;
+  tile: number;
+  grey: boolean;
+  /** Where its tiles start (pixels of the picture): dragged on the board, the texture slides under its edges. */
+  ox?: number;
+  oy?: number;
+  /** Turned (degrees). */
+  rot?: number;
+  /**
+   * A ground instead of a tiling over the whole picture: a floor under the characters, an ellipse that fades out at its edge, in a colour
+   * of its own with the texture (when it has one: `texture` "" is none) laid on it as a floor seen from the side.
+   */
+  ground?: GroundSpec;
+}
+
+/** A ground of the board (see OverlaySpec.ground); its place and size are fractions of the picture. */
+export interface GroundSpec {
+  /** Its middle. */
+  cx: number;
+  cy: number;
+  /** How wide (of the picture's width), and how deep as a part of that (a floor seen from high up is deeper). */
+  width: number;
+  depth: number;
+  /** How much of it fades out towards its edge (0: a hard edge, 1: from the middle). */
+  softness: number;
+  /** Its colour (`#rrggbb`), and how strongly the texture shows over it (0..1). */
+  color: string;
+  texStrength: number;
+}
+
+export const DEFAULT_GROUND_SPEC: GroundSpec = { cx: 0.5, cy: 0.93, width: 2, depth: 0.1, softness: 0.4, color: "#907863", texStrength: 0.8 };
 
 /** A text of a picture: its font (an overlay font's path, "" for the system font, or "sys:<family>"), weight, colour and look. */
 export interface TextSpec {
@@ -713,6 +775,12 @@ export function turnPoint(x: number, y: number, pivot: readonly [number, number]
 }
 
 /** Draws a picture into `canvas` at `scale` of its size (the board's cards are small; an export is at full size). */
+/** What the shadows of a picture last came to, by what they were made of (a drag of a mask does not work them out again). */
+const shadowCache = new WeakMap<PromoPicture, Map<string, { key: string; canvas: HTMLCanvasElement }>>();
+
+/** A layer's own shadow is off: its shot is taken without one (or it has one apart, which is left out). */
+export const shadowOff = (l: PromoLayer) => !!l.shot?.noShadow;
+
 export function renderPicture(canvas: HTMLCanvasElement, p: PromoPicture, look: BoardLook, scale = 1) {
   canvas.width = Math.max(1, Math.round(p.w * scale));
   canvas.height = Math.max(1, Math.round(p.h * scale));
@@ -732,10 +800,20 @@ export function renderPicture(canvas: HTMLCanvasElement, p: PromoPicture, look: 
     c.translate(-px, -py);
   };
   // the shadows of the shots on the ground, together: the darkest of them where they overlap, under every character
-  const shadowed = p.layers.filter((l) => !l.hidden && shadowOf.has(l.image));
-  if (shadowed.length) {
+  const shadowed = p.layers.filter((l) => !l.hidden && shadowOf.has(l.image) && !shadowOff(l));
+  const half = scale < 1 ? 0.5 : 1;
+  const shadowKey = shadowed.length ? JSON.stringify([canvas.width, canvas.height, look.effects?.shadow.color, shadowed.map((l) => [idOfImage(l.image), layerRect(l), l.rotation ?? 0])]) : "";
+  const sizeKey = `${canvas.width}x${canvas.height}`;
+  const cachedShadow = shadowCache.get(p)?.get(sizeKey);
+  if (shadowed.length && cachedShadow?.key === shadowKey) {
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = look.effects?.look ? 1 : look.effects?.shadow.opacity ?? 1;
+    ctx.globalCompositeOperation = look.effects?.look ? "source-over" : look.effects?.shadow.blend ?? "source-over";
+    ctx.drawImage(cachedShadow.canvas, 0, 0, canvas.width, canvas.height);
+    ctx.restore();
+  } else if (shadowed.length) {
     // (worked out at half the size it is drawn at on the board, a shadow being soft; at full size for an export)
-    const half = scale < 1 ? 0.5 : 1;
     const acc = document.createElement("canvas");
     acc.width = Math.max(1, Math.round(canvas.width * half));
     acc.height = Math.max(1, Math.round(canvas.height * half));
@@ -771,6 +849,12 @@ export function renderPicture(canvas: HTMLCanvasElement, p: PromoPicture, look: 
     }
     actx.globalCompositeOperation = "source-over";
     actx.putImageData(px, 0, 0);
+    if (scale < 1) {
+      let bySize = shadowCache.get(p);
+      if (!bySize) shadowCache.set(p, (bySize = new Map()));
+      if (bySize.size > 3) bySize.clear();
+      bySize.set(sizeKey, { key: shadowKey, canvas: acc });
+    }
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     // (the board's opacity of the shadows: each shot's is taken at full strength)
@@ -785,17 +869,33 @@ export function renderPicture(canvas: HTMLCanvasElement, p: PromoPicture, look: 
     const r = layerRect(l);
     ctx.save();
     turn(ctx, l);
+    if (l.opacity !== undefined) ctx.globalAlpha = Math.max(0, Math.min(1, l.opacity));
+    if (l.blend && l.blend !== "source-over") ctx.globalCompositeOperation = l.blend;
     // the glow round a character or an item (the canvas's shadow is in its own pixels, not the picture's)
     if (glow && l.shot) {
       ctx.shadowColor = `rgba(0,0,0,${glow.strength})`;
       ctx.shadowBlur = glow.size * (p.h / 1080) * scale;
     }
     // (a shot whose shadow is drawn above is drawn without it)
-    ctx.drawImage(shadowOf.has(l.image) ? solidOf.get(l.image) ?? l.image : l.image, r.x, r.y, r.w, r.h);
+    const src = shadowOf.has(l.image) ? solidOf.get(l.image) ?? l.image : l.image;
+    if (l.mask?.on) {
+      const parts = l.mask.keep.length ? partsOf.get(l.image) : null;
+      // at the size it is drawn (no larger than its image)
+      const k = Math.min(r.w * scale, src.width) / r.w;
+      ctx.drawImage(maskedImage(l, src, l.mask, r.w * k, r.h * k, parts), r.x, r.y, r.w, r.h);
+    } else ctx.drawImage(src, r.x, r.y, r.w, r.h);
     ctx.restore();
   });
   if (strokeAt >= p.layers.length) paintStroke(ctx, p.w, p.h, look.stroke, backdrop);
   cutCorners(ctx, p.w, p.h, look.stroke);
+}
+
+const imageIds = new WeakMap<HTMLCanvasElement, number>();
+let nextImageId = 1;
+function idOfImage(c: HTMLCanvasElement): number {
+  let id = imageIds.get(c);
+  if (!id) imageIds.set(c, (id = nextImageId++));
+  return id;
 }
 
 /** A picture as a PNG at full size. */

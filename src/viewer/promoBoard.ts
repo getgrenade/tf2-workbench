@@ -11,6 +11,9 @@ import { shotEffectsOf, SHADOW_BLENDS, type ShadowBlend, DEFAULT_SHOT_EFFECTS, L
 import { createBackdropPicker } from "./backdropPicker";
 import { DEFAULT_STUDIO, STUDIO_LABELS, STUDIO_ROLES, flipStudio, parseStudio, randomStudio, type StudioLight } from "./studioLight";
 import { createStudioSphere } from "./studioSphere";
+import { defaultMask, partsOf, type KeepPart, type LayerMask } from "./promoMask";
+import { DEFAULT_GROUND_SPEC, layer, LAYER_BLENDS, type GroundSpec, type LayerBlend, type OverlaySpec } from "./promo";
+import { openTextureBrowser, overlayImage } from "./promoOverlay";
 import { DEFAULT_CHART, DEFAULT_GLOW, DEFAULT_STROKE, DEFAULT_TEXT, TEXT_FONTS, layerPivot, layerRect, turnPoint, measureContent, opaqueRect, loadBackdropPictures, randomBackdrop, refreshText, textLayer, type ChartCellRect, renderPicture, type Backdrop, type BoardLook, type PromoLayer, type PromoPicture, type ShotSpec } from "./promo";
 
 export interface BoardHost {
@@ -46,6 +49,17 @@ export interface BoardHost {
   changed(): void;
   /** Opens the window that makes a new set. */
   newSet(): void;
+  /** The classes a character can be (label, model name). */
+  classes(): { label: string; cls: string }[];
+  /** The board's own class (what a shot of no class of its own is). */
+  boardClass(): string;
+  /**
+   * New characters (stock weapon, nothing worn), taken as one shot for a slot at x, y of w × h: one alone, or two to four standing in one
+   * scene (a group shot, each of its own class and team).
+   */
+  newShot(chars: { cls: string; team: 0 | 1 }[], x: number, y: number, w: number, h: number): Promise<PromoLayer>;
+  /** The name a shot of characters added by hand has: its class and team, or a group's classes left to right. */
+  shotName(spec: ShotSpec): string;
 }
 
 /** The thumbnails are this tall (CSS pixels; drawn at twice that for sharpness). */
@@ -60,6 +74,12 @@ const HANDLE = 10;
 const ROTATE_GAP = 28;
 /** Shift snaps a turn to this many degrees. */
 const ROTATE_SNAP = 15;
+/** The characters last added (the next window starts with them). */
+let lastChars: { cls: string; team: 0 | 1 }[] = [];
+/** How many steps back the board's undo keeps. */
+const UNDO_STEPS = 10;
+/** The wheel sizes a shot in steps of this much of its scale. */
+const WHEEL_STEP = 0.05;
 const corners = (r: { x: number; y: number; w: number; h: number }): [number, number][] => [[r.x, r.y], [r.x + r.w, r.y], [r.x, r.y + r.h], [r.x + r.w, r.y + r.h]];
 
 /** Right-drag turns the camera this many degrees per pixel. */
@@ -94,8 +114,6 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       <p class="dim hint promoNote">The look of every picture of the set.</p>
       <h3>Backdrop <button class="promoShuffle" title="Another random neutral gradient">Shuffle</button></h3>
       <div class="promoLookBackdrop"></div>
-      <h3>Border</h3>
-      <div class="promoLookStroke"></div>
       <h3>Glow round the characters</h3>
       <div class="promoLookGlow"></div>
       <h3>Shadows</h3>
@@ -110,7 +128,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     <main class="promoCenter">
       <div class="promoThumbs" role="listbox" aria-label="Pictures"></div>
       <div class="promoStage"><canvas class="promoPreview"></canvas></div>
-      <p class="promoHelp dim">Click a shot to select it (Shift-click for more) · drag to move · corners or wheel to size · right-drag to turn the camera round it · click a paint of a chart to take it out · Ctrl+C, then Ctrl+V pastes a layer as a copy of its own, Ctrl+Shift+V linked (the same shot and place) · Delete takes it out</p>
+      <p class="promoHelp dim">Click a shot to select it (Shift-click for more) · drag to move · corners or wheel to size · right-drag to turn the camera round it · click a paint of a chart to take it out · Ctrl+C, then Ctrl+V pastes a layer as a copy of its own, Ctrl+Shift+V linked (the same shot and place) · Delete takes it out · the bar under a selection fades it out (a gradient drawn by dragging, as in Photoshop) and turns its shadow on or off</p>
     </main>
     <aside class="promoInspector"></aside>
   </div>`;
@@ -132,7 +150,9 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     const x = Math.min(...rs.map((r) => r.x)), y = Math.min(...rs.map((r) => r.y));
     return { x, y, w: Math.max(...rs.map((r) => r.x + r.w)) - x, h: Math.max(...rs.map((r) => r.y + r.h)) - y };
   };
-  const selectOnly = (l: PromoLayer | null) => { layerPicked = l; selection = l ? [l] : []; };
+  const selectOnly = (l: PromoLayer | null) => { layerPicked = l; selection = l ? [l] : []; borderPicked = false; };
+  /** The border is what the panel on the right shows (picked in the layers). */
+  let borderPicked = false;
   /** The corners of what is visible of a layer, turned as it is (top left, top right, bottom left, bottom right). */
   const turnedCorners = (l: PromoLayer): [number, number][] => {
     const piv = layerPivot(l);
@@ -148,12 +168,13 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     const gap = ROTATE_GAP / previewScale;
     if (sel.length === 1) {
       const l = sel[0], o = opaqueRect(l), piv = layerPivot(l), rot = l.rotation ?? 0;
-      return { corners: turnedCorners(l), mid: piv, top: turnPoint(o.x + o.w / 2, o.y, piv, rot), rotate: turnPoint(o.x + o.w / 2, o.y - gap, piv, rot) };
+      // (a background overlay fills the picture: its texture is slid and sized, it has no handles)
+      return { corners: turnedCorners(l), mid: piv, top: turnPoint(o.x + o.w / 2, o.y, piv, rot), rotate: turnPoint(o.x + o.w / 2, o.y - gap, piv, rot), fixed: !!l.overlay };
     }
     const pts = sel.flatMap(turnedCorners);
     const x0 = Math.min(...pts.map((q) => q[0])), x1 = Math.max(...pts.map((q) => q[0])), y0 = Math.min(...pts.map((q) => q[1])), y1 = Math.max(...pts.map((q) => q[1]));
     const r = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
-    return { corners: corners(r), mid: [x0 + r.w / 2, y0 + r.h / 2] as [number, number], top: [x0 + r.w / 2, y0] as [number, number], rotate: [x0 + r.w / 2, y0 - gap] as [number, number] };
+    return { corners: corners(r), mid: [x0 + r.w / 2, y0 + r.h / 2] as [number, number], top: [x0 + r.w / 2, y0] as [number, number], rotate: [x0 + r.w / 2, y0 - gap] as [number, number], fixed: sel.some((l) => l.overlay) };
   };
 
   // --- drawing ---
@@ -170,6 +191,8 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     // one scale for every picture, the largest of them fitted: a 512 × 512 thumbnail shows at its size beside a 1920 × 1080 one
     const maxW = Math.max(...pictures.map((q) => q.w)), maxH = Math.max(...pictures.map((q) => q.h));
     const k = Math.max(0.01, Math.min(roomW / maxW, roomH / maxH));
+    // a mask that is edited belongs to the one layer selected (another picked ends it)
+    if (maskEdit && (selected().length !== 1 || selected()[0] !== maskEdit)) { maskEdit = null; preview.classList.remove("masking"); }
     renderPicture(preview, p, look, k * pr);
     preview.style.width = `${p.w * k}px`;
     preview.style.height = `${p.h * k}px`;
@@ -185,7 +208,15 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       ctx.restore();
     }
     const box = transformBox();
-    if (box) {
+    syncBar();
+    placeBar(box, k);
+    if (maskEdit) {
+      const ctx = preview.getContext("2d")!;
+      ctx.save();
+      ctx.setTransform(k * pr, 0, 0, k * pr, 0, 0);
+      drawMaskGizmo(ctx, k);
+      ctx.restore();
+    } else if (box) {
       // the selected shots: an outline round what is visible of each (turned with it), and the transform box: a handle at each corner
       // to size them by, and one above to turn them
       const ctx = preview.getContext("2d")!;
@@ -207,6 +238,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
         ctx.strokeStyle = "rgba(255,170,60,0.5)";
         poly(box.corners);
       }
+      if (box.fixed) { ctx.restore(); return; }
       ctx.strokeStyle = "rgba(255,170,60,0.95)";
       ctx.beginPath();
       ctx.moveTo(box.top[0], box.top[1]);
@@ -225,6 +257,362 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
   let previewScale = 1;
   /** The paint of a chart under the pointer (in the picture's pixels), outlined. */
   let hovered: { x: number; y: number; w: number; h: number } | null = null;
+
+  // --- fade masks: a gradient on a layer, drawn and shaped on the preview (as Photoshop's gradient tool on a layer mask) ---
+  /** The layer whose mask is being drawn or shaped (its handles show, the transform box does not); null: none. */
+  let maskEdit: PromoLayer | null = null;
+  /** The kind a new mask is drawn as (the last one picked). */
+  let maskKind: LayerMask["kind"] = (() => { try { return localStorage.getItem("promoMaskKind") === "radial" ? "radial" : "linear"; } catch { return "linear"; } })();
+  const setMaskKind = (k: LayerMask["kind"]) => { maskKind = k; try { localStorage.setItem("promoMaskKind", k); } catch { /* not kept */ } };
+  /** The handle the pointer is over (drawn larger). */
+  let maskHover: MaskHandle | null = null;
+  type MaskHandle = "a" | "b" | "mid" | "ratio" | "hard" | "line";
+  /** A picture point in a layer's own frame (0..1 of its upright rectangle), and back. */
+  const toLocal = (l: PromoLayer, x: number, y: number): [number, number] => {
+    const [ux, uy] = l.rotation ? turnPoint(x, y, layerPivot(l), -l.rotation) : [x, y];
+    const r = layerRect(l);
+    return [(ux - r.x) / (r.w || 1), (uy - r.y) / (r.h || 1)];
+  };
+  const toPicture = (l: PromoLayer, u: number, v: number): [number, number] => {
+    const r = layerRect(l);
+    return turnPoint(r.x + u * r.w, r.y + v * r.h, layerPivot(l), l.rotation ?? 0);
+  };
+  /** Where a mask's handles are on the picture. */
+  function maskGeometry(l: PromoLayer, m: LayerMask) {
+    const A = toPicture(l, m.a[0], m.a[1]), B = toPicture(l, m.b[0], m.b[1]);
+    const R = Math.hypot(B[0] - A[0], B[1] - A[1]) || 1e-6;
+    const u: [number, number] = [(B[0] - A[0]) / R, (B[1] - A[1]) / R], n: [number, number] = [-u[1], u[0]];
+    const along = (t: number): [number, number] => [A[0] + u[0] * R * t, A[1] + u[1] * R * t];
+    if (m.kind === "linear") return { A, B, R, u, n, mid: along(m.mid), ratio: null, hard: null };
+    const midT = m.hardness + (1 - m.hardness) * m.mid;
+    return { A, B, R, u, n, mid: along(midT), ratio: [A[0] + n[0] * R * m.ratio, A[1] + n[1] * R * m.ratio] as [number, number], hard: along(m.hardness) };
+  }
+  /** The handle of the edited mask under a picture point. */
+  function maskHandleAt(x: number, y: number): MaskHandle | null {
+    const l = maskEdit, m = l?.mask;
+    if (!l || !m) return null;
+    const g = maskGeometry(l, m), reach = 9 / previewScale;
+    const near = (q: [number, number] | null) => !!q && Math.hypot(q[0] - x, q[1] - y) <= reach;
+    // (the small ones first: they sit on the line between the big ones)
+    if (near(g.mid)) return "mid";
+    if (near(g.hard) && m.hardness > 0.02) return "hard";
+    if (near(g.ratio)) return "ratio";
+    if (near(g.A)) return "a";
+    if (near(g.B)) return "b";
+    if (near(g.hard)) return "hard";
+    if (m.kind === "linear") {
+      const t = ((x - g.A[0]) * g.u[0] + (y - g.A[1]) * g.u[1]) / g.R;
+      const off = Math.abs((x - g.A[0]) * g.n[0] + (y - g.A[1]) * g.n[1]);
+      if (t > 0 && t < 1 && off <= reach * 0.7) return "line";
+    }
+    return null;
+  }
+  /** Draws the edited mask's handles over the preview (ctx in the picture's pixels; k the preview's scale). */
+  function drawMaskGizmo(ctx: CanvasRenderingContext2D, k: number) {
+    const l = maskEdit, m = l?.mask;
+    if (!l || !m) return;
+    const g = maskGeometry(l, m);
+    const px = (v: number) => v / k;
+    const stroke = (path: () => void, width: number, colour: string, dash?: number[]) => {
+      ctx.beginPath();
+      path();
+      ctx.setLineDash(dash ? dash.map(px) : []);
+      ctx.lineWidth = px(width + 2);
+      ctx.strokeStyle = "rgba(0,0,0,0.55)";
+      ctx.stroke();
+      ctx.lineWidth = px(width);
+      ctx.strokeStyle = colour;
+      ctx.stroke();
+      ctx.setLineDash([]);
+    };
+    const accent = "rgba(255,170,60,0.98)", white = "rgba(255,255,255,0.95)";
+    const dot = (q: [number, number], r: number, fill: string, ring: string, h: MaskHandle) => {
+      const big = maskHover === h ? 1.35 : 1;
+      ctx.beginPath();
+      ctx.arc(q[0], q[1], px(r * big), 0, Math.PI * 2);
+      ctx.fillStyle = fill;
+      ctx.fill();
+      ctx.lineWidth = px(2);
+      ctx.strokeStyle = ring;
+      ctx.stroke();
+    };
+    const diamond = (q: [number, number], r: number, h: MaskHandle, fill = accent) => {
+      const s = px(r * (maskHover === h ? 1.35 : 1));
+      ctx.beginPath();
+      ctx.moveTo(q[0], q[1] - s); ctx.lineTo(q[0] + s, q[1]); ctx.lineTo(q[0], q[1] + s); ctx.lineTo(q[0] - s, q[1]); ctx.closePath();
+      ctx.fillStyle = fill;
+      ctx.fill();
+      ctx.lineWidth = px(1.5);
+      ctx.strokeStyle = "rgba(0,0,0,0.7)";
+      ctx.stroke();
+    };
+    if (m.kind === "linear") {
+      // the band the fade takes: a guide across each end, then the line between them
+      const reach = Math.max(px(70), g.R * 0.6);
+      for (const [q, dash] of [[g.A, [10, 6]], [g.B, [10, 6]]] as const) {
+        stroke(() => { ctx.moveTo(q[0] - g.n[0] * reach, q[1] - g.n[1] * reach); ctx.lineTo(q[0] + g.n[0] * reach, q[1] + g.n[1] * reach); }, 2, "rgba(255,255,255,0.85)", [...dash]);
+      }
+      stroke(() => { ctx.moveTo(g.A[0], g.A[1]); ctx.lineTo(g.B[0], g.B[1]); }, maskHover === "line" ? 2.5 : 1.5, white);
+    } else {
+      const angle = Math.atan2(g.u[1], g.u[0]);
+      const ellipse = (r: number) => () => ctx.ellipse(g.A[0], g.A[1], Math.max(1e-3, r), Math.max(1e-3, r * m.ratio), angle, 0, Math.PI * 2);
+      stroke(ellipse(g.R), 1.5, white);
+      if (m.hardness > 0.01) stroke(ellipse(g.R * m.hardness), 2, "rgba(255,255,255,0.85)", [10, 6]);
+      stroke(() => { ctx.moveTo(g.A[0], g.A[1]); ctx.lineTo(g.B[0], g.B[1]); }, 2, "rgba(255,255,255,0.75)", [6, 5]);
+      diamond(g.hard!, 5, "hard", white);
+      // the short radius: a square on the ellipse
+      const s = px(maskHover === "ratio" ? 6.5 : 5);
+      ctx.save();
+      ctx.translate(g.ratio![0], g.ratio![1]);
+      ctx.rotate(angle);
+      ctx.fillStyle = white;
+      ctx.fillRect(-s, -s, s * 2, s * 2);
+      ctx.lineWidth = px(1.5);
+      ctx.strokeStyle = "rgba(0,0,0,0.7)";
+      ctx.strokeRect(-s, -s, s * 2, s * 2);
+      ctx.restore();
+    }
+    diamond(g.mid, 5.5, "mid");
+    // the shown end (or the middle) white, the gone end dark
+    dot(g.A, 6.5, white, "rgba(0,0,0,0.75)", "a");
+    dot(g.B, 6.5, "rgba(20,20,22,0.92)", white, "b");
+  }
+  /** Draws the preview again at the next frame (once however many asks come before it): a drag's steps. */
+  let drawQueued = 0;
+  const requestDraw = () => { if (!drawQueued) drawQueued = requestAnimationFrame(() => { drawQueued = 0; drawPreview(); }); };
+
+  /** The edited mask's layer and its instances keep one mask (a shared shot sits the same everywhere). */
+  const maskChanged = (l: PromoLayer) => {
+    for (const [, x] of instancesOf(l)) x.mask = l.mask ? structuredClone(l.mask) : undefined;
+  };
+  /** Starts (or ends) shaping a layer's mask; a layer without one gets one drawn by its first drag. */
+  function editMask(l: PromoLayer | null) {
+    maskEdit = l;
+    maskHover = null;
+    status.textContent = l ? (l.mask ? "Drag the handles to shape the fade, or drag across the picture to draw it again (Shift: in steps of 15°). Esc when done." : "Drag across the picture to draw the fade: from where it shows to where it is gone (Shift: in steps of 15°).") : "";
+    preview.classList.toggle("masking", !!l);
+    preview.style.cursor = "";
+    drawPreview();
+  }
+  /** A mask was made on a shot: its shadow goes (a character that fades out has none under it), which the toolbar can bring back. */
+  function firstMask(p: PromoPicture, l: PromoLayer) {
+    if (l.shot && !l.shot.noShadow) { l.shot.noShadow = true; queueRetake(p, l); }
+  }
+  /** Drags on the preview while a mask is edited: its handles, or a new gradient drawn from the press. */
+  function maskPointerDown(ev: PointerEvent, p: PromoPicture, l: PromoLayer, x0: number, y0: number) {
+    ev.preventDefault();
+    preview.setPointerCapture(ev.pointerId);
+    const handle = maskHandleAt(x0, y0);
+    const had = !!l.mask;
+    const m0 = l.mask ? structuredClone(l.mask) : null;
+    const start = toLocal(l, x0, y0);
+    const snap = (from: [number, number], to: [number, number], on: boolean): [number, number] => {
+      if (!on) return to;
+      const dx = to[0] - from[0], dy = to[1] - from[1], len = Math.hypot(dx, dy);
+      const a = Math.round(Math.atan2(dy, dx) / (Math.PI / 12)) * (Math.PI / 12);
+      return [from[0] + Math.cos(a) * len, from[1] + Math.sin(a) * len];
+    };
+    let moved = false;
+    preview.onpointermove = (mv) => {
+      const [x, y] = pointAt(mv);
+      if (!moved && Math.hypot(x - x0, y - y0) * previewScale < 3) return;
+      moved = true;
+      const here = toLocal(l, x, y);
+      if (!handle) {
+        // a new gradient, from the press to the pointer (in the picture's pixels, so that Shift snaps as it looks)
+        const [sx, sy] = snap([x0, y0], [x, y], mv.shiftKey);
+        const kind = m0?.kind ?? maskKind;
+        l.mask = { ...(m0 ?? defaultMask(kind)), on: true, kind, a: start, b: toLocal(l, sx, sy), ...(m0 ? {} : { ratio: 1, hardness: 0 }) };
+      } else {
+        const m = l.mask!, g = maskGeometry(l, m0!);
+        const proj = (q: [number, number]) => ((x - q[0]) * g.u[0] + (y - q[1]) * g.u[1]) / g.R;
+        if (handle === "a") {
+          if (m.kind === "radial") {
+            // the middle carries the whole ellipse with it
+            m.a = here; m.b = [m0!.b[0] + here[0] - m0!.a[0], m0!.b[1] + here[1] - m0!.a[1]];
+          } else {
+            const B = toPicture(l, m0!.b[0], m0!.b[1]);
+            const [sx, sy] = snap(B, [x, y], mv.shiftKey);
+            m.a = toLocal(l, sx, sy);
+          }
+        } else if (handle === "b") {
+          const [sx, sy] = snap(g.A, [x, y], mv.shiftKey);
+          m.b = toLocal(l, sx, sy);
+        } else if (handle === "line") {
+          const d = [here[0] - start[0], here[1] - start[1]];
+          m.a = [m0!.a[0] + d[0], m0!.a[1] + d[1]];
+          m.b = [m0!.b[0] + d[0], m0!.b[1] + d[1]];
+        } else if (handle === "mid") {
+          const t = proj(g.A);
+          m.mid = Math.round(Math.min(0.95, Math.max(0.05, m.kind === "radial" ? (t - m.hardness) / Math.max(0.02, 1 - m.hardness) : t)) * 1000) / 1000;
+        } else if (handle === "hard") {
+          m.hardness = Math.round(Math.min(0.95, Math.max(0, proj(g.A))) * 1000) / 1000;
+        } else if (handle === "ratio") {
+          const off = Math.abs((x - g.A[0]) * g.n[0] + (y - g.A[1]) * g.n[1]) / g.R;
+          m.ratio = Math.round(Math.min(20, Math.max(0.05, off)) * 1000) / 1000;
+        }
+      }
+      maskChanged(l);
+      requestDraw();
+    };
+    preview.onpointerup = () => {
+      preview.onpointermove = maskHoverMove;
+      if (!moved) {
+        // a click (no drag): on another layer, that one is picked; elsewhere the mask is done
+        const hit = handle ? null : layerAt(x0, y0);
+        if (!handle && hit !== l) {
+          editMask(null);
+          if (hit) { selectOnly(hit); showInspector(); }
+          drawPreview();
+        }
+        return;
+      }
+      if (!had && l.mask) firstMask(p, l);
+      draw(p);
+      for (const [q] of instancesOf(l)) draw(q);
+      syncBar(true);
+    };
+  }
+  /** Over the preview while a mask is edited: the handle under the pointer is shown, and the pointer says what a drag does. */
+  const maskHoverMove = (mv: PointerEvent) => {
+    if (!maskEdit) { hoverMove(mv); return; }
+    const [x, y] = pointAt(mv);
+    const h = maskHandleAt(x, y);
+    preview.style.cursor = h === "line" ? "move" : h ? "pointer" : "crosshair";
+    if (h !== maskHover) { maskHover = h; requestDraw(); }
+  };
+
+  // the bar under the selection: the selected layer's fade mask and its own shadow
+  const bar = document.createElement("div");
+  bar.className = "promoSelBar";
+  bar.addEventListener("pointerdown", (e) => e.stopPropagation());
+  stage.append(bar);
+  let barKey = "";
+  /** Builds the bar again when what it shows changed (`force`: its states too). */
+  function syncBar(force = false) {
+    const sel = selected();
+    const l = sel.length === 1 && !sel[0].chart ? sel[0] : null;
+    const key = l ? JSON.stringify([idOfLayer(l), !!l.mask, l.mask?.on, l.mask?.kind, l.mask?.invert, l.mask?.keep, maskEdit === l, !!l.shot, l.shot?.noShadow]) : "";
+    if (key === barKey && !force) return;
+    barKey = key;
+    bar.replaceChildren();
+    bar.hidden = !l;
+    if (!l || !picked) return;
+    const p = picked;
+    // the main row (how the board's handles act, the shadow); the fade's own controls on a row under it
+    const main = document.createElement("div"), extra = document.createElement("div");
+    main.className = "row";
+    extra.className = "row";
+    bar.append(main);
+    let row = main;
+    const button = (name: Parameters<typeof icon>[0], title: string, on: boolean, run: () => void, cls = "") => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = `${cls}${on ? " on" : ""}`;
+      b.title = title;
+      b.setAttribute("aria-label", title);
+      b.setAttribute("aria-pressed", String(on));
+      b.innerHTML = icon(name);
+      b.onclick = () => { run(); syncBar(true); drawPreview(); draw(p); };
+      row.append(b);
+      return b;
+    };
+    const sep = () => { const s = document.createElement("span"); s.className = "sep"; row.append(s); };
+    const m = l.mask;
+    button("move", "Move, size and turn it", maskEdit !== l, () => editMask(null));
+    button("blend", m ? (maskEdit === l ? "Done shaping the fade (Esc)" : "Shape the fade mask") : "Add a fade mask: drag across the picture to draw it", maskEdit === l, () => editMask(maskEdit === l ? null : l));
+    if (maskEdit === l) {
+      // the kind: a mask that has one changes to the other, keeping where it is; without one, the kind a drag draws (or a click makes)
+      const seg = document.createElement("div");
+      seg.className = "seg";
+      for (const k of ["linear", "radial"] as const) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = k === "linear" ? "Linear" : "Radial";
+        b.title = k === "linear" ? "A straight fade, from one line to another" : "A round fade, from the middle out (its shape and softness by its handles)";
+        b.classList.toggle("on", (m?.kind ?? maskKind) === k);
+        b.onclick = () => {
+          setMaskKind(k);
+          if (!l.mask) {
+            l.mask = defaultMask(k);
+            firstMask(p, l);
+            if (maskEdit !== l) editMask(l);
+          } else if (l.mask.kind !== k) {
+            const d = defaultMask(k);
+            l.mask = { ...l.mask, kind: k, ratio: d.ratio, hardness: d.hardness };
+          }
+          maskChanged(l);
+          syncBar(true);
+          drawPreview();
+          draw(p);
+        };
+        seg.append(b);
+      }
+      row.append(seg);
+    }
+    if (l.shot) {
+      sep();
+      const shown = !l.shot.noShadow;
+      const lab = document.createElement("label");
+      lab.className = "shadowToggle";
+      lab.title = shown ? "Its shadow on the ground: shown (untick to take it off this shot)" : "Its shadow on the ground: off (tick to bring it back)";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = shown;
+      cb.onchange = () => {
+        l.shot!.noShadow = !cb.checked || undefined;
+        queueRetake(p, l);
+        syncBar(true);
+        drawPreview();
+        draw(p);
+      };
+      lab.append("Shadow", cb);
+      main.append(lab);
+    }
+    // the fade's other controls: on a row under it, while it is being shaped
+    if (maskEdit !== l || !m) return;
+    bar.append(extra);
+    row = extra;
+    if (m) {
+      button("arrowDownUp", "The other way round: show where it fades, fade where it shows", m.invert, () => { m.invert = !m.invert; maskChanged(l); });
+      button(m.on ? "eye" : "eyeOff", m.on ? "Hide the fade (to compare; it is kept)" : "Show the fade", !m.on, () => { m.on = !m.on; maskChanged(l); });
+      if (l.shot) {
+        sep();
+        const keep = (part: KeepPart, name: Parameters<typeof icon>[0], label: string) =>
+          button(name, `Keep ${label} whole wherever the fade falls`, m.keep.includes(part), () => {
+            m.keep = m.keep.includes(part) ? m.keep.filter((x) => x !== part) : [...m.keep, part];
+            maskChanged(l);
+            // the parts picture comes with the shot: taken again once, when a part is first kept
+            if (m.keep.length && !partsOf.has(l.image)) {
+              l.shot!.parts = true;
+              status.textContent = "Finding the parts of the character…";
+              queueRetake(p, l);
+            } else l.shot!.parts = m.keep.length > 0 || undefined;
+          });
+        keep("arms", "hand", "the arms and hands");
+        keep("head", "scanFace", "the head");
+        keep("weapon", "sword", "what it holds");
+      }
+      sep();
+      button("trash2", "Take the fade mask off", false, () => { l.mask = undefined; maskChanged(l); if (maskEdit === l) editMask(null); });
+    }
+  }
+  const layerIds = new WeakMap<PromoLayer, number>();
+  let nextLayerId = 1;
+  const idOfLayer = (l: PromoLayer) => { let i = layerIds.get(l); if (!i) layerIds.set(l, (i = nextLayerId++)); return i; };
+  /** Puts the bar under the selection's box (over it when there is no room below), on the stage. */
+  function placeBar(box: { corners: [number, number][] } | null, k: number) {
+    if (!box || bar.hidden) { bar.style.visibility = "hidden"; return; }
+    bar.style.visibility = "";
+    const ox = preview.offsetLeft, oy = preview.offsetTop;
+    const xs = box.corners.map((q) => q[0] * k), ys = box.corners.map((q) => q[1] * k);
+    const cx = ox + (Math.min(...xs) + Math.max(...xs)) / 2;
+    const bw = bar.offsetWidth, bh = bar.offsetHeight, gap = 12;
+    let top = oy + Math.max(...ys) + gap;
+    if (top + bh > stage.clientHeight - 4) top = Math.max(4, Math.min(stage.clientHeight - bh - 4, oy + Math.min(...ys) - bh - gap));
+    const left = Math.max(4, Math.min(stage.clientWidth - bw - 4, cx - bw / 2));
+    bar.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
+  }
   /** The paint of a chart layer under a point: its label and where it is drawn. */
   function cellAt(x: number, y: number): { layer: PromoLayer; cell: ChartCellRect; rect: { x: number; y: number; w: number; h: number } } | null {
     for (const l of [...(picked?.layers ?? [])].reverse()) {
@@ -252,6 +640,8 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
   // --- taking shots again, live: one at a time, always the latest change ---
   /** The other layers that share a layer's shot (none when it is not shared). */
   let wheelTimer = 0;
+  /** The wheel's travel not yet taken as a step of size. */
+  let wheelSum = 0;
   /**
    * Shots that were sized up are taken again in 3D at their new size (sized down, the larger rendering they have is kept): drawn
    * larger from the same rendering they would blur.
@@ -282,7 +672,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
   /** A shared shot sits the same in every picture that shares it: its place, size and showing go to the others (redrawn). */
   const placeShared = (l: PromoLayer) => {
     for (const [q, x] of instancesOf(l)) {
-      x.dx = l.dx; x.dy = l.dy; x.scale = l.scale; x.hidden = l.hidden; x.rotation = l.rotation;
+      x.dx = l.dx; x.dy = l.dy; x.scale = l.scale; x.hidden = l.hidden; x.rotation = l.rotation; x.mask = l.mask ? structuredClone(l.mask) : undefined; x.opacity = l.opacity; x.blend = l.blend;
       draw(q);
     }
   };
@@ -293,6 +683,8 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
   root.addEventListener("pointerdown", () => (pointerHeld = true), true);
   const released = () => {
     pointerHeld = false;
+    wheeling = false;
+    clearTimeout(wheelSettle);
     if (panelLater) { panelLater = false; if (layerPicked) showLayer(); }
     // let go: what was taken live (quick, at half size) is taken again in full; what waits to be taken live, in full
     for (const job of waiting.values()) job.live = false;
@@ -300,6 +692,13 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     takenLive.clear();
   };
   window.addEventListener("pointerup", released);
+  // the wheel over a slider (or the board) is a drag too: quick shots while it turns, taken in full once it has stopped a moment
+  let wheeling = false, wheelSettle = 0;
+  root.addEventListener("wheel", () => {
+    wheeling = true;
+    clearTimeout(wheelSettle);
+    wheelSettle = window.setTimeout(() => { if (!pointerHeld) released(); }, 300);
+  }, true);
   // what this board holds on the window goes when it is closed (or its pictures would stay alive with it)
   const dispose = () => { window.removeEventListener("pointerup", released); resizer.disconnect(); boardKeys.delete(keys); };
   /**
@@ -371,7 +770,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
   function queueRetake(p: PromoPicture, l: PromoLayer, before?: () => Promise<void>) {
     const queued = waiting.get(l);
     // a change made while one waits replaces it (keeping a re-roll that was asked for)
-    waiting.set(l, { p, before: before ?? queued?.before, live: pointerHeld && !before && !queued?.before });
+    waiting.set(l, { p, before: before ?? queued?.before, live: (pointerHeld || wheeling) && !before && !queued?.before });
     void pump();
   }
   async function pump() {
@@ -413,7 +812,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     if (commitAfterShots && !waiting.size && !pointerHeld) { commitAfterShots = false; commit(); }
     // the panel is drawn again only when what it shows changed, and not under a control being dragged (that would drop the drag)
     if (panelStale && layerPicked) {
-      if (pointerHeld) panelLater = true;
+      if (pointerHeld || wheeling) panelLater = true;
       else showLayer();
     }
     panelStale = false;
@@ -473,6 +872,18 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     i.value = value;
     i.oninput = () => onInput(i.value);
     return i;
+  };
+  /** The wheel over a list steps through its choices (down: the next one), as a pick of it would. */
+  const wheelSelect = (sel: HTMLSelectElement) => {
+    sel.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      if (sel.disabled || !e.deltaY) return;
+      const i = Math.max(0, Math.min(sel.options.length - 1, sel.selectedIndex + Math.sign(e.deltaY)));
+      if (i === sel.selectedIndex) return;
+      sel.selectedIndex = i;
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+    }, { passive: false });
+    return sel;
   };
   /** A checkbox with its name after it (the app's switches); in a row of them when they follow one another. */
   const check = (box: HTMLElement, label: string, on: boolean, change: (v: boolean) => void, title = "") => {
@@ -538,7 +949,8 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
   lookBackdrop.append(lookPicker.el);
   const showLookBackdrop = () => lookPicker.refresh();
   $(".promoShuffle").onclick = () => { look.backdrop = randomBackdrop(); showLookBackdrop(); changedLook(); };
-  const strokeBox = $(".promoLookStroke");
+  // (the border's settings show on the right, when Border is picked in the layers)
+  const strokeBox = document.createElement("div");
   function showLookStroke() {
     strokeBox.innerHTML = "";
     check(strokeBox, "Border", look.stroke.on, (v) => { look.stroke.on = v; changedLook(); }, "A line round every picture, inside its edge");
@@ -614,6 +1026,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     for (const [value, label] of SHADOW_BLENDS) blend.add(new Option(label, value));
     blend.value = s.blend ?? "source-over";
     blend.onchange = () => { s.blend = blend.value as ShadowBlend; changedLook(); };
+    wheelSelect(blend);
     field(shadowBox, "Blend", blend, "How the shadows are laid on the backdrop: Multiply darkens it by their colour (the best with a colour), Colour burn deepens and saturates it, Soft light and Overlay are gentler (at once)");
     field(shadowBox, "Opacity", range(0, 1, 0.01, s.opacity, (v) => { s.opacity = v; changedLook(); if (look.effects?.look) changedEffects(); }), "How dark the shadows are (at once: the shots are not taken again)");
   }
@@ -647,6 +1060,9 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
   /** A picture's name on a card and in its tooltip: its item and what it is. */
   const cardTitle = (p: PromoPicture) => `${p.item ? `${p.item} · ` : ""}${p.kind} · ${p.name}`;
   // the cards, grouped by item (the item's name over its pictures); pictures of no item come first, ungrouped
+  function showThumbs() {
+  thumbsBox.replaceChildren();
+  thumbs.clear();
   const groups = new Map<string, PromoPicture[]>();
   for (const p of pictures) groups.set(p.item ?? "", [...(groups.get(p.item ?? "") ?? []), p]);
   for (const [item, group] of [...groups.entries()].sort(([a], [b]) => (a === "" ? -1 : b === "" ? 1 : 0))) {
@@ -676,9 +1092,57 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       cards.appendChild(card);
       thumbs.set(p, canvas);
       card.onclick = () => pick(p);
+      card.oncontextmenu = (e) => {
+        e.preventDefault();
+        showContextMenu(e.clientX, e.clientY, [
+          { label: "New page after it", run: () => addPage(p) },
+          { label: "Delete this page", disabled: pictures.length < 2, run: () => deletePage(p) },
+        ]);
+      };
     }
     box.appendChild(cards);
     thumbsBox.appendChild(box);
+  }
+  // a new blank page, the size of the one shown
+  const add = document.createElement("button");
+  add.className = "promoThumbAdd";
+  add.title = "A new blank page (the size of the one shown)";
+  add.setAttribute("aria-label", "New page");
+  add.innerHTML = icon("plus");
+  add.style.height = `${THUMB_H}px`;
+  add.onclick = () => addPage(picked);
+  thumbsBox.appendChild(add);
+  for (const p of pictures) if (picked === p) thumbs.get(p)?.parentElement?.classList.add("on");
+  }
+  showThumbs();
+  /** A blank page after `after` (the last when absent), in its group, the size of it; it is shown. */
+  function addPage(after: PromoPicture | null) {
+    const like = after ?? pictures.at(-1);
+    const taken = new Set(pictures.map((q) => q.name));
+    let n = pictures.length + 1;
+    while (taken.has(`Page_${n}`)) n++;
+    const p: PromoPicture = { name: `Page_${n}`, item: like?.item, kind: `Page ${n}`, w: like?.w ?? 1920, h: like?.h ?? 1080, layers: [], texts: [], backdrop: null };
+    const at = like ? pictures.indexOf(like) + 1 : pictures.length;
+    pictures.splice(at, 0, p);
+    showThumbs();
+    drawAll();
+    pick(p);
+    host.changed();
+    thumbs.get(p)?.parentElement?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+  function deletePage(p: PromoPicture) {
+    if (pictures.length < 2) return;
+    const at = pictures.indexOf(p);
+    if (at < 0) return;
+    pictures.splice(at, 1);
+    // its steps of undo would bring back layers of a page that is gone
+    undoStack.length = 0;
+    redoStack.length = 0;
+    showHistory();
+    showThumbs();
+    drawAll();
+    pick(pictures[Math.min(at, pictures.length - 1)]);
+    host.changed();
   }
   // the strip runs sideways: the wheel (up and down, as a mouse has it) scrolls it along
   thumbsBox.addEventListener("wheel", (ev) => {
@@ -698,7 +1162,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
   /** The shot under a point: the topmost whose picture is not see-through there (its margin is empty, the shot under it shows). */
   const layerAt = (px0: number, py0: number) =>
     picked ? [...picked.layers].reverse().find((l) => {
-      if (l.hidden) return false;
+      if (l.hidden || l.overlay) return false; // (a background overlay is picked in the layers: it would catch every click)
       // the point in the layer's own upright frame
       const [x, y] = l.rotation ? turnPoint(px0, py0, layerPivot(l), -l.rotation) : [px0, py0];
       const o = opaqueRect(l);
@@ -731,6 +1195,8 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     const p = picked;
     if (!p) return;
     const [x0, y0] = pointAt(ev);
+    // shaping a mask: its handles, or a new gradient (the right button still opens the menu)
+    if (maskEdit && p.layers.includes(maskEdit) && ev.button === 0) { maskPointerDown(ev, p, maskEdit, x0, y0); return; }
     // a paint chart is a picture of its own kind: click a paint to take it out, right-drag to turn the camera round the item
     const chartHit = cellAt(x0, y0);
     const chartLayer = chartHit?.layer ?? (p.layers.length === 1 && p.layers[0].chart ? p.layers[0] : null);
@@ -748,7 +1214,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
         retake(p, chartLayer);
       };
       preview.onpointerup = (up) => {
-        preview.onpointermove = hoverMove;
+        preview.onpointermove = maskHoverMove;
         if (turning) {
           // a right-click that did not move: the chart's menu
           if (Math.hypot(up.clientX - start.cx, up.clientY - start.cy) < 4) layerMenu(p, chartLayer, up.clientX, up.clientY);
@@ -766,7 +1232,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       };
       return;
     }
-    const box = transformBox();
+    const box = (() => { const b = transformBox(); return b?.fixed ? null : b; })();
     const grab = (HANDLE * 1.5) / previewScale;
     // the turning handle: dragged round, it turns the selected shots about the middle of the box (Shift: in steps of 15°)
     if (box && ev.button === 0 && Math.hypot(box.rotate[0] - x0, box.rotate[1] - y0) <= grab) {
@@ -790,7 +1256,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
         }
         drawPreview();
       };
-      preview.onpointerup = () => { preview.onpointermove = hoverMove; draw(p); shots.forEach(placeShared); showLayer(); spreadMoved(p, shots); };
+      preview.onpointerup = () => { preview.onpointermove = maskHoverMove; draw(p); shots.forEach(placeShared); showLayer(); spreadMoved(p, shots); };
       return;
     }
     // a corner handle of the selection: dragged, it sizes the selected shots together, about the middle of all of them
@@ -810,7 +1276,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
           }
           drawPreview();
         };
-        preview.onpointerup = () => { preview.onpointermove = hoverMove; draw(p); shots.forEach(placeShared); showLayer(); sharpen(p, shots); spreadMoved(p, shots); };
+        preview.onpointerup = () => { preview.onpointermove = maskHoverMove; draw(p); shots.forEach(placeShared); showLayer(); sharpen(p, shots); spreadMoved(p, shots); };
         return;
       }
     }
@@ -831,10 +1297,26 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       }
       return;
     }
-    if (!hit) {
-      if (selection.length) { selectOnly(null); showInspector(); drawPreview(); }
+    // nothing else under it, and a background overlay picked: its texture slides with the drag
+    const overlay = !hit && ev.button === 0 ? selected().find((x) => x.overlay) : undefined;
+    if (overlay?.overlay) {
+      ev.preventDefault();
+      preview.setPointerCapture(ev.pointerId);
+      const o = overlay.overlay, sx = o.ox ?? 0, sy = o.oy ?? 0, g = o.ground, gx = g?.cx ?? 0, gy = g?.cy ?? 0;
+      let frame = 0;
+      preview.onpointermove = (m) => {
+        const [x, y] = pointAt(m);
+        // (a ground is moved about the picture; the tiling of a background overlay slides)
+        if (g) { g.cx = Math.round((gx + (x - x0) / p.w) * 1000) / 1000; g.cy = Math.round((gy + (y - y0) / p.h) * 1000) / 1000; }
+        else { o.ox = Math.round(sx + x - x0); o.oy = Math.round(sy + y - y0); }
+        cancelAnimationFrame(frame);
+        frame = requestAnimationFrame(() => void retile(p, overlay));
+      };
+      preview.onpointerup = () => { preview.onpointermove = maskHoverMove; void retile(p, overlay).then(() => showLayer()); };
       return;
     }
+    // a click on nothing keeps what is selected (another character clicked is what changes it)
+    if (!hit) return;
     // a click on a shot of the selection keeps the selection (to move it all); on another, that one alone
     if (!selection.includes(hit)) selectOnly(hit);
     else layerPicked = hit;
@@ -865,7 +1347,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       }
     };
     preview.onpointerup = (up) => {
-      preview.onpointermove = hoverMove;
+      preview.onpointermove = maskHoverMove;
       // a click that did not move: on a paint of a chart, that paint is taken out of it
       const still = Math.hypot(up.clientX - start.cx, up.clientY - start.cy) < 4;
       // a right-click that did not move: the shot's menu
@@ -895,7 +1377,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     hovered = rect;
     drawPreview();
   };
-  preview.onpointermove = hoverMove;
+  preview.onpointermove = maskHoverMove;
   preview.onpointerleave = () => { if (hovered) { hovered = null; drawPreview(); } };
   preview.onwheel = (ev) => {
     const p = picked;
@@ -912,13 +1394,42 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     }
     // only over a shot: over one of the selection it sizes them all, about the middle of all of them; over another, that one alone
     const l = layerAt(x, y);
+    // nothing under it, and a background overlay picked: its tiles grow or shrink about the pointer, in steps of 0.05
+    const overlay = !l ? selected().find((s) => s.overlay) : undefined;
+    if (overlay?.overlay) {
+      ev.preventDefault();
+      wheelSum += ev.deltaMode === 1 ? ev.deltaY * 33 : ev.deltaY;
+      const steps = Math.trunc(wheelSum / 100);
+      if (!steps) return;
+      wheelSum -= steps * 100;
+      const o = overlay.overlay, was = o.tile;
+      if (o.ground) {
+        // (a ground is sized, as wide and as deep in the same proportion)
+        o.ground.width = Math.max(0.1, Math.min(4, Math.round((Math.round(o.ground.width / WHEEL_STEP) - steps) * WHEEL_STEP * 100) / 100));
+        void retile(p, overlay).then(() => showLayer());
+        return;
+      }
+      o.tile = Math.max(0.1, Math.min(4, Math.round((Math.round(was / WHEEL_STEP) - steps) * WHEEL_STEP * 100) / 100));
+      // (the point of the texture under the pointer stays under it)
+      o.ox = Math.round(x - (x - (o.ox ?? 0)) * (o.tile / was));
+      o.oy = Math.round(y - (y - (o.oy ?? 0)) * (o.tile / was));
+      void retile(p, overlay).then(() => showLayer());
+      return;
+    }
     if (!l || l.chart) return;
     ev.preventDefault();
     if (!selection.includes(l)) { selectOnly(l); showInspector(); }
     const all = selectionRect();
     if (!all) return;
-    const k = Math.exp(-ev.deltaY * 0.0012);
-    for (const x of selected()) sizeAbout(x, Math.max(0.2, Math.min(3, x.scale * k)), [all.x + all.w / 2, all.y + all.h / 2]);
+    // a notch of the wheel is a step of 0.05 of the scale, on the 0.05s (a trackpad's small steps add up to one)
+    wheelSum += ev.deltaMode === 1 ? ev.deltaY * 33 : ev.deltaY;
+    const steps = Math.trunc(wheelSum / 100);
+    if (!steps) return;
+    wheelSum -= steps * 100;
+    for (const x of selected()) {
+      const to = Math.round((Math.round(x.scale / WHEEL_STEP) - steps) * WHEEL_STEP * 100) / 100;
+      sizeAbout(x, Math.max(0.2, Math.min(3, to)), [all.x + all.w / 2, all.y + all.h / 2]);
+    }
     draw(p);
     selected().forEach(placeShared);
     showLayer();
@@ -941,6 +1452,9 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
   /** The selected layer's actions (copy, duplicate, its link, delete): in the Layers section, over the list. */
   const actionsBox = document.createElement("div");
   actionsBox.className = "promoLayerActions";
+  /** What the selected layer's link is (under the row of the layers' buttons). */
+  const linkNote = document.createElement("p");
+  linkNote.className = "dim hint promoLinkNote";
   const layerBox = document.createElement("div");
   function showInspector() {
     const p = picked;
@@ -1028,8 +1542,11 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     for (const entry of [...bottomFirst].reverse()) {
       if (entry === BORDER) {
         const row = document.createElement("div");
-        row.className = "hierRow border";
-        row.title = "Drag up or down: the layers above it are drawn over the border";
+        row.className = "hierRow border hierObject";
+        row.classList.toggle("selected", borderPicked);
+        row.classList.toggle("primary", borderPicked);
+        row.title = "Click for its settings · drag up or down: the layers above it are drawn over the border";
+        row.onclick = () => { selectOnly(null); borderPicked = true; showInspector(); drawPreview(); };
         row.innerHTML = `<span class="hierIcon">${icon(BORDER_ICON)}</span><span class="hierLabel">Border</span>`;
         dragRow(row, BORDER, "Border");
         stack.appendChild(row);
@@ -1046,7 +1563,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       row.setAttribute("aria-selected", String(selection.includes(l)));
       const kind = document.createElement("span");
       kind.className = "hierIcon";
-      kind.innerHTML = icon(l.text ? TEXT_ICON : l.chart ? CHART_ICON : SHOT_ICON);
+      kind.innerHTML = icon(l.text ? TEXT_ICON : l.chart ? CHART_ICON : l.overlay?.ground ? "ground" : l.overlay ? "grid3x3" : l.shot ? SHOT_ICON : "image");
       const name = document.createElement("span");
       name.className = "hierLabel";
       name.textContent = l.name;
@@ -1078,20 +1595,234 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       stack.appendChild(row);
     }
     fixedRow(p.backdrop ? "Backdrop (its own)" : "Backdrop", p.backdrop ? "" : "every picture");
-    pictureBox.append(lh, actionsBox, stack);
-    // a text of one's own, in the middle of the picture
-    buttons(pictureBox, [{ label: "+ Add text", title: "A text of its own, in the middle of the picture", run: async () => {
-      const was = snapshot();
-      const l = await textLayer("Text", { ...DEFAULT_TEXT }, p.w / 2, p.h / 2);
-      measureContent(l);
-      p.layers.push(l);
-      pushUndo(was);
-      selectOnly(l);
-      draw(p);
-      showInspector();
+    pictureBox.append(lh, stack);
+    // what can be added to the picture, and what the selected layer can do (copied, duplicated, deleted), in one row under the layers
+    const addRow = buttons(pictureBox, [{ label: "+ Add", title: "Add a text, a character or an image to this picture", run: () => {
+      const r = addRow.querySelector("button")!.getBoundingClientRect();
+      showContextMenu(r.left, r.bottom + 4, [
+        { label: "Text", run: () => void addLayer(p, async () => textLayer("Text", { ...DEFAULT_TEXT }, p.w / 2, p.h / 2)) },
+        "-",
+        { label: "Characters…", run: () => charactersPopup(p, r.left, r.bottom + 4) },
+        "-",
+        { label: "Image from a file…", run: () => void addImage(p) },
+        { label: "Background overlay…", run: () => openTextureBrowser((tex) => void addOverlay(p, tex)) },
+        { label: "Ground", run: () => void addGround(p) },
+      ]);
     } }]);
+    addRow.classList.add("promoLayerTools");
+    addRow.append(actionsBox);
+    pictureBox.append(linkNote);
     inspector.append(pictureBox, layerBox);
     showLayer();
+  }
+
+  /** Puts a new layer on top of a picture (one step of undo) and selects it. */
+  async function addLayer(p: PromoPicture, make: () => Promise<PromoLayer>) {
+    const was = snapshot();
+    let l: PromoLayer;
+    try {
+      l = await make();
+    } catch (err) {
+      status.textContent = `Could not add it: ${String(err)}`;
+      return;
+    }
+    measureContent(l);
+    p.layers.push(l);
+    pushUndo(was);
+    if (picked === p) selectOnly(l);
+    draw(p);
+    drawPreview();
+    showInspector();
+  }
+  /** New characters in the middle of a picture, as tall as it: one alone, or a group in one scene (its look is changed in 3D). */
+  function addCharacters(p: PromoPicture, chars: { cls: string; team: 0 | 1 }[]) {
+    status.textContent = chars.length > 1 ? "Taking the group shot…" : "Taking the character…";
+    const h = Math.round(p.h * 0.98);
+    const w = Math.round(Math.min(p.w - 20, chars.length > 1 ? h * (0.42 * chars.length + 0.15) : h * 0.66));
+    return addLayer(p, async () => {
+      const l = await host.newShot(chars, (p.w - w) / 2, (p.h - h) / 2, w, h);
+      status.textContent = "Added. Edit in 3D (or right-click it) to dress, pose or change a class.";
+      return l;
+    });
+  }
+  /** The window that picks new characters: each one's class and team; two or more stand together in one scene. */
+  function charactersPopup(p: PromoPicture, x: number, y: number) {
+    document.querySelector(".promoCharsPop")?.remove();
+    const classes = host.classes();
+    if (!lastChars.length || !lastChars.every((c) => classes.some((k) => k.cls === c.cls))) lastChars = [{ cls: host.boardClass(), team: 0 }];
+    const rows = lastChars.map((c) => ({ ...c }));
+    const pop = document.createElement("div");
+    pop.className = "promoCharsPop";
+    pop.style.left = `${Math.round(Math.min(x, window.innerWidth - 300))}px`;
+    pop.style.top = `${Math.round(y)}px`;
+    const close = () => { pop.remove(); window.removeEventListener("pointerdown", outside, true); window.removeEventListener("keydown", esc, true); };
+    const outside = (e: PointerEvent) => { if (!pop.contains(e.target as Node)) close(); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); close(); } };
+    const render = () => {
+      pop.replaceChildren();
+      const list = document.createElement("div");
+      list.className = "list";
+      rows.forEach((c, i) => {
+        const row = document.createElement("div");
+        row.className = "row";
+        const sel = document.createElement("select");
+        sel.setAttribute("aria-label", `Character ${i + 1}: class`);
+        for (const k of classes) sel.add(new Option(k.label, k.cls, false, k.cls === c.cls));
+        sel.onchange = () => { c.cls = sel.value; };
+        const seg = document.createElement("div");
+        seg.className = "seg";
+        for (const [t, label] of [[0, "RED"], [1, "BLU"]] as const) {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.textContent = label;
+          b.className = c.team === t ? `on t${t}` : "";
+          b.onclick = () => { c.team = t; render(); };
+          seg.append(b);
+        }
+        const del = document.createElement("button");
+        del.type = "button";
+        del.className = "del";
+        del.title = "Take this one out";
+        del.innerHTML = icon("x");
+        del.disabled = rows.length < 2;
+        del.onclick = () => { rows.splice(i, 1); render(); };
+        row.append(sel, seg, del);
+        list.append(row);
+      });
+      const more = document.createElement("button");
+      more.type = "button";
+      more.className = "more";
+      more.textContent = "+ Another character";
+      more.disabled = rows.length >= 4;
+      more.onclick = () => { const last = rows.at(-1)!; rows.push({ cls: last.cls, team: last.team }); render(); };
+      const hint = document.createElement("p");
+      hint.className = "dim hint";
+      hint.textContent = rows.length > 1 ? `${rows.length} characters together in one scene (a group shot).` : "One character alone. Add more to put them together in one scene.";
+      const go = document.createElement("button");
+      go.type = "button";
+      go.className = "primary";
+      go.textContent = "Add";
+      go.onclick = () => { lastChars = rows.map((c) => ({ ...c })); close(); void addCharacters(p, rows); };
+      pop.append(list, more, hint, go);
+    };
+    render();
+    document.body.append(pop);
+    window.addEventListener("pointerdown", outside, true);
+    window.addEventListener("keydown", esc, true);
+  }
+  /** A background overlay: a game texture tiled over the whole picture, faint, under everything but the backdrop. */
+  async function addOverlay(p: PromoPicture, texture: string) {
+    status.textContent = "Reading the texture…";
+    const was = snapshot();
+    const spec: OverlaySpec = { texture, tile: 1, grey: true };
+    let l: PromoLayer;
+    try {
+      l = { ...layer(texture.split("/").pop() || "Overlay", await overlayImage(spec, p.w, p.h), 0, 0, p.w, p.h), overlay: spec, opacity: 0.35, blend: "overlay" };
+    } catch (err) {
+      status.textContent = `Could not read the texture: ${String(err)}`;
+      return;
+    }
+    l.opaque = { x0: 0, y0: 0, x1: l.image.width, y1: l.image.height };
+    p.layers.unshift(l);
+    if (p.strokeAt !== undefined) p.strokeAt++;
+    pushUndo(was);
+    status.textContent = "";
+    if (picked === p) selectOnly(l);
+    draw(p);
+    drawPreview();
+    showInspector();
+  }
+  /**
+   * A ground: a floor under the characters (as the 3D view's ground plane), an ellipse that fades out at its edge, laid on the backdrop as a
+   * shade of it; a texture can be put on it in its settings. It goes over the background overlays and under everything else.
+   */
+  async function addGround(p: PromoPicture) {
+    const was = snapshot();
+    const spec: OverlaySpec = { texture: "", tile: 1, grey: true, ground: { ...DEFAULT_GROUND_SPEC } };
+    const l: PromoLayer = { ...layer("Ground", await overlayImage(spec, p.w, p.h), 0, 0, p.w, p.h), overlay: spec, blend: "multiply" };
+    l.opaque = { x0: 0, y0: 0, x1: l.image.width, y1: l.image.height };
+    let at = 0;
+    while (at < p.layers.length && p.layers[at].overlay && !p.layers[at].overlay!.ground) at++;
+    p.layers.splice(at, 0, l);
+    if (p.strokeAt !== undefined && p.strokeAt >= at) p.strokeAt++;
+    pushUndo(was);
+    if (picked === p) selectOnly(l);
+    draw(p);
+    drawPreview();
+    showInspector();
+  }
+  /** An overlay's image made again from its texture, as its settings now say (at once when the texture is read already). */
+  let retileRun = 0;
+  async function retile(p: PromoPicture, l: PromoLayer) {
+    if (!l.overlay) return;
+    const run = ++retileRun;
+    const image = await overlayImage(l.overlay, p.w, p.h).catch(() => null);
+    if (!image || run !== retileRun) return;
+    l.image = image;
+    draw(p);
+    drawPreview();
+    host.changed();
+  }
+  /** The settings of a background overlay: its texture, its tiles, how it is laid over the backdrop. */
+  function overlayFields(p: PromoPicture, l: PromoLayer, o: OverlaySpec) {
+    if (o.ground) return groundFields(p, l, o, o.ground);
+    heading(layerBox, "Texture", o.texture, [{ label: "Change…", title: "Another texture from the game", run: () => openTextureBrowser((tex) => { o.texture = tex; l.name = tex.split("/").pop() || l.name; void retile(p, l).then(() => { host.changed(); showInspector(); }); }, o.texture) }]);
+    field(layerBox, "Tile size", range(0.1, 4, 0.05, o.tile, (v) => { o.tile = v; void retile(p, l); }, (v) => `${v.toFixed(2)}×`), "How large the texture's tiles are (1: as the game has them)");
+    field(layerBox, "Rotation", range(-180, 180, 1, o.rot ?? 0, (v) => { o.rot = v || undefined; void retile(p, l); }, (v) => `${v}°`), "How far the texture is turned");
+    check(layerBox, "Grey", o.grey, (v) => { o.grey = v; void retile(p, l); }, "Without its colours: only its light and shade show over the backdrop");
+    blendFields(p, l);
+  }
+  /** The settings of a ground: its size and look, then its texture (none at first: one is picked from the game's). */
+  function groundFields(p: PromoPicture, l: PromoLayer, o: OverlaySpec, g: GroundSpec) {
+    const again = () => void retile(p, l);
+    field(layerBox, "Width", range(0.1, 4, 0.01, g.width, (v) => { g.width = v; again(); }, (v) => `${Math.round(v * 100)}%`), "How wide it is, of the picture's width (the wheel over the board sizes it too)");
+    field(layerBox, "Depth", range(0.05, 1, 0.01, g.depth, (v) => { g.depth = v; again(); }), "How deep it is for its width: low for a floor seen from the side, high for one seen from above");
+    field(layerBox, "Softness", range(0, 1, 0.01, g.softness, (v) => { g.softness = v; again(); }), "How much of it fades out towards its edge (0: a hard edge)");
+    field(layerBox, "Colour", colour(g.color, (v) => { g.color = v; again(); }), "Its colour (with Multiply, it shades the backdrop: white leaves it as it is)");
+    blendFields(p, l);
+    heading(layerBox, "Texture", o.texture || "No texture on it", o.texture
+      ? [{ label: "Change…", title: "Another texture from the game", run: () => openTextureBrowser((tex) => { o.texture = tex; void retile(p, l).then(() => { host.changed(); showInspector(); }); }, o.texture) },
+         { label: "Remove", title: "The ground without a texture", run: () => { o.texture = ""; void retile(p, l).then(() => { host.changed(); showInspector(); }); } }]
+      : [{ label: "Add…", title: "Lay a texture from the game on the ground", run: () => openTextureBrowser((tex) => { o.texture = tex; void retile(p, l).then(() => { host.changed(); showInspector(); }); }) }]);
+    if (!o.texture) return;
+    field(layerBox, "Strength", range(0, 1, 0.01, g.texStrength, (v) => { g.texStrength = v; again(); }), "How strongly the texture shows over the ground's colour");
+    field(layerBox, "Tile size", range(0.1, 4, 0.05, o.tile, (v) => { o.tile = v; again(); }, (v) => `${v.toFixed(2)}×`), "How large the texture's tiles are (1: as the game has them)");
+    field(layerBox, "Rotation", range(-180, 180, 1, o.rot ?? 0, (v) => { o.rot = v || undefined; again(); }, (v) => `${v}°`), "How far the texture is turned on the floor");
+    check(layerBox, "Grey", o.grey, (v) => { o.grey = v; again(); }, "Without its colours: only its light and shade");
+  }
+  /** How a layer is laid over what is under it: how much of it shows, and its blend. */
+  function blendFields(p: PromoPicture, l: PromoLayer) {
+    field(layerBox, "Opacity", range(0, 1, 0.01, l.opacity ?? 1, (v) => { l.opacity = v >= 1 ? undefined : v; draw(p); placeShared(l); }), "How much of it shows");
+    const blend = document.createElement("select");
+    for (const [value, label] of LAYER_BLENDS) blend.add(new Option(label, value));
+    blend.value = l.blend ?? "source-over";
+    blend.onchange = () => { l.blend = blend.value === "source-over" ? undefined : (blend.value as LayerBlend); draw(p); placeShared(l); };
+    wheelSelect(blend);
+    field(layerBox, "Blend", blend, "How it is laid over what is under it (as Photoshop's blend modes)");
+  }
+
+  /** An image from a file, fitted in the middle of a picture. */
+  function addImage(p: PromoPicture) {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/png,image/jpeg,image/webp,image/gif,image/bmp";
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      void addLayer(p, async () => {
+        const bitmap = await createImageBitmap(file);
+        const c = document.createElement("canvas");
+        c.width = bitmap.width;
+        c.height = bitmap.height;
+        c.getContext("2d")!.drawImage(bitmap, 0, 0);
+        bitmap.close();
+        // fitted in 80% of the picture (no larger than it is)
+        const k = Math.min(1, (p.w * 0.8) / c.width, (p.h * 0.8) / c.height);
+        const w = c.width * k, h = c.height * k;
+        return layer(file.name.replace(/\.[^.]+$/, "") || "Image", c, (p.w - w) / 2, (p.h - h) / 2, w, h);
+      });
+    };
+    input.click();
   }
 
   /**
@@ -1288,7 +2019,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       // the same shot twice in one picture is a copy (offset, so it can be seen); a text is always its own
       const here = p.layers.includes(src) || (!!src.link && !!src.shared && p.layers.some((x) => x.link === src.link && x.shared));
       const own = how === "copy" || !!src.text || here;
-      const l: PromoLayer = { ...src, box: { ...src.box }, hidden: false };
+      const l: PromoLayer = { ...src, box: { ...src.box }, hidden: false, mask: src.mask ? structuredClone(src.mask) : undefined, overlay: src.overlay ? structuredClone(src.overlay) : undefined };
       if (own) {
         l.shot = src.shot ? structuredClone(src.shot) : undefined;
         l.chart = src.chart ? structuredClone(src.chart) : undefined;
@@ -1331,8 +2062,15 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
   async function editIn3D(p: PromoPicture, l: PromoLayer) {
     if (!l.shot) return;
     const was = snapshot();
+    // a name that says who it is (as a character added by hand is named) follows what was changed in 3D: its class, its team
+    const auto = host.shotName(l.shot);
     try {
       if (await host.editIn3D(l)) {
+        const named = host.shotName(l.shot);
+        if (l.name === auto && named !== auto) {
+          for (const x of [l, ...instancesOf(l).map(([, x]) => x)]) x.name = named;
+          showInspector();
+        }
         pushUndo(was);
         // the panel shows the shot as it now is (its camera view and sliders, what it wears) once it is taken again
         panelStale = true;
@@ -1402,22 +2140,31 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
   }
 
   /** The buttons every layer has: copy, duplicate, delete, and its link with the other pictures. */
-  function layerActions(p: PromoPicture, l: PromoLayer) {
-    const linked = linkedWith(l);
-    const others = l.link ? pictures.flatMap((q) => q.layers).filter((x) => x !== l && x.link === l.link) : [];
-    const note = document.createElement("p");
-    note.className = "dim hint";
-    if (linked.length) note.textContent = `Linked: the same shot and place in ${linked.length} other picture${linked.length === 1 ? "" : "s"}. A change here changes it there too.`;
-    else if (others.length) note.textContent = `A copy of its own; ${others.length} other picture${others.length === 1 ? " has" : "s have"} the shot it was copied from.`;
-    else note.textContent = "Only in this picture. Ctrl+C, then Ctrl+Shift+V in another picture, puts it there linked.";
-    buttons(actionsBox, [
-      { label: "Copy", title: "Copy it (Ctrl+C): Ctrl+V in a picture puts it there as a copy of its own, Ctrl+Shift+V linked", run: () => { selectOnly(l); copyLayers(); } },
-      { label: "Duplicate", title: "A copy of its own in this picture, beside it", run: () => { pasteLayers("copy", [l]); } },
-      ...(linked.length ? [{ label: "Unlink", title: "Make this picture's own copy: it keeps a copy of the shot, changed on its own from now on", run: () => unlinkLayer(p, l) }]
-        : others.length ? [{ label: "Link back", title: "Link it to the others again: it takes their shot and place, and changes with them", run: () => relinkLayer(p, l) }] : []),
-      { label: "Delete", title: "Take it out of this picture (Delete)", run: () => { selectOnly(l); deleteLayers(); } },
-    ]);
-    actionsBox.appendChild(note);
+  function layerActions(p: PromoPicture | null, l: PromoLayer | null) {
+    actionsBox.replaceChildren();
+    linkNote.textContent = "";
+    const linked = l ? linkedWith(l) : [];
+    const others = l?.link ? pictures.flatMap((q) => q.layers).filter((x) => x !== l && x.link === l.link) : [];
+    if (linked.length) linkNote.textContent = `Linked: the same shot and place in ${linked.length} other picture${linked.length === 1 ? "" : "s"}. A change here changes it there too.`;
+    else if (others.length) linkNote.textContent = `A copy of its own; ${others.length} other picture${others.length === 1 ? " has" : "s have"} the shot it was copied from.`;
+    const add = (label: string, title: string, run: () => void, iconName?: Parameters<typeof icon>[0]) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.title = l ? title : "Select a layer first";
+      if (iconName) { b.innerHTML = icon(iconName); b.className = "iconBtn"; b.setAttribute("aria-label", label); }
+      else b.textContent = label;
+      b.disabled = !l || !p;
+      b.onclick = run;
+      actionsBox.append(b);
+    };
+    const sep = document.createElement("span");
+    sep.className = "sep";
+    actionsBox.append(sep);
+    add("Copy", "Copy it (Ctrl+C): Ctrl+V in a picture puts it there as a copy of its own, Ctrl+Shift+V linked", () => { if (l) { selectOnly(l); copyLayers(); } });
+    add("Duplicate", "A copy of its own in this picture, beside it", () => { if (l) pasteLayers("copy", [l]); });
+    if (l && p && linked.length) add("Unlink", "Make this picture's own copy: it keeps a copy of the shot, changed on its own from now on", () => unlinkLayer(p, l));
+    else if (l && p && others.length) add("Link back", "Link it to the others again: it takes their shot and place, and changes with them", () => relinkLayer(p, l));
+    add("Delete", "Take it out of this picture (Delete)", () => { if (l) { selectOnly(l); deleteLayers(); } }, "trash2");
   }
 
   /** Every thumbnail's shot layer, with its picture. */
@@ -1626,8 +2373,13 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     const p = picked, l = layerPicked;
     layerBox.innerHTML = "";
     cameraSync = null;
-    actionsBox.innerHTML = "";
-    if (p && l && p.layers.includes(l)) layerActions(p, l);
+    layerActions(p, p && l && p.layers.includes(l) ? l : null);
+    if (p && borderPicked) {
+      heading(layerBox, "Border", "Every picture's: a line round it, inside its edge");
+      showLookStroke();
+      layerBox.append(strokeBox);
+      return;
+    }
     if (!p || !l || !p.layers.includes(l)) {
       if (p && p.layers.length > 1) layerBox.innerHTML = `<p class="dim">Click a shot in the picture to change it.</p>`;
       return;
@@ -1636,7 +2388,9 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     heading(layerBox, l.chart ? "Paint chart" : l.text ? "Text" : l.name, undefined, spec
       ? [{ label: "Edit in 3D…", primary: true, title: "Open this character in the 3D view as the shot has it: change its weapon, pose, cosmetics or anything else, then come back", run: () => editIn3D(p, l) }]
       : []);
-    if (!l.chart) {
+    if (l.overlay) {
+      overlayFields(p, l, l.overlay);
+    } else if (!l.chart) {
       if (spec && p.kind === "Thumbnail") {
         const framing = document.createElement("select");
         framing.add(new Option("On the character", "character"));
@@ -1651,6 +2405,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       size.onchange = () => sharpen(p, [l]);
       field(layerBox, "Image scale", size, "How big the image is on the picture (it is taken again sharper when let go); the camera's Zoom frames the shot itself");
       field(layerBox, "Image rotation", range(-180, 180, 1, l.rotation ?? 0, (v) => { l.rotation = v || undefined; draw(p); placeShared(l); }, (v) => `${v}°`), "How far the image is turned on the picture, about its middle");
+      blendFields(p, l);
     } else {
       const hint = document.createElement("p");
       hint.className = "dim hint";
@@ -1679,6 +2434,12 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
         spec.fov = v;
         retake(p, l);
       }, (v) => `${v}°`), "The camera's lens, as a vertical angle: wide (high) is near the subject and deep, narrow (low) far and flat");
+      check(layerBox, "Auto framing", !aim.holdFrame, (v) => {
+        // off: the framing it has now stays (taken from the shot as it is); on: fitted again
+        aim.holdFrame = v ? undefined : true;
+        aim.frame = undefined;
+        retake(p, l);
+      }, "On: the camera fits the subject again each time the shot is taken (a turn or tilt reframes it). Off: the framing stays where it is and the camera only goes round it");
       cameraSync = () => { setSlider(turn, aim.yaw); setSlider(tilt, aim.pitch); if (zoom) setSlider(zoom, aim.fill); };
       // the picture's shots of the item's other styles: linked (camera, light, effects and scale) unless unlinked here
       if (spec) {
@@ -1816,10 +2577,10 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
         if (l.shot) specs.set(l.shot, JSON.stringify(l.shot));
         if (l.chart) specs.set(l.chart, JSON.stringify(l.chart));
         if (l.text) specs.set(l.text, JSON.stringify(l.text));
-        return { l, state: { dx: l.dx, dy: l.dy, scale: l.scale, hidden: l.hidden, shared: l.shared, shot: l.shot, chart: l.chart, image: l.image, content: l.content, opaque: l.opaque, cells: l.cells, box: { ...l.box }, name: l.name, rotation: l.rotation } };
+        return { l, state: { dx: l.dx, dy: l.dy, scale: l.scale, hidden: l.hidden, shared: l.shared, shot: l.shot, chart: l.chart, image: l.image, content: l.content, opaque: l.opaque, cells: l.cells, box: { ...l.box }, name: l.name, rotation: l.rotation, mask: l.mask ? structuredClone(l.mask) : undefined, opacity: l.opacity, blend: l.blend, overlay: l.overlay ? structuredClone(l.overlay) : undefined } };
       }),
     }));
-    const key = JSON.stringify([look, pics.map((x) => [x.name, x.backdrop, x.texts, x.layers.map(({ l, state: s }) => [idOf(l), s.dx, s.dy, s.scale, s.hidden, s.shared, idOf(s.shot), idOf(s.chart), idOf(s.image), s.box, s.rotation]), x.strokeAt]), [...specs.values()]]);
+    const key = JSON.stringify([look, pics.map((x) => [x.name, x.backdrop, x.texts, x.layers.map(({ l, state: s }) => [idOf(l), s.dx, s.dy, s.scale, s.hidden, s.shared, idOf(s.shot), idOf(s.chart), idOf(s.image), s.box, s.rotation, s.mask, s.opacity, s.blend, s.overlay]), x.strokeAt]), [...specs.values()]]);
     return { key, look: structuredClone(look), pics, specs };
   }
   function restore(s: Snap) {
@@ -1834,7 +2595,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       x.p.strokeAt = x.strokeAt;
       x.p.backdrop = x.backdrop ? { ...x.backdrop } : null;
       x.p.texts = x.texts.map((t) => ({ ...t }));
-      x.p.layers = x.layers.map(({ l, state }) => Object.assign(l, state));
+      x.p.layers = x.layers.map(({ l, state }) => Object.assign(l, { ...state, mask: state.mask ? structuredClone(state.mask) : undefined, overlay: state.overlay ? structuredClone(state.overlay) : undefined }));
     }
     for (const [spec, json] of s.specs) Object.assign(spec, JSON.parse(json));
   }
@@ -1843,10 +2604,35 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
   let commitAfterShots = false;
   function pushUndo(s: Snap) {
     undoStack.push(s);
-    if (undoStack.length > 200) undoStack.shift();
+    if (undoStack.length > UNDO_STEPS) undoStack.shift();
     redoStack.length = 0;
     host.changed();
+    showHistory();
   }
+  // the undo and redo buttons, over the corner of the stage
+  const history = document.createElement("div");
+  history.className = "promoHistory";
+  history.addEventListener("pointerdown", (e) => e.stopPropagation());
+  const historyButton = (name: "undo2" | "redo2", run: () => void) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.innerHTML = icon(name);
+    b.onclick = run;
+    history.append(b);
+    return b;
+  };
+  const undoButton = historyButton("undo2", () => step(undoStack, redoStack));
+  const redoButton = historyButton("redo2", () => step(redoStack, undoStack));
+  stage.append(history);
+  function showHistory() {
+    undoButton.disabled = !undoStack.length;
+    redoButton.disabled = !redoStack.length;
+    undoButton.title = `Undo (Ctrl+Z): ${undoStack.length} of ${UNDO_STEPS} steps kept`;
+    redoButton.title = `Redo (Ctrl+Shift+Z): ${redoStack.length} step${redoStack.length === 1 ? "" : "s"}`;
+    undoButton.setAttribute("aria-label", "Undo");
+    redoButton.setAttribute("aria-label", "Redo");
+  }
+  showHistory();
   const begin = () => { pending ??= snapshot(); };
   const commit = () => {
     if (!pending) return;
@@ -1868,6 +2654,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     const s = from.pop();
     if (!s) return;
     to.push(snapshot());
+    if (to.length > UNDO_STEPS) to.shift();
     restore(s);
     showLookBackdrop();
     showLookStroke();
@@ -1881,6 +2668,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     showInspector();
     host.changed();
     status.textContent = from === undoStack ? "Undone." : "Redone.";
+    showHistory();
   }
   const keys = (ev: KeyboardEvent) => {
     if (root.offsetParent === null) return; // this board is not showing
@@ -1888,7 +2676,16 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     if (t instanceof HTMLTextAreaElement || (t instanceof HTMLInputElement && (t.type === "text" || t.type === "search"))) return;
     const ctrl = ev.ctrlKey || ev.metaKey;
     const k = ev.key.toLowerCase();
-    if (ctrl && (k === "z" || k === "y")) {
+    // shaping a mask: Esc or Enter is done; Delete takes the mask off (not the layer)
+    if (maskEdit && !ctrl && (ev.key === "Escape" || ev.key === "Enter")) editMask(null);
+    else if (maskEdit && !ctrl && (ev.key === "Delete" || ev.key === "Backspace") && !t.matches("input, select, textarea")) {
+      begin();
+      maskEdit.mask = undefined;
+      maskChanged(maskEdit);
+      editMask(null);
+      if (picked) draw(picked);
+      commitSoon();
+    } else if (ctrl && (k === "z" || k === "y")) {
       if (k === "y" || ev.shiftKey) step(redoStack, undoStack);
       else step(undoStack, redoStack);
     } else if (ctrl && k === "c") copyLayers();

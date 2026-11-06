@@ -4,7 +4,8 @@
  * changes, images only when they are new (a shot taken again), and read back at startup beside the scenes of the last session.
  */
 import { listPromos, readPromoFile, removePromo, savePromoFile } from "../api";
-import type { Backdrop, ChartCellRect, ChartSpec, PromoLayer, PromoPicture, ShotSpec, TextSpec } from "./promo";
+import type { Backdrop, ChartCellRect, ChartSpec, LayerBlend, OverlaySpec, PromoLayer, PromoPicture, ShotSpec, TextSpec } from "./promo";
+import { parseMask, partsOf, type LayerMask } from "./promoMask";
 
 export interface SavedLayer {
   name: string;
@@ -26,6 +27,12 @@ export interface SavedLayer {
   cells?: ChartCellRect[];
   text?: TextSpec;
   rotation?: number;
+  mask?: LayerMask;
+  opacity?: number;
+  blend?: LayerBlend;
+  overlay?: OverlaySpec;
+  /** The file of the image's parts picture (a mask that keeps parts of the character). */
+  parts?: string;
 }
 
 export interface SavedPicture {
@@ -64,15 +71,22 @@ export async function saveBoard(id: string, board: Omit<SavedBoard, "version" | 
   for (const p of board.pictures) {
     const layers: SavedLayer[] = [];
     for (const l of p.layers) {
-      let file = written.get(l.image);
-      if (!file) {
-        file = `image-${Date.now().toString(36)}-${written.size}.png`;
-        await savePromoFile(id, file, await png(l.image));
-        written.set(l.image, file);
-      }
+      const write = async (canvas: HTMLCanvasElement) => {
+        let name = written.get(canvas);
+        if (!name) {
+          name = `image-${Date.now().toString(36)}-${written.size}.png`;
+          await savePromoFile(id, name, await png(canvas));
+          written.set(canvas, name);
+        }
+        return name;
+      };
+      const file = await write(l.image);
+      const partsCanvas = l.mask?.keep.length ? partsOf.get(l.image) : undefined;
+      const parts = partsCanvas ? await write(partsCanvas) : undefined;
       layers.push({
         name: l.name, image: file, box: { ...l.box }, alignY: l.alignY, scale: l.scale, dx: l.dx, dy: l.dy, hidden: l.hidden,
-        shot: l.shot, chart: l.chart, link: l.link, shared: l.shared, centre: l.centre, content: l.content, opaque: l.opaque, cells: l.cells, text: l.text, rotation: l.rotation,
+        shot: l.shot, chart: l.chart, link: l.link, shared: l.shared, centre: l.centre, content: l.content, opaque: l.opaque, cells: l.cells, text: l.text, rotation: l.rotation, opacity: l.opacity, blend: l.blend, overlay: l.overlay,
+        mask: l.mask, parts,
       });
     }
     pictures.push({ name: p.name, item: p.item, kind: p.kind, w: p.w, h: p.h, strokeAt: p.strokeAt, backdrop: p.backdrop, layers });
@@ -117,7 +131,15 @@ export async function loadBoard(id: string): Promise<LoadedBoard> {
         images.set(s.image, img);
         written.set(img, s.image);
       }
-      const l: PromoLayer = { ...s, image: img };
+      const { parts, mask, ...rest } = s;
+      const l: PromoLayer = { ...rest, image: img, mask: parseMask(mask) };
+      if (parts && !partsOf.has(img)) {
+        try {
+          let pc = images.get(parts);
+          if (!pc) { pc = await image(id, parts); images.set(parts, pc); written.set(pc, parts); }
+          partsOf.set(img, pc);
+        } catch { /* taken again when it is needed */ }
+      }
       // the instances of a shared shot are one shot: the first read is the lead, the others take its spec and image
       if (l.link && l.shared) {
         const lead = leads.get(l.link);

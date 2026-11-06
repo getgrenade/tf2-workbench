@@ -2292,6 +2292,81 @@ void main() {
 
 
   /**
+   * A picture of the parts of characters as `camera` sees them at w × h (transparent where they are not): in each pixel, red is how much
+   * of it is the arms and hands, green the head, blue what is held (by the bones its vertices follow, weighted as they are, so the parts
+   * blend at the joints). What a promo shot's fade mask keeps whole by.
+   */
+  partsPicture(actors: Actor[], camera: THREE.PerspectiveCamera, w: number, h: number): HTMLCanvasElement {
+    const target = new THREE.WebGLRenderTarget(w, h, { colorSpace: THREE.NoColorSpace });
+    const swapped: [THREE.Mesh, THREE.Material | THREE.Material[], boolean][] = [];
+    const made: (THREE.ShaderMaterial | THREE.DataTexture)[] = [];
+    const ARMS = /(upperarm|lowerarm|forearm|elbow|wrist|hand|finger|thumb|index|middle|ring|pinky|pinkie)/i, HEAD = /(head|neck|jaw|eye|lid|brow|lip|cheek|tongue|teeth|ear|nose|mouth|hat)/i;
+    const groupsOf = new Map<THREE.Skeleton, THREE.DataTexture>();
+    const groups = (skeleton: THREE.Skeleton | undefined, held: boolean) => {
+      const texture = new THREE.DataTexture(new Uint8Array(256 * 4), 256, 1, THREE.RGBAFormat);
+      const data = texture.image.data as Uint8Array;
+      skeleton?.bones.slice(0, 256).forEach((b, i) => {
+        const name = b.name;
+        // (the weapon's own bones are part of it, not of the hand it hangs from)
+        const weapon = held || /weapon|prp_|prop/i.test(name);
+        data[i * 4] = !weapon && ARMS.test(name) && !/handle/i.test(name) ? 255 : 0;
+        data[i * 4 + 1] = !weapon && HEAD.test(name) ? 255 : 0;
+        data[i * 4 + 2] = weapon ? 255 : 0;
+        data[i * 4 + 3] = 255;
+      });
+      texture.needsUpdate = true;
+      made.push(texture);
+      return texture;
+    };
+    for (const a of this.actorList) {
+      const shown = actors.includes(a);
+      for (const m of a.meshes()) {
+        swapped.push([m, m.material, m.visible]);
+        if (!shown) { m.visible = false; continue; }
+        const held = a.isHeldMesh(m) || a.isPropMesh(m);
+        const skeleton = (m as THREE.SkinnedMesh).skeleton;
+        let tex = skeleton && !held ? groupsOf.get(skeleton) : undefined;
+        if (!tex) { tex = groups(skeleton, held); if (skeleton && !held) groupsOf.set(skeleton, tex); }
+        const mat = makePartsMaterial(tex);
+        made.push(mat);
+        m.material = mat;
+      }
+    }
+    const hidden: THREE.Object3D[] = [...this.shadowQuads(), ...this.editorObjects, this.floorGrid.mesh, ...this.particleGroups()];
+    const wasVisible = hidden.map((o) => o.visible);
+    hidden.forEach((o) => (o.visible = false));
+    const background = this.scene.background;
+    this.scene.background = null;
+    const prevClear = this.renderer.getClearColor(new THREE.Color()), prevAlpha = this.renderer.getClearAlpha();
+    const pixels = new Uint8Array(w * h * 4);
+    try {
+      this.renderer.setClearColor(0x000000, 0);
+      this.renderer.setRenderTarget(target);
+      this.renderer.clear();
+      this.renderer.render(this.scene, camera);
+      this.renderer.readRenderTargetPixels(target, 0, 0, w, h, pixels);
+    } finally {
+      this.renderer.setRenderTarget(null);
+      this.renderer.setClearColor(prevClear, prevAlpha);
+      this.scene.background = background;
+      hidden.forEach((o, i) => (o.visible = wasVisible[i]));
+      for (const [m, mat, vis] of swapped) { m.material = mat; m.visible = vis; }
+      for (const x of made) x.dispose();
+      target.dispose();
+    }
+    // (the target's rows are bottom up)
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d")!;
+    const img = ctx.createImageData(w, h);
+    const row = w * 4;
+    for (let y = 0; y < h; y++) img.data.set(pixels.subarray((h - 1 - y) * row, (h - y) * row), y * row);
+    ctx.putImageData(img, 0, 0);
+    return canvas;
+  }
+
+  /**
    * How much of a worn item `camera` sees, at a small size: `seen` is the share of its pixels that nothing else (an arm, a weapon, the
    * character itself) is in front of, `area` the share of the picture it covers, with nothing in front of it, and `rect` where what is
    * seen of it is in the picture (normalized device coordinates; null when none of it is). What a promo thumbnail's pose is chosen by, and
@@ -4120,6 +4195,35 @@ function makePickMaterial(id: number, slot: number): THREE.ShaderMaterial {
         gl_Position = projectionMatrix * modelViewMatrix * vec4(transformed, 1.0);
       }`,
     fragmentShader: "uniform float uId; uniform float uSlot; varying float vHideW; void main() { if (vHideW > 0.5) discard; gl_FragColor = vec4(uId, uSlot, 0.0, 1.0); }",
+    side: THREE.DoubleSide,
+    blending: THREE.NoBlending,
+  }));
+}
+
+/** The material of the parts picture (see `partsPicture`): the parts of the bones a vertex follows, weighted, from `groups`. */
+function makePartsMaterial(groups: THREE.DataTexture): THREE.ShaderMaterial {
+  return bodyMaskPass(new THREE.ShaderMaterial({
+    uniforms: { tGroups: { value: groups } },
+    vertexShader: /* glsl */ `
+      attribute float hideW;
+      varying float vHideW;
+      varying vec3 vParts;
+      uniform sampler2D tGroups;
+      #include <skinning_pars_vertex>
+      vec3 partOf(float i) { return texture2D(tGroups, vec2((i + 0.5) / 256.0, 0.5)).rgb; }
+      void main() {
+        vHideW = hideW;
+        #include <skinbase_vertex>
+        vec3 transformed = vec3(position);
+        #include <skinning_vertex>
+        #ifdef USE_SKINNING
+          vParts = partOf(skinIndex.x) * skinWeight.x + partOf(skinIndex.y) * skinWeight.y + partOf(skinIndex.z) * skinWeight.z + partOf(skinIndex.w) * skinWeight.w;
+        #else
+          vParts = partOf(0.0);
+        #endif
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(transformed, 1.0);
+      }`,
+    fragmentShader: "varying float vHideW; varying vec3 vParts; void main() { if (vHideW > 0.5) discard; gl_FragColor = vec4(vParts, 1.0); }",
     side: THREE.DoubleSide,
     blending: THREE.NoBlending,
   }));

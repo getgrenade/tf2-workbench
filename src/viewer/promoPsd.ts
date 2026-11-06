@@ -5,7 +5,8 @@
  * pixels (a type layer by its transform). The merged picture in the file is the one the board draws.
  */
 import { writePsd, type Layer } from "ag-psd";
-import { cutCorners, layerPivot, layerRect, paintBackdrop, paintStroke, renderPicture, renderText, turnPoint, type BoardLook, type PromoLayer, type PromoPicture, type TextSpec } from "./promo";
+import { maskGrey, partsOf } from "./promoMask";
+import { cutCorners, layerPivot, layerRect, paintBackdrop, paintStroke, renderPicture, renderText, turnPoint, type BoardLook, type LayerBlend, type PromoLayer, type PromoPicture, type TextSpec } from "./promo";
 
 /** The PostScript names of the text fonts, as Photoshop knows them (a font it lacks is swapped when the text is edited, not before). */
 const PSD_FONT: Record<string, string> = {
@@ -57,6 +58,20 @@ function placed(l: PromoLayer, image: CanvasImageSource) {
   return { canvas, left, top };
 }
 
+/** A layer's fade as a Photoshop layer mask, placed and turned as its pixels are (none without one). */
+function layerMask(l: PromoLayer): Layer["mask"] {
+  if (!l.mask?.on) return undefined;
+  const r = layerRect(l);
+  const grey = maskGrey(l.mask, Math.min(r.w, l.image.width), Math.min(r.h, l.image.height), l.mask.keep.length ? partsOf.get(l.image) : null);
+  const { canvas, left, top } = placed(l, grey);
+  // (black round it: what is outside the layer's rectangle is hidden too)
+  const ctx = canvas.getContext("2d")!;
+  ctx.globalCompositeOperation = "destination-over";
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  return { canvas, left, top, right: left + canvas.width, bottom: top + canvas.height, defaultColor: 0 };
+}
+
 /** A text layer as a type layer: its pixels (without the outline and shadow, which are its effects) and its text. */
 async function typeLayer(l: PromoLayer, t: TextSpec): Promise<Layer> {
   const scale = l.scale;
@@ -77,6 +92,7 @@ async function typeLayer(l: PromoLayer, t: TextSpec): Promise<Layer> {
     top,
     canvas,
     effects: t.outline || t.shadow ? effects : undefined,
+    mask: layerMask(l),
     text: {
       text: t.text.replace(/\n/g, "\r"),
       transform: [c, s, -s, c, x, y],
@@ -86,6 +102,11 @@ async function typeLayer(l: PromoLayer, t: TextSpec): Promise<Layer> {
     },
   };
 }
+
+/** A layer's blend as Photoshop names it. */
+const PSD_BLEND: Record<LayerBlend, NonNullable<Layer["blendMode"]>> = {
+  "source-over": "normal", multiply: "multiply", screen: "screen", overlay: "overlay", "soft-light": "soft light", "hard-light": "hard light", "color-dodge": "color dodge", "color-burn": "color burn", luminosity: "luminosity",
+};
 
 /** The PSD of a picture, as the board has it. */
 export async function picturePsd(p: PromoPicture, look: BoardLook): Promise<Uint8Array> {
@@ -105,6 +126,9 @@ export async function picturePsd(p: PromoPicture, look: BoardLook): Promise<Uint
       canvas,
       left,
       top,
+      mask: layerMask(l),
+      opacity: l.opacity,
+      blendMode: l.blend ? PSD_BLEND[l.blend] : undefined,
       effects: glow && l.shot ? { outerGlow: { enabled: true, present: true, showInDialog: true, size: px(glow.size * (p.h / 1080)), color: { r: 0, g: 0, b: 0 }, blendMode: "multiply", opacity: glow.strength, source: "edge" } } : undefined,
     });
   }

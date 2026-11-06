@@ -1281,9 +1281,14 @@ body.dndActive.dndRefused * { cursor: no-drop !important; }
 .promoChecks input { margin: 0; }
 .promoSide .btns, .promoInspector .btns { display: flex; flex-wrap: wrap; gap: var(--ui-3); margin-top: var(--ui-4); }
 .promoHeadBtns { display: flex; gap: var(--ui-2); flex: none; }
-.promoLayerActions:empty { display: none; }
-.promoLayerActions { margin-bottom: var(--ui-4); }
-.promoLayerActions .btns { margin-top: var(--ui-2); }
+.promoLayerTools { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ui-2); }
+.promoLayerActions { display: contents; }
+.promoLayerActions .sep { width: 1px; height: 16px; margin: 0 var(--ui-1); background: var(--ui-divider); }
+.promoLayerActions .iconBtn { width: 26px; padding: 0; display: inline-grid; place-items: center; margin-left: auto; }
+.promoLayerActions .iconBtn svg { width: 14px; height: 14px; }
+.promoLayerActions button:disabled { opacity: .4; cursor: default; }
+.promoLinkNote:empty { display: none; }
+.promoLinkNote { margin: var(--ui-2) 0 0; }
 .promoSide button.primary, .promoInspector button.primary { border-color: var(--accent); color: var(--accent); }
 .promoSideFoot { margin-top: auto; padding-top: var(--ui-5); }
 .promoSideFoot .btns { display: grid; grid-template-columns: 1fr 1fr; }
@@ -1298,8 +1303,70 @@ body.dndActive.dndRefused * { cursor: no-drop !important; }
 .promoThumb { flex: none; height: auto; display: flex; flex-direction: column; align-items: center; gap: var(--ui-2); padding: var(--ui-2); border: 1px solid transparent; border-radius: var(--ui-radius-l); background: none; color: var(--dim); font-size: var(--ui-fs-small); }
 .promoThumb:hover { border-color: var(--ui-line-strong); background: var(--ui-hover); color: var(--fg); }
 .promoThumb.on { border-color: var(--ui-accent-line); background: var(--ui-accent-soft); color: var(--fg); }
+.promoThumbAdd { flex: none; align-self: flex-end; width: 96px; margin-bottom: calc(var(--ui-2) * 2 + 18px); display: grid; place-items: center; padding: 0; border: 1px dashed var(--ui-line-strong); border-radius: var(--ui-radius-l); background: none; color: var(--dim); cursor: pointer; }
+.promoThumbAdd:hover { border-color: var(--ui-accent-line); background: var(--ui-accent-soft); color: var(--fg); }
+.promoThumbAdd svg { width: 28px; height: 28px; }
 .promoThumb canvas { display: block; border-radius: var(--ui-radius-s); box-shadow: 0 2px 8px var(--ui-shade-1); }
-.promoStage { min-height: 0; display: flex; align-items: center; justify-content: center; padding: var(--ui-5); overflow: hidden; }
+.promoStage { position: relative; min-height: 0; display: flex; align-items: center; justify-content: center; padding: var(--ui-5); overflow: hidden; }
+/* the bar under the selected layer: its fade mask and its shadow (as the view's floating bars) */
+.promoSelBar { position: absolute; left: 0; top: 0; z-index: 2; display: flex; flex-direction: column; align-items: center; gap: var(--ui-1); padding: var(--ui-2); background: var(--ui-float); border-radius: var(--ui-radius-xl); backdrop-filter: blur(6px); box-shadow: 0 4px 16px var(--ui-shade-2); will-change: transform; }
+.promoSelBar[hidden] { display: none; }
+/* the texture browser of a background overlay */
+.ovlBrowser { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; background: rgb(0 0 0 / .45); }
+.ovlCard { width: min(880px, calc(100vw - 32px)); height: min(620px, calc(100vh - 32px)); display: grid; grid-template-rows: auto minmax(0, 1fr) auto; background: var(--panel); border: 1px solid var(--ui-line-strong); border-radius: var(--ui-radius-xl); box-shadow: 0 16px 48px var(--ui-shade-3); overflow: hidden; }
+.ovlCard header { display: flex; align-items: center; gap: var(--ui-4); padding: var(--ui-4) var(--ui-5); border-bottom: 1px solid var(--line); }
+.ovlCard header h3 { margin: 0; font-size: var(--ui-fs-head); text-transform: uppercase; letter-spacing: .07em; color: var(--dim); white-space: nowrap; }
+.ovlCard .ovlSearch { flex: 1; min-width: 0; }
+.ovlCard .ovlClose { width: 26px; height: 26px; padding: 0; display: grid; place-items: center; border: 0; background: transparent; color: var(--dim); border-radius: var(--ui-radius-l); cursor: pointer; }
+.ovlCard .ovlClose:hover { background: var(--ui-wash-2); color: var(--fg); }
+.ovlCard .ovlClose svg { width: 16px; height: 16px; }
+.ovlBody { display: grid; grid-template-columns: 150px minmax(0, 1fr); min-height: 0; }
+.ovlFolders { display: flex; flex-direction: column; gap: 2px; padding: var(--ui-3); border-right: 1px solid var(--line); overflow-y: auto; }
+.ovlFolders button { justify-content: flex-start; text-align: left; height: 26px; padding: 0 var(--ui-3); border: 0; border-radius: var(--ui-radius-l); background: transparent; color: var(--dim); text-transform: capitalize; cursor: pointer; }
+.ovlFolders button:hover { background: var(--ui-hover); color: var(--fg); }
+.ovlFolders button.on { background: var(--ui-accent-soft); color: var(--fg); }
+.ovlGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); grid-auto-rows: min-content; gap: var(--ui-3); padding: var(--ui-4); overflow-y: auto; align-content: start; }
+.ovlItem { display: flex; flex-direction: column; gap: 4px; padding: 4px; height: auto; border: 1px solid transparent; border-radius: var(--ui-radius-l); background: none; color: var(--dim); font-size: var(--ui-fs-small); cursor: pointer; }
+.ovlItem:hover { border-color: var(--ui-line-strong); background: var(--ui-hover); color: var(--fg); }
+.ovlItem.on { border-color: var(--ui-accent-line); background: var(--ui-accent-soft); color: var(--fg); }
+.ovlImg { display: block; width: 100%; aspect-ratio: 1; border-radius: var(--ui-radius-s); background: var(--ui-input) center / cover no-repeat; }
+.ovlImg.bad { opacity: .3; }
+.ovlName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ovlEmpty { grid-column: 1 / -1; }
+.ovlCard footer { display: flex; align-items: center; gap: var(--ui-4); padding: var(--ui-3) var(--ui-5); border-top: 1px solid var(--line); }
+.ovlCard footer .ovlPicked { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.promoCharsPop { position: fixed; z-index: 50; width: 290px; display: flex; flex-direction: column; gap: var(--ui-3); padding: var(--ui-4); background: var(--ui-float); border: 1px solid var(--ui-line-strong); border-radius: var(--ui-radius-xl); backdrop-filter: blur(8px); box-shadow: 0 8px 24px var(--ui-shade-2); }
+.promoCharsPop .list { display: flex; flex-direction: column; gap: var(--ui-2); }
+.promoCharsPop .row { display: flex; align-items: center; gap: var(--ui-2); }
+.promoCharsPop select { flex: 1; min-width: 0; }
+.promoCharsPop .seg { display: flex; padding: 2px; gap: 2px; border-radius: var(--ui-radius-l); background: var(--ui-input); }
+.promoCharsPop .seg button { height: 22px; padding: 0 var(--ui-3); border: 0; border-radius: calc(var(--ui-radius-l) - 2px); background: transparent; color: var(--dim); font-size: var(--ui-fs-small); cursor: pointer; }
+.promoCharsPop .seg button.on.t0 { background: #b8383b; color: #fff; }
+.promoCharsPop .seg button.on.t1 { background: #3b6fa8; color: #fff; }
+.promoCharsPop .del { width: 24px; height: 24px; padding: 0; display: grid; place-items: center; border: 0; border-radius: var(--ui-radius-l); background: transparent; color: var(--dim); cursor: pointer; }
+.promoCharsPop .del:hover:not(:disabled) { background: var(--ui-wash-2); color: var(--fg); }
+.promoCharsPop .del:disabled { opacity: .3; cursor: default; }
+.promoCharsPop .del svg { width: 14px; height: 14px; }
+.promoCharsPop .more { align-self: flex-start; }
+.promoCharsPop .hint { margin: 0; }
+.promoHistory { position: absolute; left: 8px; top: 8px; z-index: 2; display: flex; gap: 2px; padding: var(--ui-1); background: var(--ui-float); border-radius: var(--ui-radius-xl); backdrop-filter: blur(6px); box-shadow: 0 4px 16px var(--ui-shade-2); }
+.promoHistory button { width: var(--ui-h-float); height: var(--ui-h-float); padding: 0; display: grid; place-items: center; border: 0; border-radius: var(--ui-radius-l); background: transparent; color: var(--ui-text); cursor: pointer; }
+.promoHistory button:hover:not(:disabled) { background: var(--ui-wash-2); color: var(--ui-text-hi); }
+.promoHistory button:disabled { opacity: .35; cursor: default; }
+.promoHistory button svg { width: var(--ui-icon-l); height: var(--ui-icon-l); }
+.promoSelBar .row { display: flex; align-items: center; gap: var(--ui-1); }
+.promoSelBar .row + .row { padding-top: var(--ui-1); border-top: 1px solid var(--ui-divider); width: 100%; justify-content: center; }
+.promoSelBar .shadowToggle { display: flex; align-items: center; gap: 6px; height: var(--ui-h-float); padding: 0 var(--ui-2) 0 var(--ui-3); border-radius: var(--ui-radius-l); font-size: var(--ui-fs-small); color: var(--ui-text); cursor: pointer; user-select: none; }
+.promoSelBar .shadowToggle:hover { background: var(--ui-wash-2); color: var(--ui-text-hi); }
+.promoSelBar .shadowToggle input { width: 14px; height: 14px; margin: 0; cursor: pointer; }
+.promoSelBar button { width: var(--ui-h-float); height: var(--ui-h-float); padding: 0; display: grid; place-items: center; border: 0; border-radius: var(--ui-radius-l); background: transparent; color: var(--ui-text); cursor: pointer; }
+.promoSelBar button:hover { background: var(--ui-wash-2); color: var(--ui-text-hi); }
+.promoSelBar button.on { background: var(--ui-accent-mid); color: var(--ui-text-hi); }
+.promoSelBar button svg { width: var(--ui-icon-l); height: var(--ui-icon-l); }
+.promoSelBar .sep { width: 1px; height: 18px; margin: 0 var(--ui-1); background: var(--ui-divider); }
+.promoSelBar .seg { display: flex; padding: 2px; gap: 2px; border-radius: var(--ui-radius-l); background: var(--ui-input); }
+.promoSelBar .seg button { width: auto; height: calc(var(--ui-h-float) - 4px); padding: 0 var(--ui-4); font-size: var(--ui-fs-small); border-radius: calc(var(--ui-radius-l) - 2px); }
+.promoPreview.masking, .promoPreview.masking:active { cursor: crosshair; }
 .promoPreview { display: block; box-shadow: 0 4px 22px var(--ui-shade-2); cursor: grab; touch-action: none; }
 .promoPreview:active { cursor: grabbing; }
 .promoHelp { margin: 0; padding: var(--ui-2) var(--ui-5) var(--ui-4); text-align: center; font-size: var(--ui-fs-small); }

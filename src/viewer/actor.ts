@@ -358,8 +358,9 @@ export class Actor {
     // A clip belongs to one skeleton; drop the previous model's until the new one is baked.
     this.playback.clip = null;
     this.playback.time = 0;
-    this.bones = data.bones.map(() => {
+    this.bones = data.bones.map((info) => {
       const b = new THREE.Bone();
+      b.name = info.name; // (what a picture of the parts of the character tells the bones apart by)
       b.matrixAutoUpdate = false;
       b.matrixWorldAutoUpdate = false;
       return b;
@@ -987,8 +988,9 @@ export class Actor {
     }
     const { data, skin, clip } = prop;
     const rig = new Rig(data.bones);
-    const bones = data.bones.map(() => {
+    const bones = data.bones.map((info) => {
       const b = new THREE.Bone();
+      b.name = info.name;
       b.matrixAutoUpdate = false;
       b.matrixWorldAutoUpdate = false;
       return b;
@@ -1847,6 +1849,12 @@ export class Actor {
     const out: THREE.Mesh[] = [];
     this.cosmeticGroup?.traverse((o) => { if ((o as THREE.Mesh).isMesh) out.push(o as THREE.Mesh); });
     return out;
+  }
+
+  /** Whether a mesh is of the animated prop of a taunt (what the character holds in it). */
+  isPropMesh(mesh: THREE.Object3D): boolean {
+    for (let o: THREE.Object3D | null = mesh; o; o = o.parent) if (o === this.prop?.group) return true;
+    return false;
   }
 
   /** Whether a mesh is of the weapon the character holds (a cosmetic slot that is the held weapon). */

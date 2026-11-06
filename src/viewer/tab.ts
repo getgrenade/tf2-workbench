@@ -1,5 +1,6 @@
 import { icon as svgIcon, ICONS as LUCIDE, type IconName } from "../icons";
 import { shadowLayer, shadowOf, solidOf, type ShotEffects } from "./promo";
+import { partsOf } from "./promoMask";
 import { picturePsd } from "./promoPsd";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { createCompilerUi, type PreviewApplication } from "../compiler/compilerUi";
@@ -4814,14 +4815,17 @@ export function createViewTab(els: Els) {
    * with {@link PROMO_MARGIN} more room round the slot, so what reaches past the character (a long weapon) is not cut off at the slot's
    * edge but spills over it (see {@link marginBox}).
    */
-  async function promoShot(who: Entity | Entity[], dir: THREE.Vector3, w: number, h: number, fill: number, scaleDistance?: number, pan?: { fov?: number; panX?: number; panY?: number; light?: { azimuth: number; elevation: number }; particles?: { seed: number; time: number }; studio?: StudioLight; spreadPoint?: [number, number] }, margin = true, effects?: ShotEffects, bounds?: THREE.Box3, quick = false, steady = false): Promise<HTMLCanvasElement> {
+  async function promoShot(who: Entity | Entity[], dir: THREE.Vector3, w: number, h: number, fill: number, scaleDistance?: number, pan?: { fov?: number; panX?: number; panY?: number; light?: { azimuth: number; elevation: number }; particles?: { seed: number; time: number }; studio?: StudioLight; spreadPoint?: [number, number]; parts?: boolean; frame?: { distance: number; target: [number, number, number]; fill: number }; holdFrame?: boolean }, margin = true, effects?: ShotEffects, bounds?: THREE.Box3, quick = false, steady = false): Promise<HTMLCanvasElement> {
     const v = ensureViewer();
     const actors = (Array.isArray(who) ? who : [who]).map((x) => x.actor);
     const fov = pan?.fov ?? PROMO_FOV;
     await bodyMasksLoaded(); // the parts an item shown alone hides are hidden by a mask texture (before the character is looked at to fit it)
     // `steady` (a look through the camera as it is dragged): the framing the shot last had, the camera only going round it (fitted again at
     // each step, the item alone shook as its outline changed); a zoom brings it nearer by as much
-    const held = steady && pan ? framedAt.get(pan) : undefined;
+    // (auto framing off: the framing it keeps, else the one it last had, kept from now on)
+    const kept = pan?.holdFrame ? (pan.frame ? { distance: pan.frame.distance, target: new THREE.Vector3(...pan.frame.target), fill: pan.frame.fill } : framedAt.get(pan)) : undefined;
+    if (kept && pan && !pan.frame) pan.frame = { distance: kept.distance, target: kept.target.toArray() as [number, number, number], fill: kept.fill };
+    const held = kept ?? (steady && pan ? framedAt.get(pan) : undefined);
     let cam: THREE.PerspectiveCamera;
     if (held) {
       cam = new THREE.PerspectiveCamera(fov, w / h, 0.1, 5000);
@@ -4838,7 +4842,10 @@ export function createViewTab(els: Els) {
       // a shot of its own scale and of the characters (not one sharing its scale with others, nor a framed item) is fitted to what is seen of them,
       // not to their bounding box (which is always roomier than they are)
       if (scaleDistance === undefined && !bounds) await fitSilhouette(v, cam, actors, fill, w / h, fov, quick ? 1 : 2, PROMO_MARGIN.x, PROMO_MARGIN.y);
-      if (pan) framedAt.set(pan, { distance: cam.position.distanceTo(cam.userData.target as THREE.Vector3), target: (cam.userData.target as THREE.Vector3).clone(), fill });
+      if (pan) {
+        framedAt.set(pan, { distance: cam.position.distanceTo(cam.userData.target as THREE.Vector3), target: (cam.userData.target as THREE.Vector3).clone(), fill });
+        if (pan.holdFrame) pan.frame = { distance: framedAt.get(pan)!.distance, target: (cam.userData.target as THREE.Vector3).toArray() as [number, number, number], fill };
+      }
     }
     const target = slideCamera(cam, w / h, fov, pan);
     v.restoreCamera(cam.position.toArray() as [number, number, number], target.toArray() as [number, number, number]);
@@ -4873,6 +4880,8 @@ export function createViewTab(els: Els) {
     try {
       return await lit(async () => {
         const shot = await v.capture(1, true, { camera: cam, only: actors, size: { w: W, h: H }, canvas: true, groundShadow: shadow, look, ao });
+        // the parts of the character, for a fade mask that keeps some of them whole (not for a drag's quick step: the full one follows)
+        if (pan?.parts && !quick) partsOf.set(shot.canvas!, v.partsPicture(actors, cam, shot.canvas!.width, shot.canvas!.height));
         // with effects, the shot again without them: the character alone, for its bounds and clicks
         if (shadow || look) {
           const plain = await v.capture(1, true, { camera: cam, only: actors, size: { w: W, h: H }, canvas: true });
@@ -5114,6 +5123,8 @@ export function createViewTab(els: Els) {
   const PROMO_ROLE_NAMES = ["RED", "BLU", "Item alone"];
   /** The role of a composition's scene (the characters of a line-up in one): its characters' own roles only key what they wear. */
   const GROUP_ROLE = 100;
+  /** The role of a composition's first character (the others follow it): what each was last dressed in is kept by it. */
+  const GROUP_FIRST_ROLE = 3;
   const roleName = (role: number) => (role === GROUP_ROLE ? "Line-up" : PROMO_ROLE_NAMES[role] ?? `Line-up ${role - PROMO_ROLE_NAMES.length + 1}`);
   const isPromoTab = (t: SceneTab | null) => !!t && [...sessions].some((s) => [...s.roles.values()].includes(t));
 
@@ -5255,9 +5266,25 @@ export function createViewTab(els: Els) {
     renderTabs();
   }
 
+  /** A shot's class: its own, else the board's. */
+  const clsOf = (spec: { cls?: string }) => spec.cls ?? promo().cls;
+  /** Makes a character the class a shot (or a chart) wants: the model swapped in place (it is dressed again after). */
+  async function ensureClass(e: Entity, spec: { role: number; cls?: string }) {
+    const cls = clsOf(spec);
+    if (e.cls === cls) return;
+    await show(e, cls, { seqName: "ref" });
+    promo().dressed.delete(spec.role);
+  }
+  /** A role's character (its scene entered), of the class the shot wants. */
+  async function roleEntity(spec: { role: number; cls?: string }): Promise<Entity> {
+    const e = await enterRole(spec.role);
+    await ensureClass(e, spec);
+    return e;
+  }
+
   /** Dresses a shot's character as its spec says (unless it already is), turned by the shot's Turn (see {@link shotDirection}). */
   async function dressForShot(spec: ShotSpec): Promise<Entity> {
-    const e = await dressEntity(await enterRole(spec.role), spec);
+    const e = await dressEntity(await roleEntity(spec), spec);
     turnForShot(spec, e);
     return e;
   }
@@ -5276,6 +5303,7 @@ export function createViewTab(els: Els) {
 
   /** Dresses a character as a shot's spec says (it is built anew only when the spec's key changes): what it wears and holds, and how it stands. */
   async function dressEntity(e: Entity, spec: ShotSpec): Promise<Entity> {
+    await ensureClass(e, spec);
     const db = await loadItemDb();
     const byId = new Map([...db.items, ...db.weapons, ...db.taunts].map((i) => [i.id, i] as const));
     const paints = new Map(db.paints.map((p) => [p.id, p] as const));
@@ -5304,6 +5332,8 @@ export function createViewTab(els: Els) {
     }
     // the eyes: as set in 3D, else into the camera (as the game's model panels have them)
     e.actor.setEyesFollowCamera(spec.eyesFollow ?? true);
+    // a shot is a still: its character holds the frame it is on (playing, it would move between one look through the camera and the next)
+    e.actor.playback.playing = false;
     return e;
   }
 
@@ -5311,7 +5341,25 @@ export function createViewTab(els: Els) {
   async function enterGroup(spec: ShotSpec): Promise<Entity[]> {
     const count = spec.group!.length;
     await enterRole(spec.role, count);
-    if (entities.length < count) throw new Error("the line-up's scene has fewer characters than it needs");
+    // a group of another size than the scene's last: characters added or taken away at the end (the others stay as they are)
+    if (entities.length !== count) {
+      const v = ensureViewer();
+      const had = entities.length;
+      while (entities.length > count) v.removeActor(entities.pop()!.actor);
+      while (entities.length < count) {
+        const child = spec.group![entities.length];
+        const e = newEntity(v.addActor(), clsOf(child), teamOf(child));
+        e.name = `${roleName(spec.role)} ${entities.length + 1}`;
+        e.applied = [];
+        entities.push(e);
+        await show(e, e.cls, { seqName: "ref" });
+      }
+      if (selected && !entities.includes(selected)) selected = entities[0];
+      for (const child of spec.group!.slice(Math.min(had, count))) promo().dressed.delete(child.role);
+      promo().laidOut.delete(spec.role);
+      if (promoQuiet) uiStale = true;
+      else renderEntities();
+    }
     return entities.slice(0, count);
   }
 
@@ -5340,7 +5388,7 @@ export function createViewTab(els: Els) {
     }
     // side by side, the same distance from each other, the row centred on the middle; the first stands at the left of the picture (the view's
     // x runs to the left)
-    ents.forEach((e, i) => v.placeActor(e.actor, ((ents.length - 1) / 2 - i) * (spec.spacing ?? LINEUP_SPACING), 0, LINEUP_DEPTH[i] ?? 0, ((spec.group![i].turn ?? 0) * Math.PI) / 180));
+    ents.forEach((e, i) => v.placeActor(e.actor, ((ents.length - 1) / 2 - i) * (spec.spacing ?? LINEUP_SPACING), 0, ents.length === 4 ? LINEUP_DEPTH[i] : 0, ((spec.group![i].turn ?? 0) * Math.PI) / 180));
   }
   /** The four of a line-up stand in a shallow arc: the outer two a little back (z) and turned in (the turn, in degrees about Y: the Rotation Y of the properties). */
   const LINEUP_DEPTH = [-4, 0, 0, -4];
@@ -5350,7 +5398,7 @@ export function createViewTab(els: Els) {
   const teamOf = (spec: ShotSpec) => spec.team ?? (spec.role === 1 ? 1 : 0);
   /** What a shot's character wears, holds, its team and how it stands, as a key (the character is dressed again only when it changes). */
   const dressKey = (spec: ShotSpec) =>
-    JSON.stringify([spec.loadout.map((x) => [x.item, x.paint, x.style]), spec.weapon, spec.regions, spec.bodygroups ?? null, teamOf(spec), spec.pose ? spec.pose.quat.slice(0, 64).map((q) => Math.round(q * 1e4)) : null, spec.flex ?? null]);
+    JSON.stringify([spec.cls ?? null, spec.loadout.map((x) => [x.item, x.paint, x.style]), spec.weapon, spec.regions, spec.bodygroups ?? null, teamOf(spec), spec.pose ? spec.pose.quat.slice(0, 64).map((q) => Math.round(q * 1e4)) : null, spec.flex ?? null]);
 
   /**
    * Gives a shot a random pose, as the random loadouts do: a taunt (held) or an animation, half the time each, stopped on a frame where
@@ -5359,7 +5407,7 @@ export function createViewTab(els: Els) {
   /** The taunts (that play on the character alone: a prop of their own would be left out of the picture) and animations a shot's character can be posed from. */
   async function shotPoses(spec: ShotSpec) {
     const db = await loadItemDb();
-    const e = await enterRole(spec.role);
+    const e = await roleEntity(spec);
     const game = gameClassOf(e.cls);
     const taunts = db.taunts.filter((t) => !t.workshop && itemUsableBy(t, game) && t.tauntScenes[game] !== undefined && !t.tauntPropScenes[game] && !NOT_ROLLED_TAUNT.test(t.tauntScenes[game]));
     const sequences = (e?.anim.info?.sequences ?? []).filter((q) => q.frames > 1 && !NOT_A_POSE.test(q.name) && !isJunkSequence(q.name));
@@ -5369,7 +5417,7 @@ export function createViewTab(els: Els) {
   /** A random taunt or animation for a shot (`avoid`: ones the shots beside it already have), stopped on a frame that frames well, with a random face. */
   async function rollShotPose(spec: ShotSpec, avoid: Set<string> = new Set(), tries = 3, on?: Entity): Promise<void> {
     if (spec.group) return rollGroupPoses(spec);
-    const e = on ?? await enterRole(spec.role);
+    const e = on ?? await roleEntity(spec);
     // (the taunts that play on the character alone: a prop of their own would be left out of the picture)
     const source = await poseSource(e, false);
     const first = Math.random() < 0.5 ? "taunt" : "anim";
@@ -5463,7 +5511,7 @@ export function createViewTab(els: Els) {
    * weapon), then how much of the picture it takes.
    */
   async function rollThumbnailPose(spec: ShotSpec, tries = 8): Promise<void> {
-    const e = await enterRole(spec.role);
+    const e = await roleEntity(spec);
     await dressEntity(e, { ...spec, pose: undefined });
     const source = await poseSource(e, false);
     const avoid = new Set<string>();
@@ -5754,6 +5802,7 @@ export function createViewTab(els: Els) {
         part.loadout = e.items.loadout.filter((x) => itemUsableBy(x.item, game)).map((x) => ({ item: x.item.id, name: x.item.displayName, paintable: x.item.paintable, paint: x.paint?.id ?? null, style: x.style }));
         part.weapon = e.held?.id ?? null;
         part.team = e.team;
+        part.cls = e.cls === promo().cls ? undefined : e.cls; // a class picked in 3D
         part.bodygroups = e.bodyManual.size ? Object.fromEntries(e.bodyManual) : undefined;
         // the pose it shows now: a custom one, or the frame of what it plays (and that, as its source: the board's Pose list and timeline)
         part.poseOf = poseSourceAfterEdit(part, e);
@@ -5797,7 +5846,8 @@ export function createViewTab(els: Els) {
     const res = (spec.resolution ?? 1) * (live ? 0.5 : 1);
     // (an item shown alone casts no shadow: it would float over one)
     spec.effects ??= structuredClone(boardShotEffects());
-    const effects = spec.effects && spec.regions ? { ...spec.effects, shadow: { ...spec.effects.shadow, on: false } } : spec.effects;
+    // (nor does a shot whose own shadow is off: one that fades out, say)
+    const effects = spec.effects && (spec.regions || spec.noShadow) ? { ...spec.effects, shadow: { ...spec.effects.shadow, on: false } } : spec.effects;
     // (a drag's step keeps the framing the shot last had, as the camera window does: not fitted again, nor measured)
     return promoShot(e, shotDirection(spec), Math.round(spec.w * res), Math.round(spec.h * res), spec.fill, spec.scaleDistance, spec, true, effects, Array.isArray(e) || live ? undefined : focusBounds(e, spec), live, live);
   }
@@ -5838,7 +5888,7 @@ export function createViewTab(els: Els) {
     const db = await loadItemDb();
     const item = db.items.find((i) => i.id === spec.item);
     if (!item) throw new Error("the promo has no such item");
-    const e = await enterRole(spec.role);
+    const e = await roleEntity(spec);
     const o = (spec.options ??= structuredClone(DEFAULT_CHART)); // (a board made before the chart had settings)
     const worn: Equipped = { item, paint: null, style: spec.style };
     await dressForChart(spec);
@@ -5892,7 +5942,7 @@ export function createViewTab(els: Els) {
     const db = await loadItemDb();
     const item = db.items.find((i) => i.id === spec.item);
     if (!item) throw new Error("the promo has no such item");
-    const e = await enterRole(spec.role);
+    const e = await roleEntity(spec);
     const regions = defaultBodyGroupsFor(e.cls, item.equipRegions);
     const dress = JSON.stringify([[[item.id, null, spec.style]], null, regions]);
     if (promo().dressed.get(spec.role) !== dress) {
@@ -5931,7 +5981,7 @@ export function createViewTab(els: Els) {
     }
     if (!spec.reroll) return;
     const db = await loadItemDb();
-    const e = on ?? await enterRole(spec.role);
+    const e = on ?? await roleEntity(spec);
     const game = gameClassOf(e.cls);
     const conflicts = (a: ItemInfo, b: ItemInfo) => a.equipRegions.some((ra) => b.equipRegions.some((rb) => ra === rb || db.equipConflicts[ra]?.includes(rb) || db.equipConflicts[rb]?.includes(ra)));
     // the others are the game's own cosmetics; the item kept is in it too, a workshop one included (the set being promoted often is)
@@ -6055,7 +6105,52 @@ export function createViewTab(els: Els) {
     lightDirection: viewLightDirection,
     changed: () => { if (session) scheduleSave(session); },
     newSet: () => els.capture.promo.click(),
+    shotName: (spec) => shotName(spec),
+    classes: () => CLASSES.filter(([, mdl]) => !isBuildingCls(mdl)).map(([label, mdl]) => ({ label, cls: mdl })),
+    boardClass: () => promo().cls,
+    newShot: (chars, x, y, w, h) => inPromoScene(async () => {
+      const db = await loadItemDb();
+      const character = (c: { cls: string; team: 0 | 1 }, role: number): ShotSpec => {
+        const weapon = stockWeapon(db, gameClassOf(c.cls));
+        return { role, cls: c.cls === promo().cls ? undefined : c.cls, team: c.team, loadout: [], weapon: weapon?.id ?? null, regions: null, yaw: c.team ? -37 : 22, pitch: 0, fov: 25, fill: 1, w: Math.round(w), h: Math.round(h), randomPose: true };
+      };
+      let spec: ShotSpec;
+      if (chars.length === 1) {
+        spec = character(chars[0], chars[0].team);
+      } else {
+        // one scene: they stand in a row, turned a little toward the middle, the camera in front
+        const turns = chars.length === 2 ? [8, -8] : chars.length === 3 ? [10, 0, -10] : LINEUP_TURN;
+        // (the row's first stands at the right of the picture: the list, read left to right, is the picture's order)
+        const group = [...chars].reverse().map((c, i) => ({ ...character(c, GROUP_FIRST_ROLE + i), yaw: 0, pitch: 0, w: 1, h: 1, turn: turns[i] ?? 0 }));
+        spec = { role: GROUP_ROLE, loadout: [], weapon: null, regions: null, yaw: 0, pitch: 0, fov: 25, fill: 1, w: Math.round(w), h: Math.round(h), group, randomPose: true };
+      }
+      const l: PromoLayer = { ...layer(shotName(spec), await takeShot(spec), ...marginBox(x, y, w, h)), shot: spec };
+      measureContent(l);
+      return l;
+    }),
   };
+
+  /** A hand-made shot's name: its class and team, or a group's classes as the picture has them, left to right. */
+  function shotName(spec: ShotSpec): string {
+    const label = (c: ShotSpec) => CLASSES.find(([, mdl]) => mdl === clsOf(c))?.[0] ?? clsOf(c);
+    return spec.group ? [...spec.group].reverse().map(label).join(", ") : `${label(spec)} (${teamOf(spec) ? "BLU" : "RED"})`;
+  }
+
+  /** The class's stock weapon, held in its idle: the first of primary, secondary, melee it has. */
+  function stockWeapon(db: Awaited<ReturnType<typeof loadItemDb>>, game: string) {
+    const stock = db.weapons.filter((w) => w.baseItem && itemUsableBy(w, game));
+    return ["primary", "secondary", "melee"].map((slot) => stock.find((w) => slotForClass(w, game) === slot)).find((w) => !!w) ?? null;
+  }
+
+  /** A board of one blank page (the board's backdrop and border, nothing on it), for the selected character's class, to fill by hand. */
+  function newBlankBoard() {
+    const cls = selected && !isBuildingCls(selected.cls) ? selected.cls : CLASSES[0][1];
+    const mine = newSession("Custom board", [], cls);
+    sessions.add(mine);
+    const pictures: PromoPicture[] = [{ name: "Page_1", kind: "Page 1", w: 1920, h: 1080, layers: [], texts: [], backdrop: null }];
+    if (!openBoard(mine, "Promo: Custom board", pictures, true)) { sessions.delete(mine); return; }
+    scheduleSave(mine);
+  }
 
   /** The pictures of a promo set, taken in the promo scene that is open (its characters by role: RED, BLU, the item alone, the line-up). */
   async function takePromo(set: ItemInfo[], mdl: string, game: string, say: (text: string) => void, weapon: ItemInfo | null, db: Awaited<ReturnType<typeof loadItemDb>>, only?: "lineup"): Promise<PromoPicture[]> {
@@ -7095,6 +7190,7 @@ export function createViewTab(els: Els) {
       { label: "Copy", hint: "of this scene", run: () => void newSceneCopy() },
       { label: "Default", hint: "a fresh scene", run: () => void newSceneDefault() },
     ] },
+    { label: "New promo board", hint: "blank, to fill by hand", run: () => newBlankBoard() },
     { label: "Save scene", children: [
       { label: "All", hint: ".json", run: () => void saveSceneToFile() },
       { label: "Lights", hint: PART_SUFFIX.lights, run: () => void saveScenePart("lights") },

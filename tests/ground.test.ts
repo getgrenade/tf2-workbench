@@ -13,5 +13,6 @@ test("the fade of the ground ends at its distance (in characters) and starts ear
 test("a ground from a scene file is checked", () => {
   assert.equal(parseGround(undefined), undefined);
   const g = parseGround({ enabled: true, color: "nope", opacity: 5, distance: -3, softness: "x" })!;
-  assert.deepEqual(g, { enabled: true, color: DEFAULT_GROUND.color, opacity: 1, distance: 1, softness: DEFAULT_GROUND.softness });
+  assert.deepEqual(g, { enabled: true, color: DEFAULT_GROUND.color, opacity: 1, distance: 1, softness: DEFAULT_GROUND.softness, blend: false });
+  assert.equal(parseGround({ blend: true })!.blend, true);
 });
