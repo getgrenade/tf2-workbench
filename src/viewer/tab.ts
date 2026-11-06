@@ -6234,12 +6234,12 @@ export function createViewTab(els: Els) {
   }
 
   /** A board of one blank page (the board's backdrop and border, nothing on it), for the selected character's class, to fill by hand. */
-  function newBlankBoard() {
+  function newBlankBoard(show = true) {
     const cls = selected && !isBuildingCls(selected.cls) ? selected.cls : CLASSES[0][1];
     const mine = newSession("Custom board", [], cls);
     sessions.add(mine);
     const pictures: PromoPicture[] = [{ name: "Page_1", kind: "Page 1", w: 1920, h: 1080, layers: [], texts: [], backdrop: null }];
-    if (!openBoard(mine, "Promo: Custom board", pictures, true)) { sessions.delete(mine); return; }
+    if (!openBoard(mine, "Promo: Custom board", pictures, show)) { sessions.delete(mine); return; }
     scheduleSave(mine);
   }
 
@@ -7383,11 +7383,14 @@ export function createViewTab(els: Els) {
       await show(e, e.cls);
     }
     if (!activeTab) {
+      // (before the boards brought back: a scene comes first in the strip)
       activeTab = freshTab();
-      tabs.length = 0;
-      tabs.push(activeTab);
+      for (const t of tabs.filter((x) => !x.board)) tabs.splice(tabs.indexOf(t), 1);
+      tabs.unshift(activeTab);
       markClean(activeTab);
     }
+    // there is always a custom board beside the scene (an empty one when none was kept), so its Add menu is there to be found
+    if (![...sessions].some((x) => x.board && x.ids.size === 0)) newBlankBoard(false);
     renderTabs();
     startAutosave();
   }
