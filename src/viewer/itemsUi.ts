@@ -33,6 +33,8 @@ export interface Equipped {
   style: number;
   /** Not worn for the moment (the eye on its card): it stays in the loadout, to be shown again. */
   hidden?: boolean;
+  /** Worn in this team's skin (0 RED, 1 BLU) whatever the character's team; absent: the character's. */
+  skin?: 0 | 1;
 }
 
 export interface ItemsHooks {
@@ -43,7 +45,7 @@ export interface ItemsHooks {
   /** An item was put on (or taken off) the displayed character: the other selected characters get the same. */
   toggled?: (item: ItemInfo, equip: boolean) => void;
   /** The paint or the style of equipped items was changed on the displayed character: the other selected characters that wear them get the same. */
-  restyled?: (changes: { item: number; paint?: PaintInfo | null; style?: number; hidden?: boolean }[]) => void;
+  restyled?: (changes: { item: number; paint?: PaintInfo | null; style?: number; hidden?: boolean; skin?: 0 | 1 | null }[]) => void;
   /** Everything was taken off the displayed character: the other selected characters lose theirs too. */
   cleared?: () => void;
   /** Called with the full loadout whenever it changes (items or paints). */
@@ -366,6 +368,30 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
         ? `${names} cannot be painted.`
         : `Paint for ${names}: ${same ? (paintable[0].paint ? paintable[0].paint.displayName : "none") : "mixed"}`;
     menu.appendChild(title);
+    // the team skin it is worn in: the character's, or RED or BLU whatever the team (a BLU cosmetic on a RED character)
+    // (the item being built in the compiler is worn in the character's team)
+    const wearing = chosen.filter((e): e is Equipped => e.item.id !== TEMPORARY_ITEM);
+    const skinRow = document.createElement("div");
+    skinRow.className = "paintSkin";
+    const label = document.createElement("span");
+    label.textContent = "Team skin";
+    skinRow.appendChild(label);
+    const skinOf = (e: Equipped) => e.skin ?? null;
+    const sameSkin = wearing.every((e) => skinOf(e) === skinOf(wearing[0]));
+    for (const [value, name, tip] of [[null, "Auto", "The character's team"], [0, "RED", "RED's skin whatever the team"], [1, "BLU", "BLU's skin whatever the team"]] as const) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = name;
+      b.title = tip;
+      b.className = sameSkin && skinOf(wearing[0]) === value ? "on" : "";
+      b.onclick = () => {
+        for (const e of wearing) { if (value === null) delete e.skin; else e.skin = value; }
+        changed();
+        hooks.restyled?.(wearing.map((e) => ({ item: e.item.id, skin: value })));
+      };
+      skinRow.appendChild(b);
+    }
+    if (wearing.length) menu.appendChild(skinRow);
     if (paintable.length === 0) return;
     const palette = document.createElement("div");
     palette.className = "palette";

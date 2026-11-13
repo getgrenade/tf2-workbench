@@ -1495,3 +1495,7 @@ body.dndActive.dndRefused * { cursor: no-drop !important; }
 .promoThumb .renameKind { width: 100%; min-width: 0; height: 20px; padding: 0 4px; font-size: var(--ui-fs-small); text-align: center; }
 .promoThumb.dropBefore { box-shadow: inset 3px 0 0 var(--accent); }
 .promoThumb.dropAfter { box-shadow: inset -3px 0 0 var(--accent); }
+.paintMenu .paintSkin { display: flex; align-items: center; gap: 4px; margin: 2px 0 8px; font-size: var(--ui-fs-small); color: var(--dim); }
+.paintMenu .paintSkin span { margin-right: auto; }
+.paintMenu .paintSkin button { height: 22px; padding: 0 10px; font-size: var(--ui-fs-small); }
+.paintMenu .paintSkin button.on { background: var(--ui-accent-soft); border-color: var(--ui-accent-line); color: var(--fg); }

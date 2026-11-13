@@ -855,7 +855,9 @@ export function createViewTab(els: Els) {
       list.push({ data: data!, paint: rgb === null ? null : unpackRgb(rgb), skin, clip, itemId, idle, loop, material });
     };
     let prop: { data: ModelData; skin: number; clip: ClipData | null } | null = null;
-    for (const { item: it, paint, style } of everything) {
+    for (const { item: it, paint, style, skin: forced } of everything) {
+      // (a cosmetic can be worn in the other team's skin: its paint takes that team's colour too)
+      const team = forced ?? e.team;
       if (imported && it === weapon) {
         if (imported.prop) await add(imported.prop, null, team, importedPropClip, it.id);
         continue;
@@ -1026,7 +1028,9 @@ export function createViewTab(els: Els) {
           const change = changes.find((c) => c.item === w.item.id);
           if (!change) return w;
           touched = true;
-          return { ...w, ...("paint" in change ? { paint: change.paint ?? null } : {}), ...(change.style !== undefined ? { style: change.style } : {}), ...(change.hidden !== undefined ? { hidden: change.hidden } : {}) };
+          const next: Equipped = { ...w, ...("paint" in change ? { paint: change.paint ?? null } : {}), ...(change.style !== undefined ? { style: change.style } : {}), ...(change.hidden !== undefined ? { hidden: change.hidden } : {}) };
+          if (change.skin === null) delete next.skin; else if (change.skin !== undefined) next.skin = change.skin;
+          return next;
         });
         if (!touched) continue;
         e.items = { ...e.items, loadout };
@@ -6447,7 +6451,7 @@ export function createViewTab(els: Els) {
         ...(e.group ? { group: e.group } : {}),
         ...(e.hidden ? { hidden: true } : {}),
         placement: { x: e.actor.offset.x, y: e.actor.offset.y, z: e.actor.offset.z, yaw: e.actor.yaw, ...(e.actor.pitch !== 0 ? { pitch: e.actor.pitch } : {}), ...(e.actor.roll !== 0 ? { roll: e.actor.roll } : {}), scale: e.actor.scale.toArray() as [number, number, number], placed: v.isPlaced(e.actor) },
-        loadout: e.items.loadout.map((l) => ({ item: l.item.id, paint: l.paint?.id ?? null, style: l.style, ...(l.hidden ? { hidden: true } : {}) })),
+        loadout: e.items.loadout.map((l) => ({ item: l.item.id, paint: l.paint?.id ?? null, style: l.style, ...(l.hidden ? { hidden: true } : {}), ...(l.skin !== undefined ? { skin: l.skin } : {}) })),
         activeItem: e.items.activeId,
         held: e.held?.id ?? null,
         ...(isBuildingCls(e.cls) ? { building: { ...e.fx } } : {}),
@@ -6521,7 +6525,7 @@ export function createViewTab(els: Els) {
       e.actor.setBodygroups(Object.fromEntries(e.bodyManual));
       const loadout: Equipped[] = s.loadout.flatMap((l) => {
         const item = byId.get(l.item);
-        return item ? [{ item, paint: l.paint !== null ? paints.get(l.paint) ?? null : null, style: l.style, ...(l.hidden ? { hidden: true } : {}) }] : [];
+        return item ? [{ item, paint: l.paint !== null ? paints.get(l.paint) ?? null : null, style: l.style, ...(l.hidden ? { hidden: true } : {}), ...(l.skin !== undefined ? { skin: l.skin } : {}) }] : [];
       });
       e.items = { loadout, activeId: loadout.some((x) => x.item.id === s.activeItem) ? s.activeItem : loadout.at(-1)?.item.id ?? null };
       e.held = s.held !== null ? byId.get(s.held) ?? null : null;

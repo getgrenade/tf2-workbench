@@ -29,7 +29,7 @@ export interface SceneEntity {
   /** Hidden by its eye in the hierarchy. */
   hidden?: boolean;
   placement: { x: number; y: number; z: number; yaw: number; /** Tip of a character that is not upright (radians). */ pitch?: number; roll?: number; scale?: [number, number, number]; /** Placed by hand (the spacing slider leaves it alone). */ placed: boolean };
-  loadout: { item: number; paint: number | null; style: number; /** Hidden with its eye: in the loadout, not worn. */ hidden?: boolean }[];
+  loadout: { item: number; paint: number | null; style: number; /** Hidden with its eye: in the loadout, not worn. */ hidden?: boolean; /** Worn in this team's skin whatever the character's. */ skin?: 0 | 1 }[];
   /** The cosmetic the paint palette edits. */
   activeItem: number | null;
   /** The held weapon or taunt. */
@@ -149,7 +149,7 @@ export function parseScene(text: string): SceneFile {
       hidden: e.hidden === true ? true : undefined,
       placement: { x: isNum(p.x) ? p.x : 0, y: isNum(p.y) ? p.y : 0, z: isNum(p.z) ? p.z : 0, yaw: isNum(p.yaw) ? p.yaw : 0, ...(isNum(p.pitch) && p.pitch !== 0 ? { pitch: p.pitch } : {}), ...(isNum(p.roll) && p.roll !== 0 ? { roll: p.roll } : {}), ...(isVec3(p.scale) && p.scale.every((v: number) => v >= .01 && v <= 100) ? { scale: p.scale } : {}), placed: p.placed === true },
       loadout: Array.isArray(e.loadout)
-        ? e.loadout.filter((l: any) => l && isNum(l.item)).map((l: any) => ({ item: l.item, paint: isNum(l.paint) ? l.paint : null, style: isNum(l.style) ? l.style : 0 }))
+        ? e.loadout.filter((l: any) => l && isNum(l.item)).map((l: any) => ({ item: l.item, paint: isNum(l.paint) ? l.paint : null, style: isNum(l.style) ? l.style : 0, ...(l.hidden === true ? { hidden: true } : {}), ...(l.skin === 0 || l.skin === 1 ? { skin: l.skin } : {}) }))
         : [],
       activeItem: isNum(e.activeItem) ? e.activeItem : null,
       held: isNum(e.held) ? e.held : null,
