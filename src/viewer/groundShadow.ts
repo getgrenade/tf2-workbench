@@ -38,7 +38,7 @@ export class GroundShadow {
 
     // Flattens skinned geometry onto the floor: a point at height h moves h * length along the shadow direction.
     this.casterMaterial = new THREE.ShaderMaterial({
-      uniforms: { uFloorY: { value: 0 }, uDir: { value: new THREE.Vector2(0, -1) }, uLength: { value: 1 }, uSpread: { value: 0 }, uTaper: { value: 0 }, uCenter: { value: new THREE.Vector2() }, uPointGiven: { value: 0 }, tBodyMask: { value: null }, uBodyHideBits: { value: 0 } },
+      uniforms: { uFloorY: { value: 0 }, uDir: { value: new THREE.Vector2(0, -1) }, uLength: { value: 1 }, uSpread: { value: 0 }, uTaper: { value: 0 }, uCenter: { value: new THREE.Vector2() }, uPointGiven: { value: 0 }, tBodyMask: { value: null }, uBodyHideBits: { value: 0 }, tBase: { value: null }, uAlphaTest: { value: 0 }, uUvXf: { value: new THREE.Matrix3() } },
       vertexShader: /* glsl */ `
         attribute float hideW;
         varying float vHideW;
@@ -75,7 +75,8 @@ export class GroundShadow {
           gl_Position = projectionMatrix * viewMatrix * vec4(ground, 1.0);
         }`,
       // (taper: lighter the farther from the feet along the floor; where parts overlap, the strongest: the most of them)
-      fragmentShader: `${bodyMaskDeclarations} uniform float uTaper; varying float vHideW; varying float vAlong; void main() { ${bodyMaskDiscard} if (vHideW > 0.5) discard; gl_FragColor = vec4(vec3(1.0 - uTaper * clamp(vAlong, 0.0, 1.0)), 1.0); }`,
+      // (an alpha tested material's cut-out parts cast no shadow, as the engine's shadow of it has none)
+      fragmentShader: `${bodyMaskDeclarations} uniform float uTaper; uniform sampler2D tBase; uniform float uAlphaTest; uniform mat3 uUvXf; varying float vHideW; varying float vAlong; void main() { ${bodyMaskDiscard} if (vHideW > 0.5) discard; if (uAlphaTest > 0.0 && texture2D(tBase, (uUvXf * vec3(vBodyUv, 1.0)).xy).a < uAlphaTest) discard; gl_FragColor = vec4(vec3(1.0 - uTaper * clamp(vAlong, 0.0, 1.0)), 1.0); }`,
       side: THREE.DoubleSide,
       depthTest: false,
       depthWrite: false,
@@ -91,6 +92,10 @@ export class GroundShadow {
       const material = (object as THREE.Mesh).material as THREE.ShaderMaterial;
       this.casterMaterial.uniforms.tBodyMask.value = material.uniforms?.tBodyMask?.value ?? null;
       this.casterMaterial.uniforms.uBodyHideBits.value = material.uniforms?.uBodyHideBits?.value ?? 0;
+      const u = material.uniforms;
+      this.casterMaterial.uniforms.tBase.value = u?.tBase?.value ?? null;
+      this.casterMaterial.uniforms.uAlphaTest.value = u?.uUseBaseAlpha?.value && u?.tBase?.value ? u?.uAlphaTest?.value ?? 0 : 0;
+      this.casterMaterial.uniforms.uUvXf.value = u?.uUvXf?.value ?? new THREE.Matrix3();
       this.casterMaterial.uniformsNeedUpdate = true;
     };
 

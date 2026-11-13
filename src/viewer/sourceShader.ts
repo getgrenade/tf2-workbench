@@ -131,6 +131,7 @@ uniform float uEnvSaturation;
 uniform float uEnvScale;               // ENV_MAP_SCALE (cLightScale.z), assumed 1
 
 uniform float uAlphaTest;    // <= 0 disables
+uniform bool uAlphaOpaque;   // alpha tested and not blended: what is left is opaque
 uniform float uOpacity;
 // view mode: 0 the lit material, 1 just the diffuse colour (the base texture with its tint, unlit), 2 the lit result without colour
 uniform float uViewMode;
@@ -354,6 +355,7 @@ ${bodyMaskDiscard}
   vec3 result = diffuseComponent + specular + envColor;
   float alpha = uOpacity * (uUseBaseAlpha ? baseTex.a : 1.0);
   if (uAlphaTest > 0.0 && alpha < uAlphaTest) discard;
+  if (uAlphaOpaque) alpha = 1.0;
 
   if (uViewMode > 0.5 && uViewMode < 1.5) result = albedo;
   else if (uViewMode > 1.5) result = vec3(dot(result, vec3(0.2126, 0.7152, 0.0722)));

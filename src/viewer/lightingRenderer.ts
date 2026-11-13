@@ -58,7 +58,8 @@ gl_FragColor = vec4(enc, 1.0); }`,
       uploadMask(...args);
       const own = ((args[4] as THREE.Mesh).material as THREE.ShaderMaterial).uniforms;
       this.depth.uniforms.tBase.value = own?.tBase?.value ?? null;
-      this.depth.uniforms.uAlphaTest.value = own?.uAlphaTest?.value ?? 0;
+      // (the base alpha cuts the shadow only where it is the material's opacity, as the shown material's own test reads it)
+      this.depth.uniforms.uAlphaTest.value = own?.uUseBaseAlpha?.value ? own?.uAlphaTest?.value ?? 0 : 0;
       this.depth.uniforms.uUvXf.value = own?.uUvXf?.value ?? new THREE.Matrix3();
       this.depth.uniformsNeedUpdate = true;
     };

@@ -199,6 +199,9 @@ export class SourceMaterials {
     const refract = m?.shader === "refract";
     const translucent = flag("$translucent") || refract;
     const alphaTest = flag("$alphatest");
+    // CBaseShader::SetNormalBlendingShadowState: the base texture's alpha blends only when the material is not alpha tested; with $alphatest
+    // ($translucent or not) it is cut out and drawn opaque, writing depth (the Festive Stocking's sock and wire). $alpha below 1 still blends.
+    const blended = refract || (translucent && (!alphaTest || num("$alpha", 1) < 1));
     const envCube = m ? this.cubemap(m) : null;
     // The proxies (ItemTintColor -> SelectFirstIfNonZero -> ... -> $color2) decide the tint: an item's paint,
     // else its $colortint_base. The shader gets $color * $color2 in linear space.
@@ -237,14 +240,14 @@ export class SourceMaterials {
 
     const material = new THREE.ShaderMaterial({
       // translucent and additive layers (glass, glows) do not cast a ground shadow
-      userData: { noShadow: translucent || additive || decalModulate },
+      userData: { noShadow: blended || additive || decalModulate },
       vertexShader,
       fragmentShader,
       wireframe: this.wireframe,
       side: flag("$nocull") ? THREE.DoubleSide : THREE.FrontSide,
-      transparent: translucent || additive,
+      transparent: blended || additive,
       // a translucent material does not write depth in the engine: what lies behind it (the pupil under the glass of Sight for Sore Eyes) is drawn through it, whatever order the triangles come in
-      ...(translucent ? { depthWrite: false } : {}),
+      ...(blended ? { depthWrite: false } : {}),
       // $additive adds the colour to the frame without writing depth. The engine blends it as SRC_ALPHA, ONE (BT_BLENDADD) only when
       // the base texture's alpha counts as translucency (see baseAlphaIsOpacity), else as ONE, ONE (BT_ADD): the output alpha is then 1
       // (uUseBaseAlpha is off), which makes SRC_ALPHA, ONE the same plain add. The Airdog's goggle lens and the Jarate liquid are added
@@ -302,6 +305,8 @@ export class SourceMaterials {
         uRimMask: { value: flag("$rimmask") },
         uTint: { value: new THREE.Vector3(1, 1, 1) },
         uAlphaTest: { value: alphaTest ? num("$alphatestreference", 0.7) : 0 },
+        // what passes the test is opaque (a screenshot with a clear background keeps it whole)
+        uAlphaOpaque: { value: alphaTest && !blended && !additive },
         uOpacity: { value: refract ? 0.3 : num("$alpha", 1) },
         // With self-illum or blend-tint the base alpha is a mask, not opacity.
         uUseBaseAlpha: { value: baseAlphaIsOpacity && !blendTint },
