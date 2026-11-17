@@ -351,6 +351,11 @@ fn build_item(id: u32, nodes: &[Node], names: &HashMap<String, String>) -> Item 
         }
     }
 
+    // the Hot Hand (tf_weapon_slap) takes the Pyro's own right glove off: his model's righthand bodygroup, state 1 being empty
+    if get_str(nodes, "item_class").is_some_and(|c| c.trim().eq_ignore_ascii_case("tf_weapon_slap")) {
+        bodygroups.entry("righthand".to_string()).or_insert(1);
+    }
+
     let mut equip_regions = Vec::new();
     if let Some(r) = get_str(nodes, "equip_region") {
         equip_regions.push(r.to_ascii_lowercase());
@@ -367,7 +372,13 @@ fn build_item(id: u32, nodes: &[Node], names: &HashMap<String, String>) -> Item 
         class_slots: get_block(nodes, "used_by_classes")
             .map(|b| b.iter().filter_map(|n| n.as_str().map(|v| (n.key.to_ascii_lowercase(), v.trim().to_ascii_lowercase()))).filter(|(_, v)| !v.is_empty() && v != "1").collect())
             .unwrap_or_default(),
-        model: get_str(nodes, "model_player").filter(|m| !m.is_empty()).map(|m| m.replace('\\', "/")),
+        // CTFWeaponBase::GetWorldModel: a weapon's model_world is what is seen in third person (the Hot Hand's w_slapping_glove: its
+        // model_player, c_slapping_glove, is the first-person rig), else model_player
+        model: get_str(nodes, "model_world")
+            .or_else(|| get_str(nodes, "model_player"))
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+            .map(|m| m.replace('\\', "/")),
         per_class,
         image: get_str(nodes, "image_inventory").map(str::to_string),
         bodygroups,
@@ -612,7 +623,7 @@ fn overlay_item(item: &mut Item, own: &[Node], prefabs: &HashMap<String, Vec<Nod
     }
     if has("item_slot") { item.slot = o.slot; }
     if has("used_by_classes") { item.classes = o.classes; item.class_slots = o.class_slots; }
-    if has("model_player") { item.model = o.model; }
+    if has("model_player") || has("model_world") { item.model = o.model; }
     if has("model_player_per_class") { item.per_class = o.per_class; }
     if has("equip_region") || has("equip_regions") { item.equip_regions = o.equip_regions; }
     if has("image_inventory") { item.image = o.image; }
