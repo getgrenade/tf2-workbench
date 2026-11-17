@@ -13,6 +13,8 @@ export interface PreviewMaterial {
 /** A worn cosmetic and its materials. */
 export interface PreviewItem {
   label: string;
+  /** What it is, for `focus`: "character", or "item:<id>". */
+  id?: string;
   materials: PreviewMaterial[];
 }
 
@@ -43,7 +45,7 @@ const CHANNELS: { id: Channel; label: string }[] = [
  * When two or more cosmetics (or materials) are shown, a drop-down switches between them. The UV layout of the meshes can be laid over the
  * texture as a wireframe, with its own opacity and colour.
  */
-export function createTexturePreview(root: HTMLElement, edit?: TextureEditHooks): { show: (items: PreviewItem[]) => void } {
+export function createTexturePreview(root: HTMLElement, edit?: TextureEditHooks): { show: (items: PreviewItem[]) => void; focus: (id: string) => void } {
   root.innerHTML = `<div class="texPick"><select class="texItem"></select><select class="texMat"></select></div>
     <div class="texTabs"></div>
     <div class="texStage"><canvas class="texImage"></canvas><canvas class="texWire"></canvas><div class="texNone dim" hidden></div></div>
@@ -226,6 +228,16 @@ export function createTexturePreview(root: HTMLElement, edit?: TextureEditHooks)
   wireOpacity.oninput = () => (wire.style.opacity = wireOpacity.value); // only the opacity: no need to draw the lines again
 
   return {
+    /** Shows the textures of one of the listed models (the one last clicked in the view). */
+    focus(id) {
+      const i = items.findIndex((it) => it.id === id);
+      if (i < 0 || i === itemSelect.selectedIndex) return;
+      itemSelect.selectedIndex = i;
+      matSelect.selectedIndex = 0;
+      fillMaterials();
+      mark();
+      draw();
+    },
     show(next) {
       const wasLabel = items[itemSelect.selectedIndex]?.label;
       items = next;

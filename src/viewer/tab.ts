@@ -909,7 +909,7 @@ export function createViewTab(els: Els) {
     const merged = { ...groups, ...Object.fromEntries(e.bodyManual) };
     // a Voodoo-Cursed soul puts the class model in its zombie skin: its materials load before the skin changes
     e.zombie = everything.some(({ item }) => item.skinOverride);
-    const classData = models.get(classPath(cls));
+    const classData = models.get(classPath(e.cls)); // (the model's name: the Demoman's is demo.mdl)
     if (classData) await ensureClassMaterials(e, classData);
     await ensureGroupMaterials(e, merged);
     if (token !== e.loadoutToken || !entities.includes(e)) return; // a newer loadout or class superseded this one
@@ -1819,6 +1819,9 @@ export function createViewTab(els: Els) {
             renderEntities();
           }
           viewer?.flash(e.actor, hit?.item ?? null); // show which one was hit (a cosmetic on its own when that is what was clicked)
+          // the Textures panel shows what was clicked: the cosmetic, or the character itself
+          refreshTextures();
+          texPreview?.focus(hit?.item != null ? `item:${hit.item}` : "character");
           // a click on a cosmetic opens its paint chart there
           if (hit?.item != null) itemsUi.openPaint(hit.item, hit.x + 10, hit.y + 10);
         }
@@ -2400,7 +2403,7 @@ export function createViewTab(els: Els) {
     if (e) {
       const cls = gameClassOf(e.cls);
       // one worn model: its counts, and its materials with their textures and UVs
-      const add = (label: string, data: ModelData, materialOf: (m: ModelData["bodyParts"][number]["models"][number]["meshes"][number]) => string, lookup: (path: string) => MaterialData | null | undefined) => {
+      const add = (label: string, data: ModelData, materialOf: (m: ModelData["bodyParts"][number]["models"][number]["meshes"][number]) => string, lookup: (path: string) => MaterialData | null | undefined, id?: string) => {
         let tris = 0, verts = 0;
         for (const bp of data.bodyParts) for (const m of bp.models[0]?.meshes ?? []) {
           tris += m.indices.length / 3;
@@ -2424,20 +2427,21 @@ export function createViewTab(els: Els) {
             entry.meshes.push({ uvs: m.uvs, indices: m.indices });
           }
         }
-        if (list.length) items.push({ label, materials: list });
+        if (list.length) items.push({ label, materials: list, id });
       };
       // the character itself (its skin of the team it is on, or its zombie skin)
-      const classData = models.get(classPath(cls));
+      // (by the character's own class name: the Demoman's model is demo.mdl, not the game class's demoman.mdl)
+      const classData = models.get(classPath(e.cls));
       if (classData) {
         const skin = e.zombie ? zombieFamily(classData.skinCount, e.team) ?? e.team : e.team;
-        add(`${e.name ?? cls[0].toUpperCase() + cls.slice(1)} (character)`, classData, (m) => m.materials[skin] ?? m.material, (p) => materials.get(p));
+        add(`${e.name ?? cls[0].toUpperCase() + cls.slice(1)} (character)`, classData, (m) => m.materials[skin] ?? m.material, (p) => materials.get(p), "character");
       }
       for (const { item, style } of e.applied) {
         const path = itemModelFor(item, cls, style);
         const data = path ? models.get(path) : undefined;
         if (!data) continue;
         const skin = itemSkinFor(item, e.team, style) ?? e.team;
-        add(item.displayName, data, (m) => itemMaterialOverride(item) ?? m.materials[skin] ?? m.material, (p) => materials.get(p));
+        add(item.displayName, data, (m) => itemMaterialOverride(item) ?? m.materials[skin] ?? m.material, (p) => materials.get(p), `item:${item.id}`);
       }
       // the item being built in the compiler, while this character wears it (its materials are its own, not the game's)
       const preview = compilerPreview;
