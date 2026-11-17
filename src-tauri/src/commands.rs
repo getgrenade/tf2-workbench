@@ -1150,3 +1150,21 @@ pub async fn read_texture_file(path: String) -> Result<tauri::ipc::Response, Str
     }).await.map_err(|e| e.to_string())??;
     Ok(tauri::ipc::Response::new(bytes))
 }
+
+/// The text of a material's VMT as the game has it (for the VMT editor of the Textures panel).
+#[tauri::command]
+pub async fn read_material_text(state: State<'_, AppState>, path: String) -> Result<String, String> {
+    let vpk = state.vpk()?;
+    let bytes = vpk.read(&path.to_ascii_lowercase()).map_err(|e| format!("{path}: {e}"))?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// A material made from edited VMT text (decoded like `load_material`, not cached): what the VMT editor shows as it is typed.
+#[tauri::command]
+pub async fn material_from_text(state: State<'_, AppState>, path: String, text: String) -> Result<tauri::ipc::Response, String> {
+    let vpk = state.vpk()?;
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        source_formats::material::from_text(&vpk, &path, &text).map(|m| workbench_core::payload::encode_material(&m)).map_err(|e| e.to_string())
+    }).await.map_err(|e| e.to_string())??;
+    Ok(tauri::ipc::Response::new(bytes))
+}

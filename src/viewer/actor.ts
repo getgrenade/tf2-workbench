@@ -833,6 +833,28 @@ export class Actor {
   }
 
   /** Gives every mesh the material for the current conditions: its own with the player proxies' values, or the Ubercharge one. */
+  /**
+   * Draws the meshes of a material with new data (its VMT edited in the Textures panel): the meshes made from that material take it, with
+   * their paint and the character's conditions as before. Whether any mesh of this character uses it.
+   */
+  replaceMaterial(path: string, data: MaterialData): boolean {
+    const want = path.toLowerCase();
+    let found = false;
+    for (const group of [this.classGroup, this.cosmeticGroup]) {
+      group?.traverse((o) => {
+        const source = o.userData.source as { data: MaterialData | null } | undefined;
+        if (!source?.data || source.data.path.toLowerCase() !== want) return;
+        source.data = data;
+        found = true;
+      });
+    }
+    if (found) {
+      this.applyConditions(); // (rebuilds every mesh's material from its source, conditions or not)
+      this.changed = true;
+    }
+    return found;
+  }
+
   private applyConditions() {
     const fx = materialEffects(this.conditions, this.skin);
     const uberData = this.conditions.uber ? this.uberData[this.skin === 1 ? 1 : 0] : null;

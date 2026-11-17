@@ -33,3 +33,20 @@ to the game's.
 - A material can only have the maps it already has replaced: an empty slot cannot be given a new map, because that would need a different
   shader.
 - An animated texture's other frames (`base_f<N>`) are not replaced.
+
+# Editing a material's VMT
+
+Under the maps, the Textures panel shows the VMT of the material that is selected, as the game has it, and lets you edit it.
+
+**Live drawing.** What you type is drawn on the model a moment after you stop typing (`material_from_text` parses it with
+`material::from_text`), on every character and cosmetic that uses the material (`Actor.replaceMaterial`).
+
+- A `patch` VMT still reads the material it includes from the game.
+- Paint, conditions and replaced maps carry over to the new material.
+- Text that does not parse is not drawn: the panel shows the error and the last good text stays on the model.
+- A texture the text names but the game does not have is reported under the text, and the material is drawn without it.
+
+**Marking and reset.** An edited material is marked "edited" in the editor's header, and "(edited)" in the panel's lists. **Reset VMT**
+puts the game's material and its text back. `VmtEdits` (`src/viewer/vmtEdits.ts`) keeps the game's material and text for that.
+
+**Not done.** Edits last for the session only, like replaced maps. Eyes (`eyerefract`) keep the material they were made with.

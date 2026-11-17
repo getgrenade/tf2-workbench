@@ -297,3 +297,7 @@ export const exportBlendRig = (blend: string, blender: string) => invoke<string>
 
 /** An image picked to replace a texture: a .vtf comes decoded (`VTF0`, width, height, RGBA8), any other file as it is. */
 export const readTextureFile = (path: string) => invoke<ArrayBuffer>("read_texture_file", { path });
+/** The text of a material's VMT as the game has it. */
+export const readMaterialText = (path: string) => invoke<string>("read_material_text", { path });
+/** A material made from edited VMT text (decode with `parseMaterial`); fails with the parse error. */
+export const materialFromText = (path: string, text: string) => invoke<ArrayBuffer>("material_from_text", { path, text });
