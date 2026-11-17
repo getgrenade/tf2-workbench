@@ -28,6 +28,7 @@ import { deletePoseFile, openPosesFolder, readPoses, refreshWorkshop as refreshW
 import { applyHandFile, parsePoseFile, poseForSkeleton, toHandFile, toPoseFile, type PoseData, type PoseFile } from "./poseRig";
 import * as THREE from "three";
 import { createItemsUi, TEMPORARY_ITEM, type Equipped, type ItemsEls } from "./itemsUi";
+import { bakeVisDev, copyVisDev, loadVisDev, saveVisDev, type VisDevSettings } from "./visDev";
 import { unpackRgb } from "./proxies";
 import { PlayController } from "./play";
 import { createNavGizmo } from "./navGizmo";
@@ -476,6 +477,38 @@ export function createViewTab(els: Els) {
     if (first && entities.includes(e)) v.placeActorAt(e.actor, e.actor.offset.x, -e.actor.bindMinY, e.actor.offset.z);
   }
 
+  // --- vis dev: the compiler's item with baked-looking shading made from its geometry (visDev.ts) ---
+  let visDev = loadVisDev();
+  let visDevRun = 0;
+  let visDevTimer = 0;
+  /** Bakes the occlusion and curvature of the compiler's item into its geometry, unless it holds them for this distance already. */
+  async function bakeCompilerVisDev() {
+    const e = compilerTarget;
+    if (!visDev.on || !e) return;
+    const meshes = e.actor.cosmeticMeshes(TEMPORARY_ITEM).map((m) => m.mesh);
+    const geos = [...new Set(meshes.map((m) => m.geometry))];
+    const key = `2|${visDev.aoDistance}`;
+    if (geos.length === 0 || geos.every((g) => g.userData.visDevKey === key && g.getAttribute("visDev"))) return;
+    const run = ++visDevRun;
+    const parts = geos.map((g) => ({ positions: g.getAttribute("position").array, normals: g.getAttribute("normal").array, indices: g.getIndex()?.array ?? new Uint32Array(0) }));
+    const baked = await bakeVisDev(parts, visDev.aoDistance, () => run !== visDevRun);
+    if (!baked || run !== visDevRun) return;
+    geos.forEach((g, i) => {
+      g.setAttribute("visDev", new THREE.BufferAttribute(baked[i].occlusion, 2));
+      g.setAttribute("visDevPos", new THREE.BufferAttribute(baked[i].place, 3));
+      g.userData.visDevKey = key;
+    });
+  }
+  function setVisDev(next: VisDevSettings) {
+    const rebake = next.on && (!visDev.on || next.aoDistance !== visDev.aoDistance);
+    visDev = next;
+    saveVisDev(next);
+    viewer?.setVisDev(next);
+    window.clearTimeout(visDevTimer);
+    // a slider being dragged bakes once it rests
+    if (rebake) visDevTimer = window.setTimeout(() => void bakeCompilerVisDev(), 250);
+  }
+
   /** Puts the item (or nothing) on the selected character and takes it off the one that wore it. */
   function showCompilerItem(preview: PreviewApplication | null) {
     // the materials of the item keep their paths while their textures change: the shared material and texture caches go by path
@@ -523,6 +556,8 @@ export function createViewTab(els: Els) {
       return typeof picked === "string" ? readItemSession(picked) : null;
     },
     setPreview: showCompilerItem,
+    visDev: () => copyVisDev(visDev),
+    setVisDev,
     pick: async (kind, current) => {
       const filter = kind === "fbx" ? { name: "Model", extensions: [...MODEL_EXTENSIONS] }
         : { name: kind === "smd" ? "Collision model" : "Texture", extensions: [kind] };
@@ -924,6 +959,7 @@ export function createViewTab(els: Els) {
     }
     e.actor.setCosmetics(list);
     e.actor.setProp(prop);
+    if (e === compilerTarget) void bakeCompilerVisDev();
     void syncConditions(e);
     if (e === selected) refreshTextures();
     if (e === selected) renderJiggles();
@@ -1750,6 +1786,7 @@ export function createViewTab(els: Els) {
       viewer.setEntityGizmoParts(characterGizmoParts);
       viewer.setGizmoSpace(gizmoLocal);
       viewer.setShading(shading);
+      viewer.setVisDev(visDev);
       applyViewSettings(viewer);
       viewer.onLightChange = l => { syncSliders(l); applyGizmoParts(); };
       viewer.onPointLightChange = (l) => {

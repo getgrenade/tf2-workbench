@@ -1499,3 +1499,15 @@ body.dndActive.dndRefused * { cursor: no-drop !important; }
 .paintMenu .paintSkin span { margin-right: auto; }
 .paintMenu .paintSkin button { height: 22px; padding: 0 10px; font-size: var(--ui-fs-small); }
 .paintMenu .paintSkin button.on { background: var(--ui-accent-soft); border-color: var(--ui-accent-line); color: var(--fg); }
+
+/* the compiler's Vis dev switch (beside team and LOD) and its flyout tab */
+.compilerPane .cmpView .cmpVisDev { margin-left: auto; padding: 1px 8px; font-size: var(--ui-fs-small); }
+.compilerPane .cmpView .cmpVisDev.on { border-color: var(--ui-accent-line); background: var(--ui-accent-soft); color: var(--fg); }
+.cmpVisDevPane { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; }
+.cmpVisDevPane .cmpCheckRow { display: flex; align-items: center; justify-content: space-between; }
+.cmpVisDevBody { display: flex; flex-direction: column; gap: 2px; }
+.cmpVisDevBody.off { opacity: 0.5; }
+.cmpVisDevHead { margin: 8px 0 2px; font-size: var(--ui-fs-small); font-weight: 600; color: var(--ui-text); text-transform: uppercase; letter-spacing: .04em; }
+.cmpVisDevSeg { flex-wrap: wrap; margin: 2px 0 4px; }
+.cmpVisDevSeg button { flex: 1; }
+.cmpVisDevStops { display: flex; flex-direction: column; gap: 4px; margin: 4px 0; }

@@ -1,6 +1,7 @@
 import { rigLightingGLSL } from "./lightingShader";
 import { bodyMaskDeclarations, bodyMaskDiscard } from "./bodyMaskShader";
 import { rimLightGLSL } from "./rimLight";
+import { visDevFragmentGLSL, visDevVertexGLSL } from "./visDev";
 
 /**
  * Port of the Source SDK 2013 VertexLitGeneric look used by TF2 models. Two code
@@ -24,6 +25,7 @@ export const vertexShader = /* glsl */ `
 attribute vec4 tangent;
 attribute float hideW;
 varying float vHideW;
+${visDevVertexGLSL}
 #include <skinning_pars_vertex>
 uniform mat3 uUvXf;
 varying vec2 vUv;
@@ -33,6 +35,8 @@ varying vec3 vN;
 varying vec4 vT;
 void main() {
   vHideW = hideW;
+  vVisDev = visDev;
+  vVisDevPos = visDevPos;
   vBodyUv = uv;
   vUv = (uUvXf * vec3(uv, 1.0)).xy;   // $basetexturetransform after proxies (TextureScroll / TextureTransform)
   vec3 objectNormal = vec3(normal);
@@ -56,6 +60,7 @@ void main() {
 export const fragmentShader = /* glsl */ `
 ${rigLightingGLSL}
 ${rimLightGLSL}
+${visDevFragmentGLSL}
 uniform sampler2D tBase;
 ${bodyMaskDeclarations}
 uniform sampler2D tBump;
@@ -243,6 +248,7 @@ ${bodyMaskDiscard}
     baseTex.a *= second.a;
   }
   if (uGray > 0.5) albedo = vec3(0.17144);   // sRGB 115, as the texture of a material without one (see grey in sourceMaterials.ts)
+  albedo = visDevAlbedo(albedo, N);   // the compiler's vis dev look (visDev.ts), where the geometry has it
   vec3 diffuseComponent = uUnlit ? albedo : albedo * diffuseLighting;
 
   // Environment mask texture (non-skin paths): scales the reflection per channel

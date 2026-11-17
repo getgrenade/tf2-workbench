@@ -85,6 +85,8 @@ import { LightGizmos } from "./lightGizmos";
 import { hotkeyMatches, mouseButtonOf, redoMatches } from "../hotkeys";
 import { LAYER_GLSL, adaptAlpha, planLayers, rimLayerName, rimLayerPixels, sceneOnlyLook, type ExportLayer } from "./layerExport";
 import { resolveCaptureEmission } from "./captureAlpha";
+import { setVisDevUniforms, visDevUniforms, type VisDevSettings } from "./visDev";
+import { VisDevNormalsPass } from "./visDevPass";
 
 export type { CosmeticSpec } from "./actor";
 
@@ -530,6 +532,8 @@ export class Viewer {
     uPointFalloff: { value: 1.5 },
     // 0 shaded, 1 diffuse colour only, 2 grayscale (see the fragment shaders)
     uViewMode: { value: 0 },
+    // the compiler's vis dev look (visDev.ts)
+    ...visDevUniforms(),
     // the cubemap that the materials which reflect "the cubemap of the level" (env_cubemap) show instead of their own, when one is picked
     tWorldCube: { value: null as THREE.CubeTexture | null },
     uWorldCube: { value: 0 },
@@ -685,6 +689,8 @@ void main() {
     bodyMaskPass(this.wireMaterial);
     this.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
     this.lightingRenderer = new LightingRenderer(this.shared);
+    // the item's normals for the vis dev cavity, drawn before each render of the scene
+    new VisDevNormalsPass(this.renderer, this.scene, this.shared);
     this.renderer.setPixelRatio(window.devicePixelRatio);
     container.appendChild(this.renderer.domElement);
     this.fpsCounter.className = "fpsCounter";
@@ -1962,6 +1968,11 @@ void main() {
   /** Colour ("#rrggbb", as shown on screen) and opacity of the floor grid. */
   setGridStyle(color: string, opacity: number) {
     this.floorGrid.setStyle(displayColor(color), opacity);
+  }
+
+  /** The compiler's vis dev look: its strengths, and whether it shows (on the geometry that was baked for it). */
+  setVisDev(settings: VisDevSettings) {
+    setVisDevUniforms(this.shared, settings);
   }
 
   /** How the surfaces are shown: the lit material, just the diffuse colour (the base texture), or the lit result without colour. */

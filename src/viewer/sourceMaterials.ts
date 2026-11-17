@@ -332,6 +332,9 @@ export class SourceMaterials {
         uSelfIllumFresnelParams: { value: new THREE.Vector4(1 - siBias, siBias, siExp, siMax) },
       },
     });
+    // geometry without the vis dev bake reads it as zero: off (see visDev.ts)
+    material.defaultAttributeValues.visDev = [0, 0];
+    material.defaultAttributeValues.visDevPos = [0, 0, 0];
     // Plain grey: lit by the lights alone (no normal map, specular, environment, rim or glow), the texture's alpha still cutting the shape out
     if (fx?.gray) {
       const u = material.uniforms;

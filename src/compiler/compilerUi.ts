@@ -16,6 +16,8 @@ import { endAligned } from "../pathInput";
 import { FILE_DROP_EVENT, type FileDropDetail } from "../fileDrop";
 import { acceptedPath } from "../filePaths";
 import * as THREE from "three";
+import { VISDEV_DEFAULTS, copyVisDev, type VisDevFill, type VisDevSettings } from "../viewer/visDev";
+import { stopsEditor } from "../viewer/gradientBar";
 
 /** What the viewer is asked to show of the item: a cosmetic for the selected character and the materials it refers to. */
 export interface PreviewApplication {
@@ -58,6 +60,9 @@ export interface CompilerHost {
   /** Opens the item alone in a scene of its own, framed square for its backpack icon. */
   openIconStudio(): void;
   setPreview(preview: PreviewApplication | null): void;
+  /** The vis dev look of the item (gradient, occlusion, edges and creases made from its geometry) and a change to it. */
+  visDev(): VisDevSettings;
+  setVisDev(settings: VisDevSettings): void;
   /** The open dialog for a source file; the chosen path, or null. */
   pick(kind: "fbx" | "tga" | "smd", current: string): Promise<string | null>;
   /** Game textures (paths under materials, without folder and extension) whose path contains a text: for the light ramp, reflection and phong warp boxes. */
@@ -119,11 +124,11 @@ export function createCompilerUi(host: CompilerHost) {
   /** Whether the selected bone has its rotation gizmo in the view: off until asked, so dragging the view cannot turn a bone by mistake. */
   let turnWithGizmo = false;
   /** What the materials panel shows: one of the (at most two) materials, or the jiggle bones. Remembered. */
-  type FlyoutTab = "material0" | "material1" | "bones";
+  type FlyoutTab = "material0" | "material1" | "bones" | "visdev";
   let flyoutTab: FlyoutTab = "material0";
   try {
     const saved = localStorage.getItem("tf2workbench.compilerFlyoutTab");
-    if (saved === "bones" || saved === "material1") flyoutTab = saved;
+    if (saved === "bones" || saved === "material1" || saved === "visdev") flyoutTab = saved;
   } catch { /* the first material */ }
   /** A jiggle setup copied from a bone, to paste onto others. */
   let copiedJiggle: JiggleSetup | null = null;
@@ -230,6 +235,82 @@ export function createCompilerUi(host: CompilerHost) {
     };
     const controls = h("div", { className: "ui-val" }, range, box);
     return h("div", { className: "ui-prop" }, h("span", { className: "ui-key", textContent: label }), controls);
+  }
+
+  /** The Vis dev switch beside the team and LOD of the preview: on or off, and a right click (or the flyout tab) for its settings. */
+  function visDevToggle() {
+    const v = host.visDev();
+    const b = h("button", { type: "button", className: "cmpVisDev" + (v.on ? " on" : ""), textContent: "Vis dev", title: "Shade the item as a first texturing pass would: darker underneath, occlusion, lighter edges and darker creases, all made from the model (no UVs). Right click for its settings." });
+    b.onclick = () => { host.setVisDev({ ...host.visDev(), on: !host.visDev().on }); render(); };
+    b.oncontextmenu = (event) => { event.preventDefault(); flyoutTab = "visdev"; try { localStorage.setItem("tf2workbench.compilerFlyoutTab", "visdev"); } catch { /* not remembered */ } render(); };
+    return b;
+  }
+
+  /** Which stop of the vis dev fill's gradient is selected. */
+  let visDevStop = 0;
+  /** The flyout's Vis dev tab: its switch, the shading, the cavity and the fill. */
+  function visDevSection() {
+    const v = host.visDev();
+    const set = (patch: Partial<VisDevSettings>) => host.setVisDev({ ...host.visDev(), ...patch });
+    const reset = resetButton("Back to the default settings", () => { host.setVisDev({ ...copyVisDev(VISDEV_DEFAULTS), on: host.visDev().on }); visDevStop = 0; render(); });
+    const head = (text: string) => h("div", { className: "cmpVisDevHead", textContent: text });
+    const seg = <T extends string>(options: [T, string, string][], current: T, pick: (value: T) => void) => h("div", { className: "cmpSeg cmpVisDevSeg" }, ...options.map(([value, label, title]) => {
+      const b = h("button", { type: "button", textContent: label, title, className: value === current ? "on" : "" });
+      b.onclick = () => { pick(value); render(); };
+      return b;
+    }));
+    const body = h("div", { className: "cmpVisDevBody" + (v.on ? "" : " off") },
+      head("Shading"),
+      slider("Gradient", v.gradient, 0, 1, 0.01, (x) => set({ gradient: x })),
+      slider("Occlusion", v.ao, 0, 1, 0.01, (x) => set({ ao: x })),
+      slider("AO distance", v.aoDistance, 0.5, 30, 0.5, (x) => set({ aoDistance: x })),
+      head("Cavity"),
+      slider("Ridge", v.ridge, 0, 1, 0.01, (x) => set({ ridge: x })),
+      slider("Valley", v.valley, 0, 1, 0.01, (x) => set({ valley: x })),
+      slider("Width (px)", v.cavityWidth, 0.5, 5, 0.1, (x) => set({ cavityWidth: x })),
+      head("Fill"),
+      seg<VisDevFill>([
+        ["off", "Off", "The item's own colour"],
+        ["colour", "Colour", "One colour over the whole item"],
+        ["linear", "Linear", "A gradient across the item's bounds, the way the tilt and turn point"],
+        ["radial", "Radial", "A gradient out from a point of the item"],
+        ["normal", "Normal", "A gradient by the way the surface faces (the world space normal), as the shading gradient"],
+      ], v.fill, (fill) => set({ fill })));
+    if (v.fill !== "off") {
+      body.append(
+        slider("Amount", v.fillAmount, 0, 1, 0.01, (x) => set({ fillAmount: x })),
+        h("div", { className: "ui-prop" }, h("span", { className: "ui-key", textContent: "Blend" }),
+          seg<"replace" | "multiply">([["replace", "Replace", "The fill takes the colour's place"], ["multiply", "Multiply", "The fill tints the colour (the texture shows through)"]], v.fillMultiply ? "multiply" : "replace", (b) => set({ fillMultiply: b === "multiply" }))));
+    }
+    if (v.fill === "colour") {
+      const pick = h("input", { type: "color", className: "cmpPicker", value: v.fillColour });
+      pick.oninput = () => set({ fillColour: pick.value });
+      body.append(h("div", { className: "ui-prop" }, h("span", { className: "ui-key", textContent: "Colour" }), pick));
+    } else if (v.fill !== "off") {
+      const stops = v.stops.map((x) => ({ ...x }));
+      const editor = stopsEditor({
+        stops, softness: () => host.visDev().softness, selected: visDevStop,
+        commit: (_live, selected) => { visDevStop = selected; set({ stops: stops.map((x) => ({ ...x })) }); },
+        render: () => render(),
+      });
+      body.append(h("div", { className: "cmpVisDevStops" }, ...editor.parts),
+        slider("Softness", v.softness, 0, 1, 0.01, (x) => { set({ softness: x }); editor.drawBar(); }));
+      if (v.fill === "radial") {
+        body.append(
+          slider("Centre X", v.cx, 0, 1, 0.01, (x) => set({ cx: x })),
+          slider("Centre Y", v.cy, 0, 1, 0.01, (x) => set({ cy: x })),
+          slider("Centre Z", v.cz, 0, 1, 0.01, (x) => set({ cz: x })),
+          slider("Size", v.radius, 0.05, 2, 0.01, (x) => set({ radius: x })));
+      } else {
+        body.append(
+          slider("Tilt", v.tilt, 0, 180, 1, (x) => set({ tilt: x })),
+          slider("Turn", v.turn, 0, 360, 1, (x) => set({ turn: x })));
+      }
+    }
+    return h("div", { className: "cmpVisDevPane" },
+      h("div", { className: "cmpCheckRow" }, checkbox("Show vis dev", v.on, (on) => { set({ on }); render(); }, "Layer the shading and fill over the item's colour"), reset),
+      body,
+      h("div", { className: "dim hint", textContent: "Experimental. Made from the model, not UVs. Occlusion is worked out per vertex (like Blender's AO); the cavity per pixel on screen (like Blender's Workbench cavity). Linear and Radial fills follow the item's bounds; Tilt 0 runs bottom to top." }));
   }
 
   /** A control that only matters while its switch is on stays in its place, dimmed, so the two materials line up row by row. */
@@ -608,7 +689,8 @@ export function createCompilerUi(host: CompilerHost) {
     }));
     const viewRow = h("div", { className: "cmpView" },
       h("span", { className: "dim", textContent: "Show on" }), segment(["RED", "BLU"], sel?.team ?? 0, (t) => host.setTeam(t), ["red", "blu"]),
-      h("span", { className: "dim", textContent: "LOD" }), segment(["0", "1", "2"], Math.min(sel?.lod ?? 0, 2), (i) => host.setLod(i)));
+      h("span", { className: "dim", textContent: "LOD" }), segment(["0", "1", "2"], Math.min(sel?.lod ?? 0, 2), (i) => host.setLod(i)),
+      visDevToggle());
     const withModels = new Set(session.classesWithModels());
     const picker = h("div", { className: "cmpClasses" });
     for (const c of host.classes()) {
@@ -735,8 +817,9 @@ Choose another .tga` : "Choose the backpack icon (.tga)" });
     });
     const tabs = h("div", { className: "cmpTabs even", role: "tablist" },
       materialTab(0), materialTab(1),
-      h("button", { textContent: jiggling ? `Jiggles (${jiggling})` : "Jiggles", className: flyoutTab === "bones" ? "on" : "", onclick: () => choose("bones") }));
-    flyout.replaceChildren(tabs, flyoutTab === "bones" ? h("div", { className: "cmpBones" }, ...bonesSection()) : materialGrid);
+      h("button", { textContent: jiggling ? `Jiggles (${jiggling})` : "Jiggles", className: flyoutTab === "bones" ? "on" : "", onclick: () => choose("bones") }),
+      h("button", { textContent: "Vis dev", title: "A quick look at the item with baked-looking shading made from its shape, no UV bakes", className: flyoutTab === "visdev" ? "on" : "", onclick: () => choose("visdev") }));
+    flyout.replaceChildren(tabs, flyoutTab === "bones" ? h("div", { className: "cmpBones" }, ...bonesSection()) : flyoutTab === "visdev" ? visDevSection() : materialGrid);
     accordify(root, "compiler");
     // the bone being set up is drawn on the character while its menu is open
     host.setBoneHelper(flyoutTab === "bones" && selectedBone ? { bone: selectedBone, setup: session.data.jiggles[selectedBone] ?? null } : null);
