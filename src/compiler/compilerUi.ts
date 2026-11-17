@@ -360,6 +360,11 @@ export function createCompilerUi(host: CompilerHost) {
       h("div", { className: "cmpCheckRow" },
         checkbox("Phong tint", !!s.phongTint, (v) => set({ phongTint: v ? [255, 255, 255] : null }), "$phongtint: the colour of the highlight"),
         gate(!!s.phongTint, colorInput(s.phongTint ?? [255, 255, 255], (v) => set({ phongTint: v }), "Highlight colour"))),
+      h("div", { className: "cmpCheckRow" },
+        checkbox("Paintable phong tint", s.paintablePhongTint, (v) => set({ paintablePhongTint: v }), s.paintable
+          ? "The highlight takes the paint: a Multiply proxy writes the painted colour ($color2 * $yellow) into $phongtint, so a painted item shines in its paint"
+          : "The highlight takes the paint ($phongtint = $color2 * $yellow). This material is not Paintable, so it does nothing until it is."),
+        checkbox("No cull ($nocull)", s.noCull, (v) => set({ noCull: v }), "$nocull: both sides of the faces are drawn (a thin sheet, a balloon, a cape seen from inside)")),
       gameTexture("Phong warp", s.phongWarp, [{ name: "none", path: "" }], "warp", (v) => set({ phongWarp: v }), "$phongwarptexture: a game texture that shapes and colours the highlight"),
       gate(!!s.envmap, slider("Refl. fresnel", s.envmapFresnel, 0, 1, 0.05, (v) => live({ envmapFresnel: v }))),
       gate(!!s.envmap, slider("Refl. contrast", s.envmapContrast, 0, 1, 0.05, (v) => live({ envmapContrast: v }))),
