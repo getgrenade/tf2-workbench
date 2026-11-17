@@ -38,3 +38,26 @@ export function defaultLayout({ props = true }: { props?: boolean } = {}): DockL
   for (const dock of ["left", "right", "bottom"] as const) for (const g of l.docks[dock].groups) for (const id of g.tabs) l.lastDock[id] = dock;
   return l;
 }
+
+/** The panels the simplified layout keeps: the character, what it wears and holds, its animation, its textures and the world's light. */
+export const SIMPLIFIED_PANELS = ["outliner", "properties", "textures", "lighting", "cosmetics", "weapons", "animation"];
+
+/**
+ * A simplified layout for posing and dressing: the default one without the particles, post-processing, overlay and the extra windows (flex,
+ * pose library, light setups, props). Every panel it leaves out can be brought back from the Layout menu.
+ */
+export function simplifiedLayout(): DockLayout {
+  const l = defaultLayout({ props: true });
+  const keep = new Set(SIMPLIFIED_PANELS);
+  for (const dock of ["left", "right", "bottom"] as const) {
+    // (the panels left out are put away, not lost: they come back where they were from the Layout menu)
+    for (const g of l.docks[dock].groups) for (const id of g.tabs) if (!keep.has(id)) l.hidden.push(id);
+    l.docks[dock].groups = l.docks[dock].groups
+      .map((g) => {
+        const tabs = g.tabs.filter((t) => keep.has(t));
+        return { ...g, tabs, active: tabs.includes(g.active) ? g.active : tabs[0] };
+      })
+      .filter((g) => g.tabs.length > 0);
+  }
+  return l;
+}
