@@ -4,6 +4,7 @@ import { clearTauntCache, tauntCachePath } from "./api";
 import { loadSettings, onSettingsChange, settings as currentSettings, updateSetting, updateSettings } from "./settingsStore";
 import { DEFAULT_ACCENT, DEFAULT_BASE, normaliseAccent, normaliseBase } from "./theme";
 import { UI_FONTS } from "./uiFont";
+import { templateSettings, UI_TEMPLATES } from "./uiTemplate";
 import { createHotkeysSection } from "./hotkeysUi";
 import { createRigSettings } from "./rig/rigSettings";
 
@@ -141,13 +142,27 @@ export async function createSettingsUi(root: HTMLElement) {
 
   function fontRow(): HTMLElement {
     const select = document.createElement("select");
-    for (const f of UI_FONTS) select.add(new Option(f.label, f.path));
-    select.value = UI_FONTS.some((f) => f.path === settings.uiFont) ? settings.uiFont : "";
+    for (const f of UI_FONTS) select.add(new Option(f.label, f.id));
+    const sync = () => { select.value = UI_FONTS.some((f) => f.id === currentSettings().uiFont) ? currentSettings().uiFont : ""; };
     select.onchange = async () => {
       settings = { ...settings, uiFont: select.value };
       try { await updateSetting("uiFont", select.value); } catch (e) { failed(e); }
     };
-    return row("Font", "The font the interface is drawn in: its own, or one of Team Fortress 2's, read from your game files.", select);
+    onSettingsChange(sync); sync();
+    return row("Font", "The fonts the interface is drawn in: its own, or Team Fortress 2's as the game uses them (TF2 Build for titles and buttons, TF2 Secondary for the rest), read from your game files.", select);
+  }
+
+  function templateRow(): HTMLElement {
+    const select = document.createElement("select");
+    for (const t of UI_TEMPLATES) select.add(new Option(t.label, t.id));
+    const sync = () => { select.value = UI_TEMPLATES.some((t) => t.id === currentSettings().uiTemplate) ? currentSettings().uiTemplate : ""; };
+    select.onchange = async () => {
+      const patch = templateSettings(select.value);
+      settings = { ...settings, ...patch };
+      try { await updateSettings(patch); } catch (e) { failed(e); }
+    };
+    onSettingsChange(sync); sync();
+    return row("Template", "A whole look at once. Team Fortress 2 dresses the interface as the game's menus: tan text on dark brown, the game's orange, its fonts. Picking one also sets the font and the colours below, which can still be changed.", select);
   }
 
   function screenshotRow(): HTMLElement {
@@ -193,7 +208,7 @@ export async function createSettingsUi(root: HTMLElement) {
 
   const builders: Record<SectionId, () => HTMLElement[]> = {
     general: () => [group("", ...toggles("general"))],
-    interface: () => [group("Size", scaleRow()), group("Style", fontRow()), createThemeSection(), group("Display", ...toggles("interface"))],
+    interface: () => [group("Size", scaleRow()), group("Style", templateRow(), fontRow()), createThemeSection(), group("Display", ...toggles("interface"))],
     viewport: () => [group("Navigation", ...toggles("viewport").slice(0, 2), scrollRow()), group("Screenshots", screenshotRow(), ...toggles("viewport").slice(2))],
     hotkeys: () => [createHotkeysSection()],
     rigs: () => [createRigSettings()],

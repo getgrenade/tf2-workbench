@@ -20,6 +20,7 @@ import { installFileDrop } from "./fileDrop";
 import { codeName, binding, hotkeyMatches } from "./hotkeys";
 import { applyTheme } from "./theme";
 import { applyUiFont } from "./uiFont";
+import { applyUiTemplate } from "./uiTemplate";
 import { installSliderWheel } from "./sliderWheel";
 import { installColorWheel } from "./colorWheel";
 import { installNoNativeMenu } from "./noNativeMenu";
@@ -662,7 +663,7 @@ installSliderWheel();
 installColorWheel();
 installNoNativeMenu();
 void createSettingsUi($("settings"));
-void loadSettings().then((s) => { applyTheme(s.uiBase, s.uiAccent); void applyUiFont(s.uiFont); refreshHotkeyTitles(); startUiScale(); });
+void loadSettings().then((s) => { applyTheme(s.uiBase, s.uiAccent); void applyUiFont(s.uiFont); applyUiTemplate(s.uiTemplate); refreshHotkeyTitles(); startUiScale(); });
 showTab("view");
 
 async function load(dir: string) {

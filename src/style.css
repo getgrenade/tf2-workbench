@@ -1499,3 +1499,46 @@ body.dndActive.dndRefused * { cursor: no-drop !important; }
 .paintMenu .paintSkin span { margin-right: auto; }
 .paintMenu .paintSkin button { height: 22px; padding: 0 10px; font-size: var(--ui-fs-small); }
 .paintMenu .paintSkin button.on { background: var(--ui-accent-soft); border-color: var(--ui-accent-line); color: var(--fg); }
+
+/* ---------- titles in the title font (the same as the rest unless the TF2 fonts are on) ---------- */
+h1, h2, h3, h4, .panel h3, .setGroup h3, nav button, .sceneTab, .dockTabs button { font-family: var(--ui-font-head); }
+
+/* ---------- the Team Fortress 2 template (Settings, Interface, Style): the game's menus, as the Mann-ual draws them ----------
+   ClientScheme.res colours: TanLight #EBE2CA text, TanDark #756B5E, TanDarker #2E2B2A, DarkBrown #292526, LighterDarkBrown #3B3630,
+   the game's orange (Strange #CF6A32) for what is on, Unique gold for focus. */
+:root[data-template="tf2"] {
+  --tf-tan-light: #ebe2ca; --tf-tan-dark: #756b5e; --tf-tan-darker: #2e2b2a; --tf-brown: #292526; --tf-brown-light: #3b3630; --tf-ink: #b9ae98;
+  --ui-canvas: #1f1c1b;
+  --ui-panel: var(--tf-brown);
+  --ui-raised: var(--tf-brown-light);
+  --ui-input: #1f1c1b;
+  --ui-hover: #4a423a;
+  --ui-line: rgba(117, 107, 94, 0.35);
+  --ui-line-strong: rgba(117, 107, 94, 0.7);
+  --ui-text: var(--tf-tan-light);
+  --ui-text-dim: var(--tf-ink);
+  --ui-text-faint: var(--tf-tan-dark);
+  --ui-accent-text: #f0b48c;
+  --ui-focus: 0 0 0 1px #ffd700;
+  --ui-radius-s: 2px; --ui-radius: 3px; --ui-radius-l: 4px; --ui-radius-xl: 5px;
+}
+:root[data-template="tf2"] body { background: var(--tf-brown) radial-gradient(ellipse 120% 70% at 50% 0%, #3d352e 0%, var(--tf-brown) 70%) fixed; }
+:root[data-template="tf2"] header { background: var(--tf-tan-darker); border-bottom: 0; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.6); position: relative; z-index: 2; }
+:root[data-template="tf2"] .panel h3, :root[data-template="tf2"] .setGroup h3 { color: var(--tf-tan-light); font-weight: 400; letter-spacing: .06em; border-bottom-color: rgba(117, 107, 94, 0.5); }
+/* buttons as the game's: tan-dark slabs, uppercase TF2 Build, lit in the game's orange */
+:root[data-template="tf2"] button { background: var(--tf-tan-dark); border-color: transparent; color: var(--tf-tan-light); font-family: var(--ui-font-head); text-transform: uppercase; letter-spacing: .02em; }
+:root[data-template="tf2"] button:hover { background: #8a7e6e; border-color: transparent; }
+:root[data-template="tf2"] button.on, :root[data-template="tf2"] button[aria-pressed="true"] { background: var(--ui-accent); color: var(--ui-on-accent); }
+:root[data-template="tf2"] button:disabled { background: #4a443d; color: #8f8574; }
+/* the bars of tabs and the small icon buttons stay flat, as the game's tab rows are */
+:root[data-template="tf2"] nav button, :root[data-template="tf2"] .dockTabs button, :root[data-template="tf2"] .barBtn, :root[data-template="tf2"] .settingsNav button, :root[data-template="tf2"] .sceneTab button { background: transparent; }
+:root[data-template="tf2"] nav button.on, :root[data-template="tf2"] .settingsNav button.on { background: var(--tf-brown-light); color: var(--tf-tan-light); box-shadow: inset 0 -2px 0 var(--ui-accent); }
+:root[data-template="tf2"] .dockTabs button.on { color: var(--tf-tan-light); }
+/* fields: near black with a tan-dark edge */
+:root[data-template="tf2"] input.text, :root[data-template="tf2"] input[type="text"], :root[data-template="tf2"] input[type="search"], :root[data-template="tf2"] input[type="number"], :root[data-template="tf2"] select, :root[data-template="tf2"] textarea { background: #1f1c1b; border: 1px solid var(--tf-tan-dark); color: var(--tf-tan-light); border-radius: 2px; }
+/* chips and cards: a tan-dark ring on dark, the game's orange when on */
+:root[data-template="tf2"] .ui-chip { background: #1f1c1b; border-color: var(--tf-tan-dark); color: var(--tf-ink); font-family: var(--ui-font-head); text-transform: uppercase; }
+:root[data-template="tf2"] .ui-chip.on { background: var(--ui-accent); border-color: var(--ui-accent); color: var(--ui-on-accent); }
+:root[data-template="tf2"] .ui-card { background: #3c352f; border-color: rgba(117, 107, 94, 0.6); }
+:root[data-template="tf2"] .ui-card.on { border-color: #ffd700; box-shadow: 0 0 0 1px rgba(255, 215, 0, 0.35); }
+:root[data-template="tf2"] .ui-range::-webkit-slider-thumb, :root[data-template="tf2"] .panel input[type="range"]::-webkit-slider-thumb { background: var(--tf-tan-light); }
