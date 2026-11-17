@@ -112,9 +112,18 @@ pub fn load(vpk: &VpkSet, path: &str) -> Result<Vmt> {
     load_depth(vpk, path, 0)
 }
 
+/// Flattens a material from its text (one being edited), as `load` does a file: a `patch` material still reads what it includes from the VPKs.
+pub fn load_text(vpk: &VpkSet, text: &str) -> Result<Vmt> {
+    from_text(vpk, text, 0)
+}
+
 fn load_depth(vpk: &VpkSet, path: &str, depth: u32) -> Result<Vmt> {
     let bytes = vpk.read(path).map_err(|e| crate::binary::ParseError(e.to_string()))?;
-    let (shader, nodes) = parse(&String::from_utf8_lossy(&bytes))?;
+    from_text(vpk, &String::from_utf8_lossy(&bytes), depth)
+}
+
+fn from_text(vpk: &VpkSet, text: &str, depth: u32) -> Result<Vmt> {
+    let (shader, nodes) = parse(text)?;
 
     if shader != "patch" {
         let mut vmt = Vmt { shader, params: HashMap::new(), proxies: parse_proxies(&nodes) };

@@ -174,6 +174,17 @@ pub fn load(vpk: &VpkSet, vmt_path: &str) -> Result<Material> {
         return cubemap_material(vpk, vmt_path);
     }
     let vmt = vmt::load(vpk, vmt_path)?;
+    Ok(build(vpk, vmt_path, vmt))
+}
+
+/// A material from the text of its VMT (one being edited in the app) rather than its file; the textures it names are read from the VPKs.
+pub fn from_text(vpk: &VpkSet, vmt_path: &str, text: &str) -> Result<Material> {
+    let vmt = vmt::load_text(vpk, text)?;
+    Ok(build(vpk, vmt_path, vmt))
+}
+
+/// Decodes the textures a flattened VMT's shading uses.
+fn build(vpk: &VpkSet, vmt_path: &str, vmt: vmt::Vmt) -> Material {
     let mut textures = Vec::new();
     let mut errors = Vec::new();
     for (slot, keys) in SLOTS {
@@ -216,5 +227,5 @@ pub fn load(vpk: &VpkSet, vmt_path: &str) -> Result<Material> {
             Err(e) => errors.push(format!("envmap: {e}")),
         }
     }
-    Ok(Material { path: vmt_path.to_string(), shader: vmt.shader, params: vmt.params, proxies: vmt.proxies, textures, errors })
+    Material { path: vmt_path.to_string(), shader: vmt.shader, params: vmt.params, proxies: vmt.proxies, textures, errors }
 }

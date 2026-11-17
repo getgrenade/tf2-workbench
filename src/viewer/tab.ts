@@ -20,7 +20,8 @@ import { FaceDriver, type FaceLine } from "./faceDriver";
 import type { FlexGlobals } from "./flex";
 import type { LipSync, PhonemeClasses, SceneData } from "./faceScene";
 import { loadVoice, setVoiceMuted, stopAll as stopVoices, voiceMuted } from "./voicePlayer";
-import { readTextureFile } from "../api";
+import { materialFromText, readMaterialText, readTextureFile } from "../api";
+import { VmtEdits } from "./vmtEdits";
 import { listSequences, loadMaterial, loadModel, loadSession, prepareWorkshopTaunt, readTextFile, saveSession, rewriteModelFile, writeAdjustedModel, writeBinaryFile, writeTextFile, type WorkshopTaunt } from "../api";
 import { loadItemDb, workshopItemsAsZipped } from "./itemCatalog";
 import { openItemStyles } from "./workshopStyles";
@@ -2374,6 +2375,8 @@ export function createViewTab(els: Els) {
   const texHost = document.getElementById("texView");
   const textureOverrides = new TextureOverrides((path, slot, data) => viewer?.mats.replaceTexture(path, slot, data));
   textureOverrides.onChange(() => refreshTextures());
+  const vmtEdits = new VmtEdits();
+  const vmtTexts = new Map<string, Promise<string>>();
   const texPreview = texHost ? createTexturePreview(texHost, {
     async replace(path, slot) {
       const material = materials.get(path);
@@ -2393,7 +2396,47 @@ export function createViewTab(els: Els) {
     resetAll() { textureOverrides.resetAll((path) => materials.get(path)); },
     file: (path, slot) => textureOverrides.file(path, slot),
     count: () => textureOverrides.size,
+    vmt: {
+      async text(path) {
+        return vmtEdits.text(path) ?? await gameVmtText(path);
+      },
+      async apply(path, text) {
+        const current = materials.get(path);
+        if (!current) return "the material is not loaded";
+        let data: MaterialData;
+        try { data = parseMaterial(await materialFromText(path, text)); }
+        catch (error) { return error instanceof Error ? error.message : String(error); }
+        vmtEdits.set(path, text, current, await gameVmtText(path));
+        putMaterial(path, data);
+        return data.errors.length ? data.errors.join("; ") : null;
+      },
+      async reset(path) {
+        const original = vmtEdits.take(path);
+        if (original) putMaterial(path, original);
+        return gameVmtText(path);
+      },
+      edited: (path) => vmtEdits.edited(path),
+    },
   }) : null;
+  /** The game's own text of a material's VMT (read once). */
+  function gameVmtText(path: string): Promise<string> {
+    let text = vmtTexts.get(path.toLowerCase());
+    if (!text) {
+      text = readMaterialText(path);
+      text.catch(() => vmtTexts.delete(path.toLowerCase()));
+      vmtTexts.set(path.toLowerCase(), text);
+    }
+    return text;
+  }
+  /** Draws a material with new data everywhere it is drawn (an edited VMT, or the game's back): every character's meshes made from it. */
+  function putMaterial(path: string, data: MaterialData) {
+    // (the textures a replacement put in the old data go with the new one, so a replaced map stays replaced)
+    for (const [p, slot] of textureOverrides.entries()) if (p.toLowerCase() === path.toLowerCase()) { const current = materials.get(path)?.textures[slot]; if (current && data.textures[slot]) data.textures[slot] = current; }
+    materials.set(path, data);
+    viewer?.mats.purge((p) => p.toLowerCase() === path.toLowerCase());
+    for (const e of entities) e.actor.replaceMaterial(path, data);
+    refreshTextures();
+  }
 
   function refreshTextures() {
     if (!texPreview) return;
