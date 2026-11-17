@@ -89,11 +89,7 @@ pub fn scene(state: &AppState, path: &str) -> Result<Value, String> {
             }
             choreo::SPEAK => {
                 // a speak event names a sound script entry, or (rarely) a wave itself
-                let waves = match v.sounds.get(&e.params.to_ascii_lowercase()) {
-                    Some(entry) => entry.waves.clone(),
-                    None if e.params.contains('.') && e.params.contains(['/', '\\']) => vec![soundscript::clean_wave(&e.params)],
-                    None => Vec::new(),
-                };
+                let waves = waves_of(&v, &e.params);
                 sounds.insert(e.params.to_ascii_lowercase(), json!({ "name": e.params, "waves": waves }));
             }
             _ => {}
@@ -233,4 +229,46 @@ pub fn phoneme_classes(state: &AppState, class: &str) -> Result<Value, String> {
         }
     }
     Ok(Value::Object(sets))
+}
+
+/// The waves of a sound script entry, or of a wave named directly (`player/taunt_x.wav`); empty when the game has neither.
+fn waves_of(v: &VoiceData, name: &str) -> Vec<String> {
+    match v.sounds.get(&name.to_ascii_lowercase()) {
+        Some(entry) => entry.waves.clone(),
+        None if name.contains('.') && name.contains(['/', '\\']) => vec![soundscript::clean_wave(name)],
+        None => Vec::new(),
+    }
+}
+
+/// Sound script entries by name (lower case): what each plays (`{ name, waves }`), for the sounds items play while their wearer taunts.
+pub fn sound_entries(state: &AppState, names: &[String]) -> Result<Value, String> {
+    let v = state.voice()?;
+    let mut out = serde_json::Map::new();
+    for name in names {
+        out.insert(name.to_ascii_lowercase(), json!({ "name": name, "waves": waves_of(&v, name) }));
+    }
+    Ok(Value::Object(out))
+}
+
+/// What a sequence does besides moving: its animation events (seconds after its start, name, options) and the sound script entries its
+/// `AE_CL_PLAYSOUND` events play, as `scene` gives a scene's. A taunt's sounds and particle effects are made this way (`C_BaseAnimating::FireEvent`).
+pub fn sequence_events(state: &AppState, path: &str, sequence: usize) -> Result<Value, String> {
+    let set = state.anim_set(path)?;
+    if sequence >= set.num_sequences() {
+        return Err(format!("sequence {sequence} out of range ({})", set.num_sequences()));
+    }
+    let v = state.voice()?;
+    let mut sounds = serde_json::Map::new();
+    let events: Vec<Value> = set
+        .events_with_options(sequence)
+        .into_iter()
+        .map(|e| {
+            let options = e.options.trim().to_string();
+            if e.name == "AE_CL_PLAYSOUND" && !options.is_empty() {
+                sounds.entry(options.to_ascii_lowercase()).or_insert_with(|| json!({ "name": options, "waves": waves_of(&v, &options) }));
+            }
+            json!({ "time": e.time, "name": e.name, "options": options })
+        })
+        .collect();
+    Ok(json!({ "events": events, "sounds": sounds }))
 }

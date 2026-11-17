@@ -57,6 +57,8 @@ fn main() {
             commands::phoneme_classes,
             commands::lip_sync,
             commands::read_sound,
+            commands::sequence_events,
+            commands::sound_entries,
             commands::player_gibs,
             commands::model_physics,
             commands::get_settings,
