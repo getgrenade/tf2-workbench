@@ -843,7 +843,7 @@ export function createViewTab(els: Els) {
     }
     const everything: Equipped[] = weapon ? [...loadout, { item: weapon, paint: null, style: 0 }] : loadout;
     /** Loads a model (cached) and its materials for a skin family, then adds it to the bonemerged list. */
-    const add = async (path: string, rgb: number | null, skin: number, clip: ClipData | null = null, itemId?: number, idle = false, loop = false, material?: string) => {
+    const add = async (path: string, rgb: number | null, skin: number, clip: ClipData | null = null, itemId?: number, idle = false, loop = false, material?: string, tauntClip: ClipData | null = null) => {
       let data = models.get(path);
       if (!data) {
         try {
@@ -858,7 +858,7 @@ export function createViewTab(els: Els) {
       if (e.lod > 0) data = await modelAtLod(path, e.lod).catch(() => data!);
       if (material) await loadMaterials([material]);
       else await ensureMaterials(data!, skin);
-      list.push({ data: data!, paint: rgb === null ? null : unpackRgb(rgb), skin, clip, itemId, idle, loop, material });
+      list.push({ data: data!, paint: rgb === null ? null : unpackRgb(rgb), skin, clip, itemId, idle, loop, material, tauntClip });
     };
     let prop: { data: ModelData; skin: number; clip: ClipData | null } | null = null;
     for (const { item: it, paint, style, skin: forced } of everything) {
@@ -898,14 +898,14 @@ export function createViewTab(els: Els) {
       // model for every class, fitted to each by that animation)
       let idle = false, loop = false;
       // while its wearer taunts, an item with a `playback_activity` plays that activity's sequence in step with the taunt (the Infernal
-      // Orchestrina's drum turns); neither idle nor loop: it runs on the character's clock
-      if (!weaponClip && it !== weapon && weapon?.slot === "taunt" && it.tauntActivity) weaponClip = await cosmeticActivityClip(path, it.tauntActivity);
+      // Orchestrina's drum turns), whichever taunt it is
+      const tauntClip = it !== weapon && it.tauntActivity ? await cosmeticActivityClip(path, it.tauntActivity) : null;
       // the items that play an animation of their own all the time: a sequence the game runs on its own clock (a style without it has none:
       // it is posed as the others are)
       if (!weaponClip && it !== weapon) { weaponClip = await cosmeticClockClip(path); loop = !!weaponClip; }
       if (!weaponClip && it !== weapon) { weaponClip = await cosmeticIdleClip(path, e.cls); idle = !!weaponClip; }
       // an item drawn in one material of its own whatever its model says (the Golden Wrench's gold)
-      await add(path, rgb, skin, weaponClip, it.id, idle, loop, itemMaterialOverride(it) ?? undefined);
+      await add(path, rgb, skin, weaponClip, it.id, idle, loop, itemMaterialOverride(it) ?? undefined, tauntClip);
       if (it === weapon && list.length) list[list.length - 1].weapon = true;
       // Models that travel with the item (a weapon's backpack, an attached part) share its paint and skin.
       for (const extra of it.extraModels ?? []) await add(extra, rgb, skin, null, it.id);
@@ -4691,6 +4691,9 @@ export function createViewTab(els: Els) {
     clearTauntFx(e);
     const token = e.tauntFxToken!;
     const path = e.anim.modelPath, seq = e.anim.seq, seqName = e.anim.seqName.toLowerCase();
+    const heldTaunt = e.held?.slot === "taunt" && (e.held.tauntScenes[gameClassOf(e.cls)] ?? "").toLowerCase() === seqName;
+    // a taunt: the held taunt's sequence, or one picked from the list (the class models name theirs taunt...)
+    e.actor.setTaunting(seq >= 0 && (heldTaunt || seqName.startsWith("taunt") || seqName.startsWith("layer_taunt")));
     if (!viewer || isBuildingCls(e.cls) || !path || seq < 0) return;
     const key = `${path}|${seq}`;
     let lookup = eventCache.get(key);
