@@ -10,7 +10,12 @@ export interface WeaponsEls {
   slots: HTMLElement;
   list: HTMLElement;
   count: HTMLElement;
+  /** Empties the search box. */
   clear: HTMLButtonElement;
+  /** Puts away what the character holds. */
+  removeAll: HTMLButtonElement;
+  /** What the character holds (its weapon or taunt), as a card like the worn cosmetics'. */
+  equipped: HTMLElement;
   /** The row under the list, which gets the thumbnails / list button and the size slider. */
   foot: HTMLElement;
 }
@@ -42,6 +47,9 @@ const QUALITY_COLOR: Record<string, string> = {
   normal: "#b2b2b2",
   decorated: "#7d6d00",
 };
+
+/** Text made safe to put in HTML. */
+const escapeText = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
 
 const SLOT_ORDER: Record<string, number> = { primary: 0, secondary: 1, melee: 2, utility: 3 };
 
@@ -114,6 +122,40 @@ export function createWeaponsUi(els: WeaponsEls, hooks: WeaponsHooks) {
       els.list.appendChild(tile);
     }
     els.count.textContent = `${matches.length} ${category === "taunt" ? "taunt" : "weapon"}${matches.length === 1 ? "" : "s"}`;
+    renderEquipped();
+  }
+
+  /** The held weapon or taunt at the top, as the worn cosmetics are shown: a card with its icon, its ✕ takes it away. */
+  function renderEquipped() {
+    els.equipped.innerHTML = "";
+    const current = shownHeld();
+    els.removeAll.disabled = !current;
+    if (!current) return;
+    const card = document.createElement("div");
+    card.className = "equip";
+    card.innerHTML = `<div class="equipIcon"><b class="x" title="Put it away">✕</b></div><div class="equipName">${escapeText(current.displayName)}</div>`;
+    card.title = `${current.displayName} (${current.slot === "taunt" ? "taunt" : slotForClass(current, hooks.gameClass())})`;
+    const image = itemImageFor(current);
+    if (image) {
+      const icon = card.querySelector<HTMLElement>(".equipIcon")!;
+      void itemIcon(image).then((url) => { if (url && card.isConnected) icon.style.backgroundImage = `url(${url})`; });
+    }
+    card.onclick = (ev) => {
+      if ((ev.target as HTMLElement).classList.contains("x")) putAway();
+    };
+    if (current.slot !== "taunt") {
+      card.oncontextmenu = (ev) => {
+        ev.preventDefault();
+        showContextMenu(ev.clientX, ev.clientY, [{ label: "Inspect", run: () => hooks.inspect(current) }]);
+      };
+    }
+    els.equipped.appendChild(card);
+  }
+
+  function putAway() {
+    held = null;
+    render();
+    hooks.changed(null, true);
   }
 
   function pick(w: ItemInfo) {
@@ -134,10 +176,11 @@ export function createWeaponsUi(els: WeaponsEls, hooks: WeaponsHooks) {
     };
   }
   els.clear.onclick = () => {
-    held = null;
+    els.search.value = "";
     render();
-    hooks.changed(null, true);
+    els.search.focus();
   };
+  els.removeAll.onclick = putAway;
 
   return {
     reloadCatalog(next: ItemDb) { db = next; render(); },

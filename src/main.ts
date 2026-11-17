@@ -214,7 +214,9 @@ app.innerHTML = `
       </section>
       <section id="weaponsPane" class="dockSection">
         <h3 class="first">Weapons</h3>
-        <div class="row2"><input id="weaponSearch" class="text" placeholder="Search weapons…" spellcheck="false" /><button id="weaponsClear" title="Put the weapon away">Clear</button></div>
+        <div class="row2"><input id="weaponSearch" class="text" placeholder="Search weapons…" spellcheck="false" /><button id="weaponsClear" title="Clear the search">Clear</button></div>
+        <div class="row2"><button id="weaponsRemoveAll" title="Put away the weapon or taunt the character holds">Remove all</button></div>
+        <div id="weaponEquipped" class="chips"></div>
         <div id="weaponSlots" class="slotBtns"><button data-slot="taunt" title="Taunts with a prop; picking one plays the taunt">Taunt</button><button data-slot="primary" class="on">Primary</button><button data-slot="secondary">Secondary</button><button data-slot="melee">Melee</button><button data-slot="utility" title="PDAs, sappers, toolbox, disguise kit">Utility</button></div>
         <div id="weaponList" class="itemlist"></div>
         <div class="itemFoot" id="weaponFoot"><span id="weaponCount" class="dim hint"></span></div>
@@ -470,6 +472,8 @@ const viewTab = createViewTab({
     count: $("weaponCount"),
     foot: $("weaponFoot"),
     clear: $<HTMLButtonElement>("weaponsClear"),
+    removeAll: $<HTMLButtonElement>("weaponsRemoveAll"),
+    equipped: $("weaponEquipped"),
   },
   focusFace: $<HTMLButtonElement>("focusFace"),
   focusBody: $<HTMLButtonElement>("focusBody"),
