@@ -29,7 +29,6 @@ to the game's.
 
 ## Not done
 
-- Replacements last for the session only. They are not saved with the scene.
 - A material can only have the maps it already has replaced: an empty slot cannot be given a new map, because that would need a different
   shader.
 - An animated texture's other frames (`base_f<N>`) are not replaced.
@@ -49,4 +48,18 @@ Under the maps, the Textures panel shows the VMT of the material that is selecte
 **Marking and reset.** An edited material is marked "edited" in the editor's header, and "(edited)" in the panel's lists. **Reset VMT**
 puts the game's material and its text back. `VmtEdits` (`src/viewer/vmtEdits.ts`) keeps the game's material and text for that.
 
-**Not done.** Edits last for the session only, like replaced maps. Eyes (`eyerefract`) keep the material they were made with.
+**Not done.** Eyes (`eyerefract`) keep the material they were made with.
+
+# Remembered between runs
+
+Replaced maps and edited VMTs are remembered between runs (`src/viewer/materialEditsStore.ts`, in the browser storage of the app). What
+is kept:
+
+- for a replaced map, the path of the image it was replaced with, which is read again at the next start;
+- for an edited VMT, its text.
+
+They are put back on a material as it is loaded, before it is first drawn (`restoreMaterialEdits`): the VMT first, then the maps. An edit
+that can no longer be made, because the image is gone or the text does not parse, is left out.
+
+**Reset**, **Reset all** and **Reset VMT** forget what they put back. **Reset all** also forgets the replaced maps of materials not loaded
+in this run.

@@ -22,6 +22,7 @@ import type { LipSync, PhonemeClasses, SceneData } from "./faceScene";
 import { loadVoice, setVoiceMuted, stopAll as stopVoices, voiceMuted } from "./voicePlayer";
 import { materialFromText, readMaterialText, readTextureFile } from "../api";
 import { VmtEdits } from "./vmtEdits";
+import { editsFor, loadMaterialEdits, saveMaterialEdits } from "./materialEditsStore";
 import { listSequences, loadMaterial, loadModel, loadSession, prepareWorkshopTaunt, readTextFile, saveSession, rewriteModelFile, writeAdjustedModel, writeBinaryFile, writeTextFile, type WorkshopTaunt } from "../api";
 import { loadItemDb, workshopItemsAsZipped } from "./itemCatalog";
 import { openItemStyles } from "./workshopStyles";
@@ -1153,7 +1154,8 @@ export function createViewTab(els: Els) {
         .filter((p) => !materials.has(p))
         .map(async (p) => {
           try {
-            materials.set(p, parseMaterial(await loadMaterial(p)));
+            // (with the edits made to it in the Textures panel in an earlier run)
+            materials.set(p, await restoreMaterialEdits(p, parseMaterial(await loadMaterial(p))));
           } catch (err) {
             materials.set(p, null);
             materialErrors.set(p, String(err));
@@ -2374,7 +2376,45 @@ export function createViewTab(els: Els) {
   // --- the textures of the character and its worn cosmetics (every map of each material) under the body groups; any can be replaced ---
   const texHost = document.getElementById("texView");
   const textureOverrides = new TextureOverrides((path, slot, data) => viewer?.mats.replaceTexture(path, slot, data));
-  textureOverrides.onChange(() => refreshTextures());
+  textureOverrides.onChange(() => { refreshTextures(); rememberMaterialEdits(); });
+  /** The edits of the session, kept for the next start (see materialEditsStore.ts). */
+  let savedEdits = loadMaterialEdits();
+  /** The materials whose saved edits were looked at this run (the others' saved edits are kept as they are until they are loaded). */
+  const restoredEdits = new Set<string>();
+  function rememberMaterialEdits() {
+    const untouched = (path: string) => !restoredEdits.has(path.toLowerCase());
+    savedEdits = {
+      textures: [
+        ...savedEdits.textures.filter((t) => untouched(t.path)),
+        ...textureOverrides.entries().map(([path, slot]) => ({ path, slot, file: textureOverrides.file(path, slot) ?? "" })).filter((t) => t.file),
+      ],
+      vmts: [...savedEdits.vmts.filter((v) => untouched(v.path)), ...vmtEdits.paths().map((path) => ({ path, text: vmtEdits.text(path) ?? "" }))],
+    };
+    saveMaterialEdits(savedEdits);
+  }
+  /**
+   * Puts a material's saved edits back as it is loaded: its edited VMT, then its replaced maps (each image read again from where it was
+   * picked). An edit that cannot be made any more (the file is gone, the text no longer parses) is left out and forgotten.
+   */
+  async function restoreMaterialEdits(path: string, data: MaterialData): Promise<MaterialData> {
+    const saved = editsFor(savedEdits, path);
+    if (!saved.vmt && !saved.textures.length) return data;
+    restoredEdits.add(path.toLowerCase());
+    let current = data;
+    if (saved.vmt !== null) {
+      try {
+        const edited = parseMaterial(await materialFromText(path, saved.vmt));
+        vmtEdits.set(path, saved.vmt, data, await gameVmtText(path));
+        current = edited;
+      } catch (error) { console.warn(`saved VMT of ${path} not used:`, error); }
+    }
+    for (const { slot, file } of saved.textures) {
+      if (!current.textures[slot]) continue;
+      try { textureOverrides.replace(current, slot, await decodeReplacement(await readTextureFile(file), file), file); }
+      catch (error) { console.warn(`saved ${slot} of ${path} not used:`, error); }
+    }
+    return current;
+  }
   const vmtEdits = new VmtEdits();
   const vmtTexts = new Map<string, Promise<string>>();
   const texPreview = texHost ? createTexturePreview(texHost, {
@@ -2385,16 +2425,22 @@ export function createViewTab(els: Els) {
       if (typeof picked !== "string") return false;
       try {
         const image = await decodeReplacement(await readTextureFile(picked), picked);
-        textureOverrides.replace(material, slot, image, picked.split(/[\\/]/).pop() ?? picked);
+        restoredEdits.add(path.toLowerCase());
+        textureOverrides.replace(material, slot, image, picked); // (the whole path: it is read again at the next start)
         return true;
       } catch (error) {
         els.items.count.textContent = `Could not use ${picked}: ${error instanceof Error ? error.message : String(error)}`;
         return false;
       }
     },
-    reset(path, slot) { const material = materials.get(path); if (material) textureOverrides.reset(material, slot); },
-    resetAll() { textureOverrides.resetAll((path) => materials.get(path)); },
-    file: (path, slot) => textureOverrides.file(path, slot),
+    reset(path, slot) { restoredEdits.add(path.toLowerCase()); const material = materials.get(path); if (material) textureOverrides.reset(material, slot); },
+    resetAll() {
+      // (every saved replacement goes, also of the materials not loaded this run)
+      savedEdits = { ...savedEdits, textures: [] };
+      textureOverrides.resetAll((path) => materials.get(path));
+      rememberMaterialEdits();
+    },
+    file: (path, slot) => textureOverrides.file(path, slot)?.split(/[\\/]/).pop() ?? null,
     count: () => textureOverrides.size,
     vmt: {
       async text(path) {
@@ -2408,11 +2454,15 @@ export function createViewTab(els: Els) {
         catch (error) { return error instanceof Error ? error.message : String(error); }
         vmtEdits.set(path, text, current, await gameVmtText(path));
         putMaterial(path, data);
+        restoredEdits.add(path.toLowerCase());
+        rememberMaterialEdits();
         return data.errors.length ? data.errors.join("; ") : null;
       },
       async reset(path) {
         const original = vmtEdits.take(path);
         if (original) putMaterial(path, original);
+        restoredEdits.add(path.toLowerCase());
+        rememberMaterialEdits();
         return gameVmtText(path);
       },
       edited: (path) => vmtEdits.edited(path),
