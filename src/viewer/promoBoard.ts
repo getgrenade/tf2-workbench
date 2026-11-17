@@ -7,7 +7,7 @@
 import { icon } from "../icons";
 import { showContextMenu } from "./contextMenu";
 import { rotateLightDirection } from "./lighting";
-import { shotEffectsOf, SHADOW_BLENDS, type ShadowBlend, DEFAULT_SHOT_EFFECTS, LINEUP_SPACING, PROMO_FOV, solidOf } from "./promo";
+import { shotEffectsOf, SHADOW_BLENDS, type ShadowBlend, DEFAULT_SHOT_EFFECTS, LINEUP_SPACING, PROMO_FOV, shadowOf, shadowOff, solidOf } from "./promo";
 import { createBackdropPicker } from "./backdropPicker";
 import { DEFAULT_STUDIO, STUDIO_LABELS, STUDIO_ROLES, flipStudio, parseStudio, randomStudio, type StudioLight } from "./studioLight";
 import { createStudioSphere } from "./studioSphere";
@@ -2051,7 +2051,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     blend.onchange = () => { l.blend = blend.value === "source-over" ? undefined : (blend.value as LayerBlend); draw(p); placeShared(l); };
     wheelSelect(blend);
     field(layerBox, "Blend", blend, "How it is laid over what is under it (as Photoshop's blend modes)");
-    if (l.shot) {
+    if (l.shot || l.raster) {
       // the glow round this shot: the board's (Look → Glow round the characters), or on or off for this one alone
       const glow = document.createElement("select");
       glow.add(new Option(`As the board (${look.glow?.on ? "on" : "off"})`, ""));
@@ -2427,7 +2427,48 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     add("Duplicate", "A copy of its own in this picture, beside it", () => { if (l) pasteLayers("copy", [l]); });
     if (l && p && linked.length) add("Unlink", "Make this picture's own copy: it keeps a copy of the shot, changed on its own from now on", () => unlinkLayer(p, l));
     else if (l && p && others.length) add("Link back", "Link it to the others again: it takes their shot and place, and changes with them", () => relinkLayer(p, l));
+    if (l && p && (l.shot || l.chart)) add("Rasterize", "Make it a plain image as it looks now: nothing changes it any more (its shot is not taken again, by a change here or anywhere else). Undo turns it back", () => rasterizeLayer(p, l));
     add("Delete", "Take it out of this picture (Delete)", () => { if (l) { selectOnly(l); deleteLayers(); } }, "trash2");
+  }
+
+  /**
+   * Makes a shot or chart a plain image of what it shows now: its ground shadow (drawn with the others' when it has one) is put into its
+   * own pixels, at the board's colour and opacity; it is unlinked from the other pictures (they keep the shot), and nothing takes it again.
+   */
+  function rasterizeLayer(p: PromoPicture, l: PromoLayer) {
+    const was = snapshot();
+    let img = l.image;
+    const shadow = shadowOf.get(img);
+    if (shadow) {
+      const fx = look.effects?.shadow;
+      const c = document.createElement("canvas");
+      c.width = img.width;
+      c.height = img.height;
+      const ctx = c.getContext("2d")!;
+      // the shadow in its colour (its pixels are black with the shadow's alpha), then the character over it
+      const tinted = document.createElement("canvas");
+      tinted.width = shadow.width;
+      tinted.height = shadow.height;
+      const tctx = tinted.getContext("2d")!;
+      tctx.drawImage(shadow, 0, 0);
+      tctx.globalCompositeOperation = "source-in";
+      tctx.fillStyle = fx?.color ?? "#000000";
+      tctx.fillRect(0, 0, tinted.width, tinted.height);
+      // (a shot whose shadow was off keeps none; its image is copied all the same, so the board's shadow pass leaves it alone)
+      ctx.globalAlpha = look.effects?.look ? 1 : fx?.opacity ?? 1;
+      if (!shadowOff(l)) ctx.drawImage(tinted, 0, 0, c.width, c.height);
+      ctx.globalAlpha = 1;
+      ctx.drawImage(solidOf.get(img) ?? img, 0, 0, c.width, c.height);
+      img = c;
+    }
+    waiting.delete(l);
+    takenLive.delete(l);
+    Object.assign(l, { image: img, shot: undefined, chart: undefined, cells: undefined, link: undefined, shared: undefined, raster: true });
+    pushUndo(was);
+    draw(p);
+    showInspector();
+    host.changed();
+    status.textContent = `“${l.name}” is a plain image now: nothing takes it again (Undo turns it back).`;
   }
 
   /** Every thumbnail's shot layer, with its picture. */
@@ -2880,10 +2921,10 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
         if (l.shot) specs.set(l.shot, JSON.stringify(l.shot));
         if (l.chart) specs.set(l.chart, JSON.stringify(l.chart));
         if (l.text) specs.set(l.text, JSON.stringify(l.text));
-        return { l, state: { dx: l.dx, dy: l.dy, scale: l.scale, hidden: l.hidden, shared: l.shared, shot: l.shot, chart: l.chart, image: l.image, content: l.content, opaque: l.opaque, cells: l.cells, box: { ...l.box }, name: l.name, rotation: l.rotation, mask: l.mask ? structuredClone(l.mask) : undefined, opacity: l.opacity, blend: l.blend, glow: l.glow, overlay: l.overlay ? structuredClone(l.overlay) : undefined } };
+        return { l, state: { dx: l.dx, dy: l.dy, scale: l.scale, hidden: l.hidden, shared: l.shared, shot: l.shot, chart: l.chart, image: l.image, content: l.content, opaque: l.opaque, cells: l.cells, box: { ...l.box }, name: l.name, rotation: l.rotation, mask: l.mask ? structuredClone(l.mask) : undefined, opacity: l.opacity, blend: l.blend, glow: l.glow, raster: l.raster, overlay: l.overlay ? structuredClone(l.overlay) : undefined } };
       }),
     }));
-    const key = JSON.stringify([look, pics.map((x) => [x.name, x.backdrop, x.texts, x.layers.map(({ l, state: s }) => [idOf(l), s.dx, s.dy, s.scale, s.hidden, s.shared, idOf(s.shot), idOf(s.chart), idOf(s.image), s.box, s.rotation, s.mask, s.opacity, s.blend, s.glow, s.overlay]), x.strokeAt]), [...specs.values()]]);
+    const key = JSON.stringify([look, pics.map((x) => [x.name, x.backdrop, x.texts, x.layers.map(({ l, state: s }) => [idOf(l), s.dx, s.dy, s.scale, s.hidden, s.shared, idOf(s.shot), idOf(s.chart), idOf(s.image), s.box, s.rotation, s.mask, s.opacity, s.blend, s.glow, s.raster, s.overlay]), x.strokeAt]), [...specs.values()]]);
     return { key, look: structuredClone(look), pics, specs };
   }
   function restore(s: Snap) {

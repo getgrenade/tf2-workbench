@@ -6138,11 +6138,14 @@ export function createViewTab(els: Els) {
       return `Saved ${pictures.length} ${format === "psd" ? "Photoshop files" : "pictures"} to ${dir}.`;
     },
     retake: (l, live) => inPromoScene(async () => {
-      if (l.shot) l.image = await takeShot(l.shot, live);
-      else if (l.chart) {
-        const taken = await takeChart(l.chart);
-        l.image = taken.canvas;
-        l.cells = taken.cells;
+      // (a layer rasterized while its shot was being taken keeps its pixels: what was taken is dropped)
+      const shot = l.shot, chart = l.chart;
+      if (shot) {
+        const image = await takeShot(shot, live);
+        if (l.shot === shot) l.image = image;
+      } else if (chart) {
+        const taken = await takeChart(chart);
+        if (l.chart === chart) { l.image = taken.canvas; l.cells = taken.cells; }
       }
     }),
     // a quick look through a layer's camera, small: the shot's slot, or one picture of a chart

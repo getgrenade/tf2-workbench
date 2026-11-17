@@ -328,6 +328,8 @@ export interface PromoLayer {
   /** A gradient that fades it out (see promoMask.ts). */
   /** A shot's glow (see layerGlow): on or off whatever the board's Glow says; absent, the board's. */
   glow?: boolean;
+  /** A shot or chart made a plain image (Rasterize): its pixels stay as they are, whatever changes, and it keeps its glow. */
+  raster?: boolean;
   mask?: LayerMask;
   /** How much of it shows (0..1); absent: all of it. */
   opacity?: number;
@@ -585,7 +587,7 @@ export const DEFAULT_GLOW: Glow = { on: false, size: 22, strength: 0.55 };
  * the texts, the paint charts and the overlays.
  */
 export function layerGlow(l: PromoLayer, look: { glow?: Glow }): Glow | null {
-  if (!l.shot) return null;
+  if (!l.shot && !l.raster) return null;
   if (l.glow === false) return null;
   if (l.glow === true) return look.glow ?? DEFAULT_GLOW;
   return look.glow?.on ? look.glow : null;
