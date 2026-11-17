@@ -1608,8 +1608,22 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
   };
 
   // --- the picked picture and shot ---
+  /**
+   * The shots of a board kept before their shadows were kept apart from them: their images have their shadows in their pixels (drawn over
+   * the shots under them), so they are taken once again when their picture is first opened.
+   */
+  const splitChecked = new WeakSet<PromoLayer>();
+  function splitOldShadows(p: PromoPicture) {
+    if (!root.isConnected || root.closest("[hidden]")) return; // (a board brought back in the background waits until it is looked at)
+    for (const l of p.layers) {
+      if (!l.shot || splitChecked.has(l)) continue;
+      splitChecked.add(l);
+      if (!solidOf.has(l.image)) queueRetake(p, l);
+    }
+  }
   function pick(p: PromoPicture) {
     picked = p;
+    splitOldShadows(p);
     selectOnly(p.layers.length === 1 ? p.layers[0] : null);
     for (const [q, c] of thumbs) c.parentElement!.classList.toggle("on", q === p);
     drawPreview();

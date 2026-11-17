@@ -6,6 +6,7 @@
 import { listPromos, readPromoFile, removePromo, savePromoFile } from "../api";
 import type { Backdrop, ChartCellRect, ChartSpec, LayerBlend, OverlaySpec, PromoLayer, PromoPicture, ShotSpec, TextSpec } from "./promo";
 import { parseMask, partsOf, type LayerMask } from "./promoMask";
+import { shadowOf, solidOf } from "./promo";
 
 export interface SavedLayer {
   name: string;
@@ -31,6 +32,9 @@ export interface SavedLayer {
   opacity?: number;
   blend?: LayerBlend;
   overlay?: OverlaySpec;
+  /** A shot's image without its ground shadow, and the shadow alone (the board draws the shadows of all its shots under them). */
+  solid?: string;
+  shadow?: string;
   /** The file of the image's parts picture (a mask that keeps parts of the character). */
   parts?: string;
 }
@@ -83,10 +87,14 @@ export async function saveBoard(id: string, board: Omit<SavedBoard, "version" | 
       const file = await write(l.image);
       const partsCanvas = l.mask?.keep.length ? partsOf.get(l.image) : undefined;
       const parts = partsCanvas ? await write(partsCanvas) : undefined;
+      // (without these the image, its shadow in its pixels, was drawn over the shots under it after the board was opened again)
+      const solidCanvas = solidOf.get(l.image), shadowCanvas = shadowOf.get(l.image);
+      const solid = solidCanvas ? await write(solidCanvas) : undefined;
+      const shadow = shadowCanvas ? await write(shadowCanvas) : undefined;
       layers.push({
         name: l.name, image: file, box: { ...l.box }, alignY: l.alignY, scale: l.scale, dx: l.dx, dy: l.dy, hidden: l.hidden,
         shot: l.shot, chart: l.chart, link: l.link, shared: l.shared, centre: l.centre, content: l.content, opaque: l.opaque, cells: l.cells, text: l.text, rotation: l.rotation, opacity: l.opacity, blend: l.blend, overlay: l.overlay,
-        mask: l.mask, parts,
+        mask: l.mask, parts, solid, shadow,
       });
     }
     pictures.push({ name: p.name, item: p.item, kind: p.kind, w: p.w, h: p.h, strokeAt: p.strokeAt, backdrop: p.backdrop, layers });
@@ -131,8 +139,17 @@ export async function loadBoard(id: string): Promise<LoadedBoard> {
         images.set(s.image, img);
         written.set(img, s.image);
       }
-      const { parts, mask, ...rest } = s;
+      const { parts, mask, solid, shadow, ...rest } = s;
       const l: PromoLayer = { ...rest, image: img, mask: parseMask(mask) };
+      // a shot's image without its shadow, and the shadow, as they were taken
+      for (const [file, into] of [[solid, solidOf], [shadow, shadowOf]] as const) {
+        if (!file || into.has(img)) continue;
+        try {
+          let c = images.get(file);
+          if (!c) { c = await image(id, file); images.set(file, c); written.set(c, file); }
+          into.set(img, c);
+        } catch { /* taken again when it is needed */ }
+      }
       if (parts && !partsOf.has(img)) {
         try {
           let pc = images.get(parts);
