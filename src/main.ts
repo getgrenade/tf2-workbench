@@ -19,6 +19,8 @@ import { installPointerDnd } from "./dnd";
 import { installFileDrop } from "./fileDrop";
 import { codeName, binding, hotkeyMatches } from "./hotkeys";
 import { applyTheme } from "./theme";
+import { applyUiFont } from "./uiFont";
+import { applyUiTemplate } from "./uiTemplate";
 import { installSliderWheel } from "./sliderWheel";
 import { installColorWheel } from "./colorWheel";
 import { installNoNativeMenu } from "./noNativeMenu";
@@ -202,17 +204,19 @@ app.innerHTML = `
     <aside id="dockRight" class="panel dock" data-dock="right">
       <section id="cosmeticsPane" class="dockSection">
       <h3 class="first">Cosmetics</h3>
-      <div class="row2"><input id="itemSearch" class="text" placeholder="Search cosmetics…" spellcheck="false" /><button id="itemsClear" title="Remove all cosmetics">Clear</button></div>
+      <div class="row2"><input id="itemSearch" class="text" placeholder="Search cosmetics…" spellcheck="false" /><button id="itemsClear" title="Clear the search">Clear</button></div>
       <div id="itemScopes" class="slotBtns"><button data-scope="solo" class="on" title="Items made for this class only">Class</button><button data-scope="shared" title="Items several classes (or all) can wear">All-class</button><button data-scope="workshop" title="Your own cosmetics from the workshop importer (tf/workshop/import_source), for this class">Workshop</button></div>
       <div id="itemRegions" class="regionBtns"></div>
-      <div id="itemTools" class="row2"><button id="itemSelectAll" title="Select every equipped cosmetic, then pick one paint for all of them">Select all</button></div>
+      <div id="itemTools" class="row2"><button id="itemSelectAll" title="Select every equipped cosmetic, then pick one paint for all of them">Select all</button><button id="itemsRemoveAll" title="Take off every cosmetic (locked ones stay on)">Remove all</button></div>
       <div id="itemEquipped" class="chips"></div>
       <div id="itemList" class="itemlist"></div>
       <div class="itemFoot" id="itemFoot"><button id="itemMedals" class="iconBtn" title="Show medals &amp; badges" aria-pressed="false">${icon("medal")}</button><button id="itemWorkshopRefresh" class="iconBtn" title="Reload the workshop cosmetics from tf/workshop/import_source (this also happens when you come back to this window and the zips changed)" aria-label="Reload workshop cosmetics">${icon("refreshCw")}</button><span id="itemCount" class="dim hint"></span></div>
       </section>
       <section id="weaponsPane" class="dockSection">
         <h3 class="first">Weapons</h3>
-        <div class="row2"><input id="weaponSearch" class="text" placeholder="Search weapons…" spellcheck="false" /><button id="weaponsClear" title="Put the weapon away">Clear</button></div>
+        <div class="row2"><input id="weaponSearch" class="text" placeholder="Search weapons…" spellcheck="false" /><button id="weaponsClear" title="Clear the search">Clear</button></div>
+        <div class="row2"><button id="weaponsRemoveAll" title="Put away the weapon or taunt the character holds">Remove all</button></div>
+        <div id="weaponEquipped" class="chips"></div>
         <div id="weaponSlots" class="slotBtns"><button data-slot="taunt" title="Taunts with a prop; picking one plays the taunt">Taunt</button><button data-slot="primary" class="on">Primary</button><button data-slot="secondary">Secondary</button><button data-slot="melee">Melee</button><button data-slot="utility" title="PDAs, sappers, toolbox, disguise kit">Utility</button></div>
         <div id="weaponList" class="itemlist"></div>
         <div class="itemFoot" id="weaponFoot"><span id="weaponCount" class="dim hint"></span></div>
@@ -441,6 +445,7 @@ const viewTab = createViewTab({
     count: $("itemCount"),
     foot: $("itemFoot"),
     clear: $<HTMLButtonElement>("itemsClear"),
+    removeAll: $<HTMLButtonElement>("itemsRemoveAll"),
   },
   anim: {
     search: $<HTMLInputElement>("seqSearch"),
@@ -467,6 +472,8 @@ const viewTab = createViewTab({
     count: $("weaponCount"),
     foot: $("weaponFoot"),
     clear: $<HTMLButtonElement>("weaponsClear"),
+    removeAll: $<HTMLButtonElement>("weaponsRemoveAll"),
+    equipped: $("weaponEquipped"),
   },
   focusFace: $<HTMLButtonElement>("focusFace"),
   focusBody: $<HTMLButtonElement>("focusBody"),
@@ -660,7 +667,7 @@ installSliderWheel();
 installColorWheel();
 installNoNativeMenu();
 void createSettingsUi($("settings"));
-void loadSettings().then((s) => { applyTheme(s.uiBase, s.uiAccent); refreshHotkeyTitles(); startUiScale(); });
+void loadSettings().then((s) => { applyTheme(s.uiBase, s.uiAccent); void applyUiFont(s.uiFont); applyUiTemplate(s.uiTemplate); refreshHotkeyTitles(); startUiScale(); });
 showTab("view");
 
 async function load(dir: string) {

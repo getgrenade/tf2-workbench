@@ -3,6 +3,8 @@ import { attachNumberDrag } from "./viewer/numberDrag";
 import { clearTauntCache, tauntCachePath } from "./api";
 import { loadSettings, onSettingsChange, settings as currentSettings, updateSetting, updateSettings } from "./settingsStore";
 import { DEFAULT_ACCENT, DEFAULT_BASE, normaliseAccent, normaliseBase } from "./theme";
+import { UI_FONTS } from "./uiFont";
+import { templateSettings, UI_TEMPLATES } from "./uiTemplate";
 import { createHotkeysSection } from "./hotkeysUi";
 import { createRigSettings } from "./rig/rigSettings";
 
@@ -41,6 +43,7 @@ const TOGGLES: ToggleDef[] = [
   { key: "pasteInPlace", section: "general", label: "Paste characters in place", description: "A pasted character lands on the one it was copied from, with the same position, rotation and scale, as pasted lights do. Off: it gets a free spot in the row instead.", needsRestart: false },
   { key: "pauseInCompiler", section: "general", label: "Pause animations in the compiler", description: "Entering the compiler pauses every character, so the item holds still while you work on it. Going back to the viewer plays again what was playing.", needsRestart: false },
   { key: "autoWeaponAnimation", section: "general", label: "Switch animation when picking a weapon", description: "Picking a weapon plays its idle pose (stand_primary, stand_secondary, ...) so the character holds it properly. Off: keep the animation that is selected.", needsRestart: false },
+  { key: "autoStockWeapon", section: "general", label: "Hold a weapon for weapon animations", description: "Picking a weapon animation (stand_PRIMARY, run_MELEE_ALLCLASS, a competitive pose) with empty hands holds a weapon that plays it: the class's stock one, or one of its animation set. The next animation picked swaps it or puts it away; a weapon you pick yourself is never touched.", needsRestart: false },
   { key: "playHitReactions", section: "general", label: "Play mode hit reactions", description: "Explosions gib other characters; bullet hits turn them into ragdolls. Off restores affected characters. Characters reset when a new Play session starts.", needsRestart: false },
   { key: "matchHlmvColors", section: "interface", label: "Match hlmv.exe colours", description: "Turns off the web view's colour management so saturated colours reach the screen unconverted, as hlmv.exe draws them. Removes the orange cast on pure reds on wide-gamut displays; the interface gets a little more saturated.", needsRestart: true },
   { key: "cameraSmoothing", section: "viewport", label: "Camera smoothing", description: "Eases camera movement and navigation-axis transitions. Off: immediate movement.", needsRestart: false },
@@ -138,6 +141,31 @@ export async function createSettingsUi(root: HTMLElement) {
     return row("Interface size", "The size of the whole interface. The layout is made for a 1440p screen: Auto draws it at 80% on a 1080p one.", select);
   }
 
+  function fontRow(): HTMLElement {
+    const select = document.createElement("select");
+    for (const f of UI_FONTS) select.add(new Option(f.label, f.id));
+    const sync = () => { select.value = UI_FONTS.some((f) => f.id === currentSettings().uiFont) ? currentSettings().uiFont : ""; };
+    select.onchange = async () => {
+      settings = { ...settings, uiFont: select.value };
+      try { await updateSetting("uiFont", select.value); } catch (e) { failed(e); }
+    };
+    onSettingsChange(sync); sync();
+    return row("Font", "The fonts the interface is drawn in: its own, or Team Fortress 2's as the game uses them (TF2 Build for titles and buttons, TF2 Secondary for the rest), read from your game files.", select);
+  }
+
+  function templateRow(): HTMLElement {
+    const select = document.createElement("select");
+    for (const t of UI_TEMPLATES) select.add(new Option(t.label, t.id));
+    const sync = () => { select.value = UI_TEMPLATES.some((t) => t.id === currentSettings().uiTemplate) ? currentSettings().uiTemplate : ""; };
+    select.onchange = async () => {
+      const patch = templateSettings(select.value);
+      settings = { ...settings, ...patch };
+      try { await updateSettings(patch); } catch (e) { failed(e); }
+    };
+    onSettingsChange(sync); sync();
+    return row("Template", "A whole look at once. Team Fortress 2 dresses the interface as the game's menus: tan text on dark brown, the game's orange, its fonts. Picking one also sets the font and the colours below, which can still be changed.", select);
+  }
+
   function screenshotRow(): HTMLElement {
     const select = document.createElement("select");
     for (const n of [1, 2, 4]) select.add(new Option(`${n}×`, String(n)));
@@ -181,7 +209,7 @@ export async function createSettingsUi(root: HTMLElement) {
 
   const builders: Record<SectionId, () => HTMLElement[]> = {
     general: () => [group("", ...toggles("general"))],
-    interface: () => [group("Size", scaleRow()), createThemeSection(), group("Display", ...toggles("interface"))],
+    interface: () => [group("Size", scaleRow()), group("Style", templateRow(), fontRow()), createThemeSection(), group("Display", ...toggles("interface"))],
     viewport: () => [group("Navigation", ...toggles("viewport").slice(0, 2), scrollRow()), group("Screenshots", screenshotRow(), ...toggles("viewport").slice(2))],
     hotkeys: () => [createHotkeysSection()],
     rigs: () => [createRigSettings()],

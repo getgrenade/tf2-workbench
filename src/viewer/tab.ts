@@ -67,6 +67,7 @@ import { boardShotEffects, showBoard, type BoardHost } from "./promoBoard";
 import { forgetBoard, loadBoards, saveBoard, type Written } from "./promoStore";
 import type { PaintChartOpts } from "./viewer";
 import { isJunkSequence } from "./sequenceFilter";
+import { weaponForSequence } from "./sequenceWeapon";
 import { paramsToSetup } from "../compiler/jiggleBones";
 import { turnTowards } from "../compiler/boneAxes";
 import type { JiggleParams } from "./jiggle";
@@ -250,6 +251,15 @@ interface AnimPreset {
 }
 
 /** One character in the scene and everything the panels show for it. */
+/** An animation a character played, kept to put back (see animationOf). */
+interface SavedAnimation {
+  modelPath: string;
+  seqName: string;
+  encoded: number[];
+  time: number;
+  playing: boolean;
+}
+
 interface Entity {
   unusuals: UnusualSettings;
   unusualError: string;
@@ -303,6 +313,10 @@ interface Entity {
   voicePicks?: Map<string, number>;
   /** A voice line the browser put on the face (its name); the animation's scene waits until it is let go. */
   faceVoiceLine?: string;
+  /** What the character played before a taunt was picked (it comes back when the taunt is put away). */
+  beforeTaunt?: SavedAnimation;
+  /** The held weapon is the stock stand-in of the sequence picked (see holdForSequence), not one picked by hand. */
+  autoHeld?: boolean;
 }
 
 /** The "Viewer" tab: class picker, light controls and the 3D view. */
@@ -577,7 +591,27 @@ export function createViewTab(els: Els) {
       if (e.held?.workshop && e.held.slot === "taunt") void applyLoadout(e, e.applied);
       else anim.rebake(e.actor, e.anim);
     }
+  }, (actor, sequence) => {
+    const e = entities.find((x) => x.actor === actor);
+    if (e) void holdForSequence(e, sequence);
   });
+  /**
+   * With Settings → Hold a weapon for weapon animations on, a sequence picked from the list that is played with a weapon (stand_PRIMARY,
+   * run_MELEE_ALLCLASS, a competitive pose) puts the weapon of its animation set (see sequenceWeapon.ts) in the hands when they are empty; it is the character's until another sequence is picked (one of another slot
+   * swaps it for that slot's, one of none puts it away). A weapon picked by hand is never touched, and picking one ends the stand-in.
+   */
+  async function holdForSequence(e: Entity, sequence: string) {
+    if (!settings().autoStockWeapon || isBuildingCls(e.cls) || (e.held && !e.autoHeld)) return;
+    const game = gameClassOf(e.cls);
+    const db = await loadItemDb();
+    const stock = weaponForSequence(db.weapons, sequence, game);
+    if ((stock?.id ?? null) === (e.held?.id ?? null)) return;
+    if (e.held && !e.autoHeld) return; // (a weapon was picked by hand while the catalog loaded)
+    e.held = stock;
+    e.autoHeld = !!stock;
+    if (e === selected) weapons.load(stock);
+    await applyLoadout(e, e.applied); // (the sequence picked stays: no idle is switched to)
+  }
   const flex = createFlexUi(els.flex, (globals) => {
     selected?.actor.setFlexControllers(globals);
     selected?.face?.touch(); // paused, the sliders are the face; it is theirs now
@@ -988,9 +1022,28 @@ export function createViewTab(els: Els) {
    * own (`player_poseparam`). The idle sequence (stand_primary / stand_secondary / stand_melee ...) is switched to as
    * well when that setting is on.
    */
+  /** What a character is playing: the sequence, where in it, whether it runs, and the pose parameters. */
+  function animationOf(e: Entity): SavedAnimation {
+    const pb = e.actor.playback;
+    return { modelPath: e.anim.modelPath, seqName: e.anim.seqName, encoded: [...e.anim.encoded], time: pb.time, playing: pb.playing };
+  }
+  /** Puts a kept animation back on a character (by the sequence's name, the model may have been attached again since). */
+  async function restoreAnimation(e: Entity, saved: SavedAnimation) {
+    if (!entities.includes(e) || e.actor.isPosing || e.actor.holdsPose || e.anim.modelPath !== saved.modelPath) return;
+    if (saved.encoded.length === e.anim.encoded.length) e.anim.encoded.splice(0, saved.encoded.length, ...saved.encoded);
+    if (!saved.seqName || !anim.selectByName(e.actor, e.anim, [saved.seqName])) return;
+    await e.anim.pending;
+    if (e.anim.seqName !== saved.seqName) return;
+    e.actor.playback.time = saved.time;
+    e.actor.playback.playing = saved.playing;
+    e.actor.changed = true;
+    if (e === selected) anim.show(e.anim, e.actor);
+  }
+
   function playWeaponAnimation(e: Entity, weapon: ItemInfo | null) {
     const cls = gameClassOf(e.cls);
     if (!weapon || !itemUsableBy(weapon, cls)) return;
+    if (e.autoHeld && weapon === e.held) return; // (held for the sequence picked, which keeps playing)
     if ((weapon.workshop && weapon.slot === "taunt") || e.anim.targetPath) return;
     // A taunt plays its own animation (always, it is the point of picking one) instead of a weapon idle.
     const taunt = weapon.slot === "taunt" ? tauntSequence(weapon.tauntScenes[cls] ?? "", cls, anim.sequenceNames(e.anim), itemModelFor(weapon, cls) ?? undefined) : null;
@@ -1003,10 +1056,20 @@ export function createViewTab(els: Els) {
     changed: (weapon, picked) => {
       const e = selected;
       if (!picked || !e) return; // class switches reapply the loadout through the cosmetics browser
+      e.autoHeld = false; // a weapon picked (or put away) by hand: the stock stand-in of a sequence is over
+      const wasTaunt = e.held?.slot === "taunt";
+      // a taunt is picked: what the character was playing is kept, to go back to when the taunt is put away
+      if (weapon?.slot === "taunt" && !wasTaunt && !e.actor.isPosing && !e.actor.holdsPose) e.beforeTaunt = animationOf(e);
       e.held = weapons.getHeld();
-      void applyLoadout(e, e.applied);
+      const loaded = applyLoadout(e, e.applied);
       // in pose mode (or on a held pose) the weapon changes in the hands without touching the pose: no idle sequence is switched to
       if (!e.actor.isPosing && !e.actor.holdsPose) playWeaponAnimation(e, weapon);
+      if (weapon?.slot !== "taunt") {
+        const before = e.beforeTaunt;
+        e.beforeTaunt = undefined;
+        // the taunt was put away (not swapped for a weapon, which plays its own idle): the animation from before it comes back
+        if (wasTaunt && !weapon && before) void loaded.then(() => restoreAnimation(e, before));
+      }
     },
   });
   /** The characters a cosmetic pick goes to: the selected ones (never a building: it wears nothing). */

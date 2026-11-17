@@ -14,6 +14,8 @@ pub struct Settings {
     pub match_hlmv_colors: bool,
     /// Picking a weapon switches the animation to the matching `stand_*` sequence (on by default).
     pub auto_weapon_animation: bool,
+    /// Picking a weapon animation from the list with empty hands holds a weapon that plays it (off by default).
+    pub auto_stock_weapon: bool,
     /// Ease camera movement and navigation-axis transitions (on by default).
     pub camera_smoothing: bool,
     /// Leaving a camera's view puts the viewport back exactly where it was before (position, rotation, field of view) instead of
@@ -37,6 +39,10 @@ pub struct Settings {
     /// The size of the interface: 0 fits it to the screen (the layout is made for 1440p), otherwise a factor (0.5–2).
     pub ui_scale: f32,
     pub ui_accent: String,
+    /// The fonts of the interface: "" its own, "tf2" the game's (TF2 Build titles, TF2 Secondary text), read from the TF2 install.
+    pub ui_font: String,
+    /// A whole look for the interface: "" its own, "tf2" the game's menus.
+    pub ui_template: String,
     /// Interface colours of the 3D view: the wireframe overlay and the floor grid ("#rrggbb" display colours, opacities 0..1).
     pub wire_color: String,
     pub wire_opacity: f32,
@@ -59,6 +65,7 @@ impl Default for Settings {
         Settings {
             match_hlmv_colors: true,
             auto_weapon_animation: true,
+            auto_stock_weapon: false,
             camera_smoothing: true,
             restore_viewport_on_camera_exit: false,
             play_hit_reactions: true,
@@ -71,6 +78,8 @@ impl Default for Settings {
             ui_base: "#222226".into(),
             ui_scale: 0.0,
             ui_accent: "#e08a3c".into(),
+            ui_font: String::new(),
+            ui_template: String::new(),
             wire_color: "#b7d2be".into(),
             wire_opacity: 0.1,
             grid_color: "#5fab60".into(),
