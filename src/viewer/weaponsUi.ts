@@ -1,3 +1,4 @@
+import { editedItems } from "./editedItems";
 import { showContextMenu } from "./contextMenu";
 import { itemIcon } from "./itemIcons";
 import { createBrowserSort, createBrowserView, makeTile, setTileImage } from "./browserView";
@@ -120,6 +121,7 @@ export function createWeaponsUi(els: WeaponsEls, hooks: WeaponsHooks) {
         on: current?.id === w.id,
         name: w.displayName,
         sub: category === "taunt" ? "taunt" : slotForClass(w, cls),
+        edited: editedItems.has(w.id),
       });
       tile.onclick = () => pick(w);
       attachItemTooltip(tile, () => itemTooltipLines(w, { hint: category === "taunt" ? "Click to play the taunt" : `${slotForClass(w, cls)} · click to hold it` }));
@@ -218,6 +220,7 @@ export function createWeaponsUi(els: WeaponsEls, hooks: WeaponsHooks) {
   };
   els.removeAll.onclick = putAway;
 
+  editedItems.onChange(() => render());
   return {
     reloadCatalog(next: ItemDb) { db = next; render(); },
     /** The held item as picked, even when the displayed class cannot use it. */
