@@ -484,6 +484,9 @@ struct ItemJson<'a> {
     type_name: &'a str,
     #[serde(skip_serializing_if = "str::is_empty")]
     description: &'a str,
+    /// The levels an item of this definition can have, [min, max] (absent when unset).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    level: Option<[u32; 2]>,
     taunt_scenes: &'a std::collections::BTreeMap<String, String>,
     taunt_prop_scenes: &'a std::collections::BTreeMap<String, String>,
     taunt_scene_paths: &'a std::collections::BTreeMap<String, String>,
@@ -541,6 +544,7 @@ fn item_json(i: &source_formats::items::Item) -> ItemJson<'_> {
         quality: &i.quality,
         type_name: &i.type_name,
         description: &i.description,
+        level: (i.min_level > 0 || i.max_level > 0).then_some([i.min_level, i.max_level]),
         taunt_scenes: &i.taunt_scenes,
         taunt_prop_scenes: &i.taunt_prop_scenes,
         taunt_scene_paths: &i.taunt_scene_paths,

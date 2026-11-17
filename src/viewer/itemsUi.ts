@@ -1,6 +1,7 @@
 import { showContextMenu } from "./contextMenu";
 import { loadItemDb, reloadItemDb } from "./itemCatalog";
 import { itemMatches } from "./itemSearch";
+import { attachItemTooltip, itemTooltipLines } from "./itemTooltip";
 import { spellPaints, spellSwatch } from "./spellPaints";
 import { itemIcon } from "./itemIcons";
 import { createBrowserSort, createBrowserView, makeTile, setTileImage } from "./browserView";
@@ -186,7 +187,7 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
       // the eye: the item is taken off for the moment and stays in the loadout (the ✕ takes it out)
       const eye = `<b class="eye" title="${e.hidden ? "Show it again" : "Hide it (it stays in the loadout)"}">${e.hidden ? "◌" : "●"}</b>`;
       card.innerHTML = `<div class="equipIcon">${dot}${eye}<b class="x" title="Remove">✕</b></div><div class="equipName">${escapeHtml(e.item.displayName)}</div>`;
-      card.title = e.item.paintable ? "Click to pick a paint (Shift + click selects several)" : "Cannot be painted";
+      attachItemTooltip(card, () => itemTooltipLines(e.item, { paint: e.paint, hint: e.item.paintable ? "Click to pick a paint (Shift + click selects several)" : "Cannot be painted" }));
       const image = itemImageFor(e.item, e.style);
       if (image) {
         const icon = card.querySelector<HTMLElement>(".equipIcon")!;
@@ -492,7 +493,7 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
         tile.classList.toggle("pickable", ok);
         tile.classList.toggle("unpickable", !ok);
         tile.title = ok ? `Make ${it.displayName} a style of the item` : "Cannot be a style: it is a style already, or has styles of its own";
-      }
+      } else attachItemTooltip(tile, () => itemTooltipLines(it)); // the game's look: name in its quality's colour, level and type, description
       tile.onclick = () => { if (picking) { if (picking.accept(it)) picking.pick(it); } else toggle(it); };
       tile.oncontextmenu = (ev) => {
         ev.preventDefault();

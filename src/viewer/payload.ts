@@ -317,6 +317,8 @@ export interface ItemInfo {
   /** The localized item type ("Hat", "Cosmetic Robot") and description, as the backpack shows them. */
   typeName?: string;
   description?: string;
+  /** The levels an item of this definition can have, [min, max]: the backpack shows "Level 28 Hat" when they are the same. */
+  level?: [number, number];
   /** Taunts only: class -> the player's taunt scene name (the sequence it plays). */
   tauntScenes: Record<string, string>;
   /** Taunts only: class -> the prop's own scene name. */

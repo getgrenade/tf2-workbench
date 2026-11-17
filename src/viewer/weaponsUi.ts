@@ -2,6 +2,7 @@ import { showContextMenu } from "./contextMenu";
 import { itemIcon } from "./itemIcons";
 import { createBrowserSort, createBrowserView, makeTile, setTileImage } from "./browserView";
 import { loadItemDb } from "./itemCatalog";
+import { attachItemTooltip, itemTooltipLines } from "./itemTooltip";
 import { itemImageFor, itemUsableBy, newestFirst, slotForClass, weaponCategory, type ItemDb, type ItemInfo } from "./payload";
 
 export interface WeaponsEls {
@@ -100,6 +101,7 @@ export function createWeaponsUi(els: WeaponsEls, hooks: WeaponsHooks) {
         sub: category === "taunt" ? "taunt" : slotForClass(w, cls),
       });
       tile.onclick = () => pick(w);
+      attachItemTooltip(tile, () => itemTooltipLines(w, { hint: category === "taunt" ? "Click to play the taunt" : `${slotForClass(w, cls)} · click to hold it` }));
       if (category !== "taunt") {
         tile.oncontextmenu = (ev) => {
           ev.preventDefault();
