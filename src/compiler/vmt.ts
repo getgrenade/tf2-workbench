@@ -132,6 +132,13 @@ export interface MaterialSettings {
   phongFresnel: [number, number, number];
   /** `$phongtint`, 0-255: tints the highlight; null leaves it out. */
   phongTint: [number, number, number] | null;
+  /**
+   * The highlight takes the paint: a `Multiply` proxy writes the painted colour (`$color2 * $yellow`, the same as the diffuse gets) into
+   * `$phongtint`, so a painted item shines in its paint (the unpainted one in its `$colortint_base`). Needs the material to be paintable.
+   */
+  paintablePhongTint: boolean;
+  /** `$nocull`: both sides of the faces are drawn (a thin sheet, a balloon, a cape seen from inside). */
+  noCull: boolean;
   /** `$phongwarptexture`: a game texture that shapes the highlight ("" leaves it out). */
   phongWarp: string;
   /** `$envmapfresnel`, `$envmapcontrast`, `$envmapsaturation`: how the reflection fades at the edges, its contrast and its colour (0, 0, 1 are the shader's own). */
@@ -158,7 +165,7 @@ export interface MaterialSettings {
 
 export const DEFAULT_MATERIAL: Readonly<MaterialSettings> = {
   lightwarp: LIGHTWARPS[0].path, phongExponent: 25, phongBoost: 0.1, rimLight: true, rimExponent: 4, rimBoost: 2, rimMask: false,
-  halfLambert: false, baseAlphaPhongMask: false, phongAlbedoTint: false, phongFresnel: [0.25, 0.5, 1], phongTint: null, phongWarp: "", envmapFresnel: 0, envmapContrast: 0, envmapSaturation: 1, paintable: false, blendTintColorOverBase: 0, colorTintBase: [255, 255, 255],
+  halfLambert: false, baseAlphaPhongMask: false, phongAlbedoTint: false, phongFresnel: [0.25, 0.5, 1], phongTint: null, paintablePhongTint: false, noCull: false, phongWarp: "", envmapFresnel: 0, envmapContrast: 0, envmapSaturation: 1, paintable: false, blendTintColorOverBase: 0, colorTintBase: [255, 255, 255],
   translucent: false, alphaTest: false, additive: false, selfIllum: false, selfIllumTint: [255, 255, 255],
   envmap: "", envmapMask: "", envmapTint: [255, 255, 255], customProxies: [],
 };
@@ -205,6 +212,7 @@ export function buildVmt(settings: Readonly<MaterialSettings>, textures: Readonl
   set(kv, "$translucent", flag(s.translucent));
   set(kv, "$alphatest", flag(s.alphaTest));
   set(kv, "$additive", flag(s.additive));
+  if (s.noCull) set(kv, "$nocull", "1");
   const dx9 = findKv(kv, ">=DX90")!.children!;
   set(dx9, "$selfillum", flag(s.selfIllum));
   if (s.selfIllumTint.some((v, i) => v !== d.selfIllumTint[i])) set(kv, "$selfillumtint", color01(s.selfIllumTint));
@@ -230,6 +238,11 @@ export function buildVmt(settings: Readonly<MaterialSettings>, textures: Readonl
   }
 
   removeUnnecessary(kv, s.paintable, !!textures.phongexponent);
+  // the paint goes into the highlight too, after the importer's own chain has made $color2 (as the game's painted shiny items do it)
+  if (s.paintable && s.paintablePhongTint) {
+    const proxies = findKv(kv, "proxies")?.children;
+    proxies?.push(PAINTED_PHONG_TINT());
+  }
   // the artist's own proxies run after the importer's
   const extra = proxyNodes(s.customProxies ?? []);
   if (extra.length) {
@@ -238,6 +251,17 @@ export function buildVmt(settings: Readonly<MaterialSettings>, textures: Readonl
     proxies.children!.push(...extra);
   }
   return root;
+}
+
+/** The proxy that puts the paint into the highlight: `$phongtint = $color2 * $yellow`. */
+const PAINTED_PHONG_TINT = (): KvNode => ({ key: "Multiply", children: [
+  { key: "srcVar1", value: "$color2" }, { key: "srcVar2", value: "$yellow" }, { key: "resultVar", value: "$phongtint" },
+] });
+
+/** Whether a proxy (as the session's text has it) is the one that paints the highlight. */
+export function isPaintedPhongTint(name: string, params: readonly { key: string; value: string }[]): boolean {
+  const v = (k: string) => params.find((p) => p.key.toLowerCase() === k.toLowerCase())?.value.trim().toLowerCase();
+  return name.toLowerCase() === "multiply" && v("resultVar") === "$phongtint" && v("srcVar1") === "$color2";
 }
 
 /** RemoveUnnecessaryParametersFromVMT: light, paint, translucent, cubemap and self-illumination parameters that are switched off. */
