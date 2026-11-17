@@ -493,6 +493,7 @@ export class Actor {
   setHandMaskState(state: Record<string, string> | undefined) {
     this.handMask = new Map(Object.entries(state ?? {}));
     this.buildClassMeshes();
+    this.cosmeticGroup?.traverse((o) => { if (o instanceof THREE.SkinnedMesh && o.userData.maskKey) this.refreshHand(o); });
   }
 
   /**
@@ -520,9 +521,11 @@ export class Actor {
     }
     const parts: Part[] = [];
     const meshes: THREE.SkinnedMesh[] = [];
-    this.classGroup.traverse((o) => {
-      if (o instanceof THREE.SkinnedMesh && !o.userData.preview) meshes.push(o);
-    });
+    for (const group of [this.classGroup, this.cosmeticGroup]) {
+      group?.traverse((o) => {
+        if (o instanceof THREE.SkinnedMesh && !o.userData.preview && o.visible) meshes.push(o);
+      });
+    }
     for (const o of meshes) {
       const m = o.userData.meshData as MeshData | undefined;
       const key = o.userData.maskKey as string | undefined;
@@ -570,19 +573,20 @@ export class Actor {
       geometry.setIndex(index);
       const mesh = new THREE.SkinnedMesh(geometry, tintMaterial(false));
       mesh.userData.preview = true;
-      mesh.bindMode = THREE.DetachedBindMode;
-      mesh.bind(this.skeleton!, new THREE.Matrix4());
+      // (bound as the mesh it tints is: a cosmetic has a skeleton of its own)
+      mesh.bindMode = part.mesh.bindMode;
+      mesh.bind(part.mesh.skeleton, part.mesh.bindMatrix);
       mesh.frustumCulled = false;
       mesh.matrixAutoUpdate = false;
       mesh.renderOrder = 100;
-      this.classGroup?.add(mesh);
+      (part.mesh.parent ?? this.classGroup)?.add(mesh);
       part.preview = { mesh, index, sign: 1 };
       return part.preview;
     };
     const removePreviews = () => {
       for (const part of parts) {
         if (!part.preview) continue;
-        this.classGroup?.remove(part.preview.mesh);
+        part.preview.mesh.removeFromParent();
         part.preview.mesh.geometry.dispose();
         part.preview = null;
       }
@@ -959,6 +963,11 @@ export class Actor {
           const mesh = this.makeSkinnedMesh(m, material, skeleton, data, this.flexCosmetic);
           mesh.userData.source = { data: this.materials.get(path) ?? null, paint, skins: override ? [override] : m.materials, base: override ?? m.material };
           mesh.userData.cosmeticSlot = index + 1; // 1.. in the order of the list; 0 / unset is the class's own mesh
+          // triangles of a cosmetic can be hidden by hand too: the mask goes by the model, so every paint of it (and every character wearing
+          // it) shows the same; another style with another model has a mask of its own
+          mesh.userData.meshData = m;
+          mesh.userData.maskKey = `cosmetic:${data.path.toLowerCase()}/${partIndex}/${sub.meshes.indexOf(m)}`;
+          this.maskMesh(mesh);
           this.cosmeticGroup.add(mesh);
         }
       }
