@@ -11,12 +11,3 @@ test("the ones that show a character are not", () => {
   for (const name of ["stand_PRIMARY", "run_MELEE", "taunt03", "Crouch_SECONDARY", "ref", "jump_float_melee", "layer_taunt03", "stand_MELEE_ALLCLASS", "Attack_Stand_MELEE", "latest_taunt", "airwalk_PRIMARY", "stand_MELEE", "run_MELEE", "Melee_idle"]) assert.equal(isJunkSequence(name), false, name);
 });
 
-test("a sequence's weapon slot comes from its name; taunts and idles have none", async () => {
-  const { sequenceSlot } = await import("../src/viewer/sequenceFilter.ts");
-  assert.equal(sequenceSlot("stand_PRIMARY"), "primary");
-  assert.equal(sequenceSlot("run_MELEE_ALLCLASS"), "melee");
-  assert.equal(sequenceSlot("competitive_winnerstate_idle_SECONDARY"), "secondary");
-  assert.equal(sequenceSlot("PDA_stand"), "pda");
-  assert.equal(sequenceSlot("taunt_primary_fire"), null);
-  assert.equal(sequenceSlot("selectionMenu_Idle"), null);
-});

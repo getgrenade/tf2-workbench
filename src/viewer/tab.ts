@@ -66,7 +66,8 @@ import { DEFAULT_CHART, DEFAULT_TEXT, LINEUP_SPACING, PROMO_FOV, aimDirection, l
 import { boardShotEffects, showBoard, type BoardHost } from "./promoBoard";
 import { forgetBoard, loadBoards, saveBoard, type Written } from "./promoStore";
 import type { PaintChartOpts } from "./viewer";
-import { isJunkSequence, sequenceSlot } from "./sequenceFilter";
+import { isJunkSequence } from "./sequenceFilter";
+import { weaponForSequence } from "./sequenceWeapon";
 import { paramsToSetup } from "../compiler/jiggleBones";
 import { turnTowards } from "../compiler/boneAxes";
 import type { JiggleParams } from "./jiggle";
@@ -595,16 +596,15 @@ export function createViewTab(els: Els) {
     if (e) void holdForSequence(e, sequence);
   });
   /**
-   * A sequence picked from the list that is played with a weapon (stand_PRIMARY, run_MELEE, a competitive pose of a slot) puts the class's
-   * stock weapon of that slot in the hands when they are empty; it is the character's until another sequence is picked (one of another slot
+   * With Settings → Hold a weapon for weapon animations on, a sequence picked from the list that is played with a weapon (stand_PRIMARY,
+   * run_MELEE_ALLCLASS, a competitive pose) puts the weapon of its animation set (see sequenceWeapon.ts) in the hands when they are empty; it is the character's until another sequence is picked (one of another slot
    * swaps it for that slot's, one of none puts it away). A weapon picked by hand is never touched, and picking one ends the stand-in.
    */
   async function holdForSequence(e: Entity, sequence: string) {
-    if (isBuildingCls(e.cls) || (e.held && !e.autoHeld)) return;
+    if (!settings().autoStockWeapon || isBuildingCls(e.cls) || (e.held && !e.autoHeld)) return;
     const game = gameClassOf(e.cls);
-    const slot = sequenceSlot(sequence);
     const db = await loadItemDb();
-    const stock = slot ? db.weapons.find((w) => w.baseItem && itemUsableBy(w, game) && slotForClass(w, game) === slot) ?? null : null;
+    const stock = weaponForSequence(db.weapons, sequence, game);
     if ((stock?.id ?? null) === (e.held?.id ?? null)) return;
     if (e.held && !e.autoHeld) return; // (a weapon was picked by hand while the catalog loaded)
     e.held = stock;

@@ -14,6 +14,8 @@ pub struct Settings {
     pub match_hlmv_colors: bool,
     /// Picking a weapon switches the animation to the matching `stand_*` sequence (on by default).
     pub auto_weapon_animation: bool,
+    /// Picking a weapon animation from the list with empty hands holds a weapon that plays it (off by default).
+    pub auto_stock_weapon: bool,
     /// Ease camera movement and navigation-axis transitions (on by default).
     pub camera_smoothing: bool,
     /// Leaving a camera's view puts the viewport back exactly where it was before (position, rotation, field of view) instead of
@@ -63,6 +65,7 @@ impl Default for Settings {
         Settings {
             match_hlmv_colors: true,
             auto_weapon_animation: true,
+            auto_stock_weapon: false,
             camera_smoothing: true,
             restore_viewport_on_camera_exit: false,
             play_hit_reactions: true,
