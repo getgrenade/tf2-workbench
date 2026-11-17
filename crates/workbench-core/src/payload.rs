@@ -479,6 +479,11 @@ struct ItemJson<'a> {
     particles: Vec<ParticleJson<'a>>,
     medal: bool,
     quality: &'a str,
+    /// The localized item type and description (what the search looks in besides the name).
+    #[serde(skip_serializing_if = "str::is_empty")]
+    type_name: &'a str,
+    #[serde(skip_serializing_if = "str::is_empty")]
+    description: &'a str,
     taunt_scenes: &'a std::collections::BTreeMap<String, String>,
     taunt_prop_scenes: &'a std::collections::BTreeMap<String, String>,
     taunt_scene_paths: &'a std::collections::BTreeMap<String, String>,
@@ -534,6 +539,8 @@ fn item_json(i: &source_formats::items::Item) -> ItemJson<'_> {
         particles: i.particles.iter().map(|p| ParticleJson { effect: p.effect, system: p.system.as_deref(), attachment: p.attachment.as_deref() }).collect(),
         medal: i.is_medal(),
         quality: &i.quality,
+        type_name: &i.type_name,
+        description: &i.description,
         taunt_scenes: &i.taunt_scenes,
         taunt_prop_scenes: &i.taunt_prop_scenes,
         taunt_scene_paths: &i.taunt_scene_paths,

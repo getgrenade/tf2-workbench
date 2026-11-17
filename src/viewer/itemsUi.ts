@@ -1,5 +1,6 @@
 import { showContextMenu } from "./contextMenu";
 import { loadItemDb, reloadItemDb } from "./itemCatalog";
+import { itemMatches } from "./itemSearch";
 import { itemIcon } from "./itemIcons";
 import { createBrowserSort, createBrowserView, makeTile, setTileImage } from "./browserView";
 import { itemImageFor, itemUsableBy, newestFirst, styleLabel, type ItemDb, type ItemInfo, type PaintInfo } from "./payload";
@@ -448,7 +449,7 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
     const base = db.items.filter((i) => all.every((c) => itemUsableBy(i, c)) && (showMedals || !i.medal) && (shownScope === "workshop" ? i.workshop : !i.workshop && (shownScope === "solo" ? isSolo(i) : !isSolo(i))));
     renderRegions(base);
     const matches = base
-      .filter((i) => (!region || i.equipRegions.includes(region)) && (!q || i.displayName.toLowerCase().includes(q) || i.name.toLowerCase().includes(q)))
+      .filter((i) => (!region || i.equipRegions.includes(region)) && (!q || itemMatches(i, q)))
       .sort(SORTS[sorter.order()]);
     iconObserver?.disconnect();
     iconObserver = new IntersectionObserver(

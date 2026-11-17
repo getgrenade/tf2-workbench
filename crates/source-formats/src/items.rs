@@ -82,6 +82,9 @@ pub struct Item {
     pub quality: String,
     /// `item_type_name` token (e.g. `#TF_Wearable_CommunityMedal`), lowercased without the `#`.
     pub type_token: String,
+    /// The localized item type ("Hat", "Cosmetic Robot") and description, as the backpack shows them; empty when the install has no text.
+    pub type_name: String,
+    pub description: String,
     /// `prefab` names the item was declared with (lowercased), before resolution.
     pub prefabs: Vec<String>,
     /// Taunts only: class -> the player's intro scene file name without folder or extension (`taunt_brutalLegend`), which is
@@ -373,6 +376,8 @@ fn build_item(id: u32, nodes: &[Node], names: &HashMap<String, String>) -> Item 
         bodygroups,
         equip_regions,
         type_token: get_str(nodes, "item_type_name").unwrap_or("").trim_start_matches('#').to_ascii_lowercase(),
+        type_name: localized(nodes, "item_type_name", names),
+        description: localized(nodes, "item_description", names),
         prefabs: Vec::new(),
         taunt_scenes: BTreeMap::new(),
         taunt_prop_scenes: BTreeMap::new(),
@@ -414,6 +419,16 @@ fn item_particles(nodes: &[Node]) -> Vec<ItemParticle> {
         }
     }
     out
+}
+
+/// The text of a localized field (`item_type_name`, `item_description`): the install's text for its `#token`, or the field itself when it is
+/// not a token; empty when neither.
+fn localized(nodes: &[Node], field: &str, names: &HashMap<String, String>) -> String {
+    let Some(t) = get_str(nodes, field).map(str::trim).filter(|t| !t.is_empty()) else { return String::new() };
+    match t.strip_prefix('#') {
+        Some(key) => names.get(&key.to_ascii_lowercase()).cloned().unwrap_or_default(),
+        None => t.to_string(),
+    }
 }
 
 /// Whether an item's `attributes` / `static_attrs` block has an attribute of this class that is not zero.

@@ -314,6 +314,9 @@ export interface ItemInfo {
   medal: boolean;
   /** Definition quality (`unique`, `vintage`, `selfmade`, ...), lowercase. */
   quality: string;
+  /** The localized item type ("Hat", "Cosmetic Robot") and description, as the backpack shows them. */
+  typeName?: string;
+  description?: string;
   /** Taunts only: class -> the player's taunt scene name (the sequence it plays). */
   tauntScenes: Record<string, string>;
   /** Taunts only: class -> the prop's own scene name. */
