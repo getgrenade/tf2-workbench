@@ -29,6 +29,7 @@ import { applyHandFile, parsePoseFile, poseForSkeleton, toHandFile, toPoseFile, 
 import * as THREE from "three";
 import { createItemsUi, TEMPORARY_ITEM, type Equipped, type ItemsEls } from "./itemsUi";
 import { unpackRgb } from "./proxies";
+import { spellPaints } from "./spellPaints";
 import { PlayController } from "./play";
 import { createNavGizmo } from "./navGizmo";
 import { createBrowserSort, createBrowserView, makeTile, setTileImage } from "./browserView";
@@ -837,7 +838,7 @@ export function createViewTab(els: Els) {
     }
     const everything: Equipped[] = weapon ? [...loadout, { item: weapon, paint: null, style: 0 }] : loadout;
     /** Loads a model (cached) and its materials for a skin family, then adds it to the bonemerged list. */
-    const add = async (path: string, rgb: number | null, skin: number, clip: ClipData | null = null, itemId?: number, idle = false, loop = false, material?: string) => {
+    const add = async (path: string, rgb: number | null, skin: number, clip: ClipData | null = null, itemId?: number, idle = false, loop = false, material?: string, spell?: number) => {
       let data = models.get(path);
       if (!data) {
         try {
@@ -852,7 +853,7 @@ export function createViewTab(els: Els) {
       if (e.lod > 0) data = await modelAtLod(path, e.lod).catch(() => data!);
       if (material) await loadMaterials([material]);
       else await ensureMaterials(data!, skin);
-      list.push({ data: data!, paint: rgb === null ? null : unpackRgb(rgb), skin, clip, itemId, idle, loop, material });
+      list.push({ data: data!, paint: rgb === null ? null : unpackRgb(rgb), skin, clip, itemId, idle, loop, material, ...(spell !== undefined ? { spell: { index: spell, blu: team === 1 } } : {}) });
     };
     let prop: { data: ModelData; skin: number; clip: ClipData | null } | null = null;
     for (const { item: it, paint, style, skin: forced } of everything) {
@@ -896,7 +897,7 @@ export function createViewTab(els: Els) {
       if (!weaponClip && it !== weapon && animation) { weaponClip = await cosmeticSequenceClip(path, animation); loop = !!weaponClip; }
       if (!weaponClip && it !== weapon) { weaponClip = await cosmeticIdleClip(path, e.cls); idle = !!weaponClip; }
       // an item drawn in one material of its own whatever its model says (the Golden Wrench's gold)
-      await add(path, rgb, skin, weaponClip, it.id, idle, loop, itemMaterialOverride(it) ?? undefined);
+      await add(path, rgb, skin, weaponClip, it.id, idle, loop, itemMaterialOverride(it) ?? undefined, paint?.spell);
       if (it === weapon && list.length) list[list.length - 1].weapon = true;
       // Models that travel with the item (a weapon's backpack, an attached part) share its paint and skin.
       for (const extra of it.extraModels ?? []) await add(extra, rgb, skin, null, it.id);
@@ -5310,7 +5311,7 @@ export function createViewTab(els: Els) {
     await ensureClass(e, spec);
     const db = await loadItemDb();
     const byId = new Map([...db.items, ...db.weapons, ...db.taunts].map((i) => [i.id, i] as const));
-    const paints = new Map(db.paints.map((p) => [p.id, p] as const));
+    const paints = new Map([...db.paints, ...spellPaints()].map((p) => [p.id, p] as const));
     const loadout: Equipped[] = spec.loadout.flatMap((x) => {
       const item = byId.get(x.item);
       return item ? [{ item, paint: x.paint !== null ? paints.get(x.paint) ?? null : null, style: x.style }] : [];
@@ -6501,7 +6502,7 @@ export function createViewTab(els: Els) {
     const db = await loadItemDb();
     const byId = new Map<number, ItemInfo>();
     for (const it of [...db.items, ...db.weapons, ...db.taunts]) byId.set(it.id, it);
-    return { byId, paints: new Map(db.paints.map((p) => [p.id, p])) };
+    return { byId, paints: new Map([...db.paints, ...spellPaints()].map((p) => [p.id, p])) };
   }
 
   /** A character, prop or building as a saved scene has it (its model is shown by `showSaved`). */

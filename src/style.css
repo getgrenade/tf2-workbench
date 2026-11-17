@@ -1499,3 +1499,9 @@ body.dndActive.dndRefused * { cursor: no-drop !important; }
 .paintMenu .paintSkin span { margin-right: auto; }
 .paintMenu .paintSkin button { height: 22px; padding: 0 10px; font-size: var(--ui-fs-small); }
 .paintMenu .paintSkin button.on { background: var(--ui-accent-soft); border-color: var(--ui-accent-line); color: var(--fg); }
+
+/* the Halloween spell paints of the paint chart: a row of their own under the paint cans, each swatch its colour cycle in a ring */
+.paintMenu .paintSpellHead { margin: 8px 0 4px; font-size: var(--ui-fs-micro); text-transform: uppercase; letter-spacing: .06em; color: #b98cff; text-align: center; }
+.paintMenu .palette.spells { display: flex; justify-content: center; gap: 6px; }
+.swatch.spell { border-radius: 50%; box-shadow: 0 0 0 1px #8650ac, 0 0 6px rgba(134, 80, 172, 0.8); }
+.swatch.spell.sel { box-shadow: 0 0 0 2px var(--accent), 0 0 8px rgba(134, 80, 172, 0.9); }

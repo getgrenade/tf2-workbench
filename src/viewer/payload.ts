@@ -335,6 +335,8 @@ export interface PaintInfo {
   rgb: number;
   /** BLU colour of team-colour paints. */
   rgb2: number | null;
+  /** A Halloween spell paint (see spellPaints.ts): its colour moves through a cycle; `rgb` / `rgb2` are where the cycle starts. */
+  spell?: number;
 }
 
 export interface ItemDb {

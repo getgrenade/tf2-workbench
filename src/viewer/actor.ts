@@ -82,6 +82,8 @@ export interface CosmeticSpec {
   weapon?: boolean;
   /** One material every mesh of the model is drawn with, in either team (an item's `material_override`: the Golden Wrench's gold). */
   material?: string;
+  /** A Halloween spell paint: the paint follows its colour cycle (`paint` is where it starts). */
+  spell?: { index: number; blu: boolean };
 }
 
 /** What an entity needs from the viewer it lives in. */
@@ -840,9 +842,9 @@ export class Actor {
     for (const group of [this.classGroup, this.cosmeticGroup]) {
       group?.traverse((o) => {
         if (!(o instanceof THREE.SkinnedMesh)) return;
-        const source = o.userData.source as { data: MaterialData | null; paint: Rgb | null } | undefined;
+        const source = o.userData.source as { data: MaterialData | null; paint: Rgb | null; spell?: [number, number] } | undefined;
         if (!source) return;
-        const next = uber ?? this.ctx.mats.material(source.data, undefined, source.paint, fx);
+        const next = uber ?? this.ctx.mats.material(source.data, undefined, source.paint, source.spell ? { ...fx, spell: source.spell } : fx);
         // a body in grey stays grey: what the conditions make of it shows when the grey is taken off
         if (this.gray && o.userData.ownMaterial) { o.userData.ownMaterial = next; return; }
         if (o.material !== next) o.material = next;
@@ -955,9 +957,11 @@ export class Actor {
           if (m.indices.length === 0) continue;
           const override = list[index].material;
           const path = override ?? m.materials[skin] ?? m.material;
-          const material = this.ctx.mats.material(this.materials.get(path) ?? null, undefined, paint);
+          const spell = list[index].spell;
+          const spellFx = spell ? { spell: [spell.index, spell.blu ? 1 : 0] as [number, number] } : undefined;
+          const material = this.ctx.mats.material(this.materials.get(path) ?? null, undefined, paint, spellFx);
           const mesh = this.makeSkinnedMesh(m, material, skeleton, data, this.flexCosmetic);
-          mesh.userData.source = { data: this.materials.get(path) ?? null, paint, skins: override ? [override] : m.materials, base: override ?? m.material };
+          mesh.userData.source = { data: this.materials.get(path) ?? null, paint, skins: override ? [override] : m.materials, base: override ?? m.material, spell: spellFx?.spell };
           mesh.userData.cosmeticSlot = index + 1; // 1.. in the order of the list; 0 / unset is the class's own mesh
           this.cosmeticGroup.add(mesh);
         }

@@ -1,6 +1,7 @@
 import { showContextMenu } from "./contextMenu";
 import { loadItemDb, reloadItemDb } from "./itemCatalog";
 import { itemMatches } from "./itemSearch";
+import { spellPaints, spellSwatch } from "./spellPaints";
 import { itemIcon } from "./itemIcons";
 import { createBrowserSort, createBrowserView, makeTile, setTileImage } from "./browserView";
 import { itemImageFor, itemUsableBy, newestFirst, styleLabel, type ItemDb, type ItemInfo, type PaintInfo } from "./payload";
@@ -106,6 +107,7 @@ const hex = (packed: number) => `#${packed.toString(16).padStart(6, "0")}`;
 
 /** The fill of a paint's swatch: its colour, or for a team paint (Team Spirit ...) RED and BLU split along the diagonal. */
 function paintFill(paint: PaintInfo): string {
+  if (paint.spell !== undefined) return spellSwatch(paint.spell);
   if (paint.rgb2 === undefined || paint.rgb2 === null || paint.rgb2 === paint.rgb) return hex(paint.rgb);
   return `linear-gradient(to top right, ${hex(paint.rgb)} 50%, ${hex(paint.rgb2)} 50%)`;
 }
@@ -398,9 +400,9 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
     palette.className = "palette";
     const swatch = (paint: PaintInfo | null) => {
       const b = document.createElement("button");
-      b.className = "swatch" + (paint === null ? " none" : "") + (same && (paintable[0].paint?.id ?? null) === (paint?.id ?? null) ? " sel" : "");
+      b.className = "swatch" + (paint === null ? " none" : "") + (paint?.spell !== undefined ? " spell" : "") + (same && (paintable[0].paint?.id ?? null) === (paint?.id ?? null) ? " sel" : "");
       if (paint) b.style.background = paintFill(paint);
-      b.title = paint ? paint.displayName : "No paint";
+      b.title = paint ? (paint.spell !== undefined ? `Halloween spell: ${paint.displayName} (its colour moves)` : paint.displayName) : "No paint";
       b.textContent = paint ? "" : "✕";
       b.onclick = () => {
         for (const e of paintable) e.paint = paint;
@@ -428,6 +430,14 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
     palette.style.justifyContent = "center";
     menu.style.width = `${cols * 22 + 14}px`;
     menu.appendChild(palette);
+    // the Halloween spell paints, apart from the paint cans: their colour moves through a cycle
+    const spellHead = document.createElement("div");
+    spellHead.className = "paintSpellHead";
+    spellHead.textContent = "Halloween spells";
+    const spells = document.createElement("div");
+    spells.className = "palette spells";
+    for (const p of spellPaints()) spells.appendChild(swatch(p));
+    menu.append(spellHead, spells);
   }
 
   function renderList() {
