@@ -656,7 +656,8 @@ export class CompilerSession {
     const color = team === 1 && this.blueIsOwn(material) ? `${base}_blue_color` : has(m?.color) || placeholder ? `${base}_color` : undefined;
     return {
       color,
-      normal: has(m?.normal) && m?.settings.envmapMask !== "$basealphaenvmapmask" ? `${base}_normal` : undefined,
+      // (kept with a reflection masked by the diffuse alpha too: the engine reads the mask from the base alpha with a bump map as well)
+      normal: has(m?.normal) ? `${base}_normal` : undefined,
       phongexponent: has(m?.phongexponent) ? `${base}_phongexponent` : undefined,
       illum: illum ? `${base}_illum` : undefined,
     };
