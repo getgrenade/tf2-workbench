@@ -39,6 +39,8 @@ export interface Settings {
   /** The size of the interface: 0 fits it to the screen (80 % on a 1080p screen, laid out for 1440p), otherwise a factor (0.5–2). */
   uiScale: number;
   uiAccent: string;
+  /** The font of the interface: "" its own, else one of the game's (`resource/tf2secondary.ttf`). */
+  uiFont: string;
   wireColor: string;
   wireOpacity: number;
   gridColor: string;

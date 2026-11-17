@@ -3,6 +3,7 @@ import { attachNumberDrag } from "./viewer/numberDrag";
 import { clearTauntCache, tauntCachePath } from "./api";
 import { loadSettings, onSettingsChange, settings as currentSettings, updateSetting, updateSettings } from "./settingsStore";
 import { DEFAULT_ACCENT, DEFAULT_BASE, normaliseAccent, normaliseBase } from "./theme";
+import { UI_FONTS } from "./uiFont";
 import { createHotkeysSection } from "./hotkeysUi";
 import { createRigSettings } from "./rig/rigSettings";
 
@@ -138,6 +139,17 @@ export async function createSettingsUi(root: HTMLElement) {
     return row("Interface size", "The size of the whole interface. The layout is made for a 1440p screen: Auto draws it at 80% on a 1080p one.", select);
   }
 
+  function fontRow(): HTMLElement {
+    const select = document.createElement("select");
+    for (const f of UI_FONTS) select.add(new Option(f.label, f.path));
+    select.value = UI_FONTS.some((f) => f.path === settings.uiFont) ? settings.uiFont : "";
+    select.onchange = async () => {
+      settings = { ...settings, uiFont: select.value };
+      try { await updateSetting("uiFont", select.value); } catch (e) { failed(e); }
+    };
+    return row("Font", "The font the interface is drawn in: its own, or one of Team Fortress 2's, read from your game files.", select);
+  }
+
   function screenshotRow(): HTMLElement {
     const select = document.createElement("select");
     for (const n of [1, 2, 4]) select.add(new Option(`${n}×`, String(n)));
@@ -181,7 +193,7 @@ export async function createSettingsUi(root: HTMLElement) {
 
   const builders: Record<SectionId, () => HTMLElement[]> = {
     general: () => [group("", ...toggles("general"))],
-    interface: () => [group("Size", scaleRow()), createThemeSection(), group("Display", ...toggles("interface"))],
+    interface: () => [group("Size", scaleRow()), group("Style", fontRow()), createThemeSection(), group("Display", ...toggles("interface"))],
     viewport: () => [group("Navigation", ...toggles("viewport").slice(0, 2), scrollRow()), group("Screenshots", screenshotRow(), ...toggles("viewport").slice(2))],
     hotkeys: () => [createHotkeysSection()],
     rigs: () => [createRigSettings()],

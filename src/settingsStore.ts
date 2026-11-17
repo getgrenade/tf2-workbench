@@ -17,6 +17,7 @@ export const DEFAULTS: Settings = {
   uiBase: "#222226",
   uiScale: 0,
   uiAccent: "#e08a3c",
+  uiFont: "",
   wireColor: "#b7d2be",
   wireOpacity: 0.1,
   gridColor: "#5fab60",

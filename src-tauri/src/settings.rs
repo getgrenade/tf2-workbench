@@ -37,6 +37,8 @@ pub struct Settings {
     /// The size of the interface: 0 fits it to the screen (the layout is made for 1440p), otherwise a factor (0.5–2).
     pub ui_scale: f32,
     pub ui_accent: String,
+    /// The font of the interface: "" its own, else one of the game's (`resource/tf2secondary.ttf`), read from the TF2 install.
+    pub ui_font: String,
     /// Interface colours of the 3D view: the wireframe overlay and the floor grid ("#rrggbb" display colours, opacities 0..1).
     pub wire_color: String,
     pub wire_opacity: f32,
@@ -71,6 +73,7 @@ impl Default for Settings {
             ui_base: "#222226".into(),
             ui_scale: 0.0,
             ui_accent: "#e08a3c".into(),
+            ui_font: String::new(),
             wire_color: "#b7d2be".into(),
             wire_opacity: 0.1,
             grid_color: "#5fab60".into(),
