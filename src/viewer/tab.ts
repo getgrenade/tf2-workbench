@@ -1,5 +1,5 @@
 import { icon as svgIcon, ICONS as LUCIDE, type IconName } from "../icons";
-import { shadowLayer, shadowOf, solidOf, type ShotEffects } from "./promo";
+import { shadowLayer, shadowOf, shotRegions, solidOf, type ShotEffects } from "./promo";
 import { partsOf } from "./promoMask";
 import { picturePsd } from "./promoPsd";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -303,6 +303,8 @@ interface Entity {
   voicePicks?: Map<string, number>;
   /** A voice line the browser put on the face (its name); the animation's scene waits until it is let go. */
   faceVoiceLine?: string;
+  /** The held weapon is held but not drawn (a promo shot's Models: see ShotSpec.weaponHidden). */
+  weaponHidden?: boolean;
 }
 
 /** The "Viewer" tab: class picker, light controls and the 3D view. */
@@ -835,7 +837,8 @@ export function createViewTab(els: Els) {
         return;
       }
     }
-    const everything: Equipped[] = weapon ? [...loadout, { item: weapon, paint: null, style: 0 }] : loadout;
+    // (a promo shot's weapon can be held for its pose and not drawn: see ShotSpec.weaponHidden)
+    const everything: Equipped[] = weapon && !e.weaponHidden ? [...loadout, { item: weapon, paint: null, style: 0 }] : loadout;
     /** Loads a model (cached) and its materials for a skin family, then adds it to the bonemerged list. */
     const add = async (path: string, rgb: number | null, skin: number, clip: ClipData | null = null, itemId?: number, idle = false, loop = false, material?: string) => {
       let data = models.get(path);
@@ -5313,13 +5316,14 @@ export function createViewTab(els: Els) {
     const paints = new Map(db.paints.map((p) => [p.id, p] as const));
     const loadout: Equipped[] = spec.loadout.flatMap((x) => {
       const item = byId.get(x.item);
-      return item ? [{ item, paint: x.paint !== null ? paints.get(x.paint) ?? null : null, style: x.style }] : [];
+      return item ? [{ item, paint: x.paint !== null ? paints.get(x.paint) ?? null : null, style: x.style, ...(x.hidden ? { hidden: true } : {}) }] : [];
     });
     const dress = dressKey(spec);
     if (promo().dressed.get(spec.role) !== dress) {
       // the bodygroups set by hand in this shot, over what its cosmetics set (as the Bodygroups of the character's properties)
       e.bodyManual = new Map(Object.entries(spec.bodygroups ?? {}));
-      await promoDress(e, loadout, spec.weapon !== null ? byId.get(spec.weapon) ?? null : null, spec.regions, teamOf(spec));
+      e.weaponHidden = !!spec.weaponHidden;
+      await promoDress(e, loadout, spec.weapon !== null ? byId.get(spec.weapon) ?? null : null, shotRegions(spec), teamOf(spec));
       // the pose it holds, when it is not the weapon's idle
       if (spec.pose) {
         e.actor.usePose({ pos: Float32Array.from(spec.pose.pos), quat: Float32Array.from(spec.pose.quat), scale: spec.pose.scale ? Float32Array.from(spec.pose.scale) : undefined });
@@ -5402,7 +5406,7 @@ export function createViewTab(els: Els) {
   const teamOf = (spec: ShotSpec) => spec.team ?? (spec.role === 1 ? 1 : 0);
   /** What a shot's character wears, holds, its team and how it stands, as a key (the character is dressed again only when it changes). */
   const dressKey = (spec: ShotSpec) =>
-    JSON.stringify([spec.cls ?? null, spec.loadout.map((x) => [x.item, x.paint, x.style]), spec.weapon, spec.regions, spec.bodygroups ?? null, teamOf(spec), spec.pose ? spec.pose.quat.slice(0, 64).map((q) => Math.round(q * 1e4)) : null, spec.flex ?? null]);
+    JSON.stringify([spec.cls ?? null, spec.loadout.map((x) => [x.item, x.paint, x.style, !!x.hidden]), spec.weapon, !!spec.weaponHidden, shotRegions(spec), spec.bodygroups ?? null, teamOf(spec), spec.pose ? spec.pose.quat.slice(0, 64).map((q) => Math.round(q * 1e4)) : null, spec.flex ?? null]);
 
   /**
    * Gives a shot a random pose, as the random loadouts do: a taunt (held) or an animation, half the time each, stopped on a frame where
@@ -5628,7 +5632,7 @@ export function createViewTab(els: Els) {
     if (id.startsWith("t")) {
       const taunt = db.taunts.find((t) => String(t.id) === id.slice(1));
       if (!taunt) return false;
-      if (e.held?.id !== taunt.id) await promoDress(e, e.items.loadout, taunt, spec.regions, teamOf(spec));
+      if (e.held?.id !== taunt.id) await promoDress(e, e.items.loadout, taunt, shotRegions(spec), teamOf(spec));
       playWeaponAnimation(e, taunt);
       spec.weapon = taunt.id;
     } else {
@@ -5641,7 +5645,7 @@ export function createViewTab(els: Els) {
       const slot = /primary|secondary|melee|pda|building/i.exec(seq.name)?.[0].toLowerCase();
       const held = choice?.kind === "anim" ? choice.weapon
         : (again !== null ? db.weapons.find((w) => w.id === again) : null) ?? (slot ? db.weapons.find((w) => w.baseItem && itemUsableBy(w, game) && slotForClass(w, game) === slot) ?? null : null);
-      if ((held?.id ?? null) !== (e.held?.id ?? null)) await promoDress(e, e.items.loadout, held, spec.regions, teamOf(spec));
+      if ((held?.id ?? null) !== (e.held?.id ?? null)) await promoDress(e, e.items.loadout, held, shotRegions(spec), teamOf(spec));
       spec.weapon = held?.id ?? null;
       const params = choice?.kind === "anim" ? choice.params : !choice && spec.poseOf?.id === id ? spec.poseOf.params : undefined;
       if (params) {
@@ -5690,7 +5694,7 @@ export function createViewTab(els: Els) {
     if (of.id.startsWith("t")) {
       const taunt = db.taunts.find((t) => String(t.id) === of.id.slice(1));
       if (!taunt) return;
-      if (e.held?.id !== taunt.id) await promoDress(e, e.items.loadout, taunt, part.regions, teamOf(part));
+      if (e.held?.id !== taunt.id) await promoDress(e, e.items.loadout, taunt, shotRegions(part), teamOf(part));
       playWeaponAnimation(e, taunt);
     } else {
       const seq = e.anim.info?.sequences.find((q) => q.name === of.id.slice(1));
@@ -5835,7 +5839,7 @@ export function createViewTab(els: Els) {
   /** A character of a shot as it is in the view now: its class, team, loadout, weapon, bodygroups, pose and face. */
   function takePart(part: ShotSpec, e: Entity) {
     const game = gameClassOf(e.cls);
-    part.loadout = e.items.loadout.filter((x) => itemUsableBy(x.item, game)).map((x) => ({ item: x.item.id, name: x.item.displayName, paintable: x.item.paintable, paint: x.paint?.id ?? null, style: x.style }));
+    part.loadout = e.items.loadout.filter((x) => itemUsableBy(x.item, game)).map((x) => ({ item: x.item.id, name: x.item.displayName, paintable: x.item.paintable, paint: x.paint?.id ?? null, style: x.style, ...(x.hidden ? { hidden: true } : {}) }));
     part.weapon = e.held?.id ?? null;
     part.team = e.team;
     part.cls = e.cls === promo().cls ? undefined : e.cls; // a class picked in 3D
@@ -5916,7 +5920,7 @@ export function createViewTab(els: Els) {
     // (an item shown alone casts no shadow: it would float over one)
     spec.effects ??= structuredClone(boardShotEffects());
     // (nor does a shot whose own shadow is off: one that fades out, say)
-    const effects = spec.effects && (spec.regions || spec.noShadow) ? { ...spec.effects, shadow: { ...spec.effects.shadow, on: false } } : spec.effects;
+    const effects = spec.effects && (shotRegions(spec) || spec.noShadow) ? { ...spec.effects, shadow: { ...spec.effects.shadow, on: false } } : spec.effects;
     // (a drag's step keeps the framing the shot last had, as the camera window does: not fitted again, nor measured)
     return promoShot(e, shotDirection(spec), Math.round(spec.w * res), Math.round(spec.h * res), spec.fill, spec.scaleDistance, spec, true, effects, Array.isArray(e) || live ? undefined : focusBounds(e, spec), live, live);
   }
@@ -6171,6 +6175,10 @@ export function createViewTab(els: Els) {
     }),
     editIn3D: (l) => (l.shot ? editShotIn3D(l.shot) : Promise.resolve(false)),
     paints: async () => (await loadItemDb()).paints.map((p) => ({ id: p.id, name: p.displayName })),
+    itemName: async (id) => {
+      const db = await loadItemDb();
+      return [...db.weapons, ...db.taunts, ...db.items].find((i) => i.id === id)?.displayName ?? "";
+    },
     lightDirection: viewLightDirection,
     changed: () => { if (session) scheduleSave(session); },
     newSet: () => els.capture.promo.click(),

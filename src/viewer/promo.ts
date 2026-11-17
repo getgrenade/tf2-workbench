@@ -162,8 +162,12 @@ export interface ShotSpec extends ShotAim {
   /** The class (its model name, as `scout`); absent: the board's. */
   cls?: string;
   /** What it wears: item ids, paint ids (null: unpainted), styles; `name` and `paintable` for the board. */
-  loadout: { item: number; name: string; paintable: boolean; paint: number | null; style: number }[];
+  loadout: { item: number; name: string; paintable: boolean; paint: number | null; style: number; /** kept on it but not drawn (the layer's Models) */ hidden?: boolean }[];
   weapon: number | null;
+  /** The weapon is held (its pose stays) but not drawn (the layer's Models). */
+  weaponHidden?: boolean;
+  /** The character itself is not drawn, only what it wears and holds (the layer's Models). */
+  hidePlayer?: boolean;
   /** The team it is on (0 RED, 1 BLU); absent: RED, or BLU for the BLU role. */
   team?: number;
   /** The parts of the character shown (an item on its own); null: the whole character. */
@@ -238,6 +242,9 @@ export interface ShotSpec extends ShotAim {
 }
 
 /** How a paint chart was taken (the item on the promo scene's character `role`, in a style). */
+/** The parts of a shot's character that are drawn: none with the player hidden, else its regions (null: all of it). */
+export const shotRegions = (s: ShotSpec): string[] | null => (s.hidePlayer ? [] : s.regions);
+
 export interface ChartSpec extends ShotAim {
   role: number;
   /** The class wearing the item (a model name); absent: the board's. */
@@ -319,6 +326,8 @@ export interface PromoLayer {
   /** Turned (degrees, clockwise) about the middle of what is visible of it. */
   rotation?: number;
   /** A gradient that fades it out (see promoMask.ts). */
+  /** A shot's glow (see layerGlow): on or off whatever the board's Glow says; absent, the board's. */
+  glow?: boolean;
   mask?: LayerMask;
   /** How much of it shows (0..1); absent: all of it. */
   opacity?: number;
@@ -571,6 +580,17 @@ export interface Glow {
 
 export const DEFAULT_GLOW: Glow = { on: false, size: 22, strength: 0.55 };
 
+/**
+ * The glow a layer is drawn with: a shot's, by its own choice (on or off, at the board's size and strength) else the board's; none on
+ * the texts, the paint charts and the overlays.
+ */
+export function layerGlow(l: PromoLayer, look: { glow?: Glow }): Glow | null {
+  if (!l.shot) return null;
+  if (l.glow === false) return null;
+  if (l.glow === true) return look.glow ?? DEFAULT_GLOW;
+  return look.glow?.on ? look.glow : null;
+}
+
 /** HSL (degrees, percent) as "#rrggbb". */
 function hex(h: number, s: number, l: number): string {
   const S = s / 100, L = l / 100, a = S * Math.min(L, 1 - L);
@@ -793,7 +813,6 @@ export function renderPicture(canvas: HTMLCanvasElement, p: PromoPicture, look: 
   paintBackdrop(ctx, p.w, p.h, backdrop);
   // the border sits in the stack: the layers from `strokeAt` on are drawn over it
   const strokeAt = Math.min(p.strokeAt ?? p.layers.length, p.layers.length);
-  const glow = look.glow?.on ? look.glow : null;
   const turn = (c: CanvasRenderingContext2D, l: PromoLayer) => {
     if (!l.rotation) return;
     const [px, py] = layerPivot(l);
@@ -874,7 +893,8 @@ export function renderPicture(canvas: HTMLCanvasElement, p: PromoPicture, look: 
     if (l.opacity !== undefined) ctx.globalAlpha = Math.max(0, Math.min(1, l.opacity));
     if (l.blend && l.blend !== "source-over") ctx.globalCompositeOperation = l.blend;
     // the glow round a character or an item (the canvas's shadow is in its own pixels, not the picture's)
-    if (glow && l.shot) {
+    const glow = layerGlow(l, look);
+    if (glow) {
       ctx.shadowColor = `rgba(0,0,0,${glow.strength})`;
       ctx.shadowBlur = glow.size * (p.h / 1080) * scale;
     }

@@ -6,7 +6,7 @@
  */
 import { writePsd, type Layer } from "ag-psd";
 import { maskGrey, partsOf } from "./promoMask";
-import { cutCorners, layerPivot, layerRect, paintBackdrop, paintStroke, renderPicture, renderText, turnPoint, type BoardLook, type LayerBlend, type PromoLayer, type PromoPicture, type TextSpec } from "./promo";
+import { cutCorners, layerGlow, layerPivot, layerRect, paintBackdrop, paintStroke, renderPicture, renderText, turnPoint, type BoardLook, type LayerBlend, type PromoLayer, type PromoPicture, type TextSpec } from "./promo";
 
 /** The PostScript names of the text fonts, as Photoshop knows them (a font it lacks is swapped when the text is edited, not before). */
 const PSD_FONT: Record<string, string> = {
@@ -111,7 +111,6 @@ const PSD_BLEND: Record<LayerBlend, NonNullable<Layer["blendMode"]>> = {
 /** The PSD of a picture, as the board has it. */
 export async function picturePsd(p: PromoPicture, look: BoardLook): Promise<Uint8Array> {
   const backdrop = p.backdrop ?? look.backdrop;
-  const glow = look.glow?.on ? look.glow : null;
   // (round corners that are cut: the backdrop is cut round them; what is over it is left whole, to be masked in Photoshop as wanted)
   const children: Layer[] = [{ name: p.backdrop ? "Backdrop (its own)" : "Backdrop", canvas: full(p, (ctx) => { paintBackdrop(ctx, p.w, p.h, backdrop); cutCorners(ctx, p.w, p.h, look.stroke); }), left: 0, top: 0 }];
   const border = (): Layer => ({ name: "Border", hidden: !look.stroke.on, canvas: full(p, (ctx) => paintStroke(ctx, p.w, p.h, { ...look.stroke, on: true }, backdrop)), left: 0, top: 0 });
@@ -120,6 +119,7 @@ export async function picturePsd(p: PromoPicture, look: BoardLook): Promise<Uint
     if (i === strokeAt) children.push(border());
     if (l.text) { children.push(await typeLayer(l, l.text)); continue; }
     const { canvas, left, top } = placed(l, l.image);
+    const glow = layerGlow(l, look);
     children.push({
       name: l.name,
       hidden: l.hidden,
@@ -129,7 +129,7 @@ export async function picturePsd(p: PromoPicture, look: BoardLook): Promise<Uint
       mask: layerMask(l),
       opacity: l.opacity,
       blendMode: l.blend ? PSD_BLEND[l.blend] : undefined,
-      effects: glow && l.shot ? { outerGlow: { enabled: true, present: true, showInDialog: true, size: px(glow.size * (p.h / 1080)), color: { r: 0, g: 0, b: 0 }, blendMode: "multiply", opacity: glow.strength, source: "edge" } } : undefined,
+      effects: glow ? { outerGlow: { enabled: true, present: true, showInDialog: true, size: px(glow.size * (p.h / 1080)), color: { r: 0, g: 0, b: 0 }, blendMode: "multiply", opacity: glow.strength, source: "edge" } } : undefined,
     });
   }
   if (strokeAt >= p.layers.length) children.push(border());

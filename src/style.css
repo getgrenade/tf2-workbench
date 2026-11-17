@@ -1499,3 +1499,10 @@ body.dndActive.dndRefused * { cursor: no-drop !important; }
 .paintMenu .paintSkin span { margin-right: auto; }
 .paintMenu .paintSkin button { height: 22px; padding: 0 10px; font-size: var(--ui-fs-small); }
 .paintMenu .paintSkin button.on { background: var(--ui-accent-soft); border-color: var(--ui-accent-line); color: var(--fg); }
+
+/* a promo shot's Models: each drawn or not, and Only to picture one alone */
+.promoModels { display: flex; flex-direction: column; gap: 2px; margin-bottom: 6px; }
+.promoModelRow { display: flex; align-items: center; gap: 6px; }
+.promoModelRow label { flex: 1; display: flex; align-items: center; gap: 6px; min-width: 0; }
+.promoModelRow label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.promoModelRow button { padding: 1px 8px; font-size: var(--ui-fs-small); }
