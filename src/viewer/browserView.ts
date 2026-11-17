@@ -1,3 +1,4 @@
+import { EDITED_TITLE } from "./editedItems";
 import { icon } from "../icons";
 
 /** The thumbnails / list switch and the size slider of the cosmetics and weapons browsers, and the tiles they draw. */
@@ -126,7 +127,7 @@ export function createBrowserSort(bar: HTMLElement, key: string, fallback: Brows
 }
 
 /** One item of a browser: a picture, its name and a line under it (the list shows both; thumbnails show the name when large). */
-export function makeTile(opts: { title: string; quality: string; on: boolean; name: string; sub: string; paintable?: boolean }): HTMLElement {
+export function makeTile(opts: { title: string; quality: string; on: boolean; name: string; sub: string; paintable?: boolean; edited?: boolean }): HTMLElement {
   const tile = document.createElement("div");
   tile.className = "tile" + (opts.on ? " on" : "");
   tile.style.setProperty("--q", opts.quality);
@@ -143,7 +144,15 @@ export function makeTile(opts: { title: string; quality: string; on: boolean; na
   if (opts.paintable) {
     const paint = document.createElement("i");
     paint.className = "tilePaint";
+    paint.title = "Paintable";
     tile.append(paint);
+  }
+  if (opts.edited) {
+    const mark = document.createElement("i");
+    mark.className = "tileEdited";
+    mark.textContent = "!";
+    mark.title = EDITED_TITLE;
+    tile.append(mark);
   }
   return tile;
 }

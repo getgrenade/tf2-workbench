@@ -21,6 +21,7 @@ import type { FlexGlobals } from "./flex";
 import type { LipSync, PhonemeClasses, SceneData } from "./faceScene";
 import { loadVoice, setVoiceMuted, stopAll as stopVoices, voiceMuted } from "./voicePlayer";
 import { materialFromText, readMaterialText, readTextureFile } from "../api";
+import { editedItems } from "./editedItems";
 import { VmtEdits } from "./vmtEdits";
 import { editsFor, loadMaterialEdits, saveMaterialEdits } from "./materialEditsStore";
 import { listSequences, loadMaterial, loadModel, loadSession, prepareWorkshopTaunt, readTextFile, saveSession, rewriteModelFile, writeAdjustedModel, writeBinaryFile, writeTextFile, type WorkshopTaunt } from "../api";
@@ -2391,7 +2392,13 @@ export function createViewTab(els: Els) {
       vmts: [...savedEdits.vmts.filter((v) => untouched(v.path)), ...vmtEdits.paths().map((path) => ({ path, text: vmtEdits.text(path) ?? "" }))],
     };
     saveMaterialEdits(savedEdits);
+    markEditedItems();
   }
+  /** The items wearing an edited material get their "!" (also the ones whose saved edits are not loaded this run). */
+  function markEditedItems() {
+    editedItems.setEdited([...savedEdits.textures.map((t) => t.path), ...savedEdits.vmts.map((v) => v.path)]);
+  }
+  markEditedItems();
   /**
    * Puts a material's saved edits back as it is loaded: its edited VMT, then its replaced maps (each image read again from where it was
    * picked). An edit that cannot be made any more (the file is gone, the text no longer parses) is left out and forgotten.
@@ -2521,6 +2528,7 @@ export function createViewTab(els: Els) {
           }
         }
         if (list.length) items.push({ label, materials: list, id });
+        if (id?.startsWith("item:")) editedItems.learn(Number(id.slice(5)), list.map((x) => x.path));
       };
       // the character itself (its skin of the team it is on, or its zombie skin)
       // (by the character's own class name: the Demoman's model is demo.mdl, not the game class's demoman.mdl)
