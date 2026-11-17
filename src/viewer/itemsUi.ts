@@ -22,7 +22,10 @@ export interface ItemsEls {
   count: HTMLElement;
   /** The row under the list, which gets the thumbnails / list button and the size slider. */
   foot: HTMLElement;
+  /** Empties the search box. */
   clear: HTMLButtonElement;
+  /** Takes off every cosmetic (the locked ones stay on). */
+  removeAll: HTMLButtonElement;
 }
 
 /** An equipped cosmetic with its (optional) paint can. */
@@ -562,6 +565,11 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
     selectAllEquipped(r.left, r.bottom + 4);
   };
   els.clear.onclick = () => {
+    els.search.value = "";
+    renderList();
+    els.search.focus();
+  };
+  els.removeAll.onclick = () => {
     // the locked items stay on
     const locked = hooks.locked?.() ?? [];
     loadout = loadout.filter((e) => locked.includes(e.item.id));
