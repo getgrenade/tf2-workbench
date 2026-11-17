@@ -59,6 +59,17 @@ export class SourceMaterials {
     readonly shared: SharedUniforms,
   ) {}
 
+  /**
+   * Puts new pixels into a texture of a material wherever it is drawn (a replaced texture, see textureOverrides.ts). The image must have the
+   * size the texture was made with; a texture not made yet takes the material's own data when it is.
+   */
+  replaceTexture(path: string, slot: string, data: TextureData) {
+    const tex = this.textures.get(`${path}#${slot}`) as THREE.DataTexture | undefined;
+    if (!tex) return;
+    tex.image = { data: data.rgba, width: data.width, height: data.height };
+    tex.needsUpdate = true;
+  }
+
   texture(m: MaterialData, slot: string): THREE.Texture | null {
     const data = m.textures[slot];
     if (!data) return null;

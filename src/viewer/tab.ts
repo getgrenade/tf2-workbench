@@ -20,6 +20,7 @@ import { FaceDriver, type FaceLine } from "./faceDriver";
 import type { FlexGlobals } from "./flex";
 import type { LipSync, PhonemeClasses, SceneData } from "./faceScene";
 import { loadVoice, setVoiceMuted, stopAll as stopVoices, voiceMuted } from "./voicePlayer";
+import { readTextureFile } from "../api";
 import { listSequences, loadMaterial, loadModel, loadSession, prepareWorkshopTaunt, readTextFile, saveSession, rewriteModelFile, writeAdjustedModel, writeBinaryFile, writeTextFile, type WorkshopTaunt } from "../api";
 import { loadItemDb, workshopItemsAsZipped } from "./itemCatalog";
 import { openItemStyles } from "./workshopStyles";
@@ -57,6 +58,7 @@ import { countOf, newPostId, POST_KINDS, statesOf, type PostItem, type PostKind 
 import { entityHidden, isInside, newGroupName, parseGroups, withDescendants, type HierarchyGroup } from "./hierarchyTree";
 import { createBodyPicker } from "./bodyPicker";
 import { createTexturePreview, type PreviewItem } from "./texturePreview";
+import { decodeReplacement, REPLACEMENT_EXTENSIONS, TextureOverrides } from "./textureOverrides";
 import { closePaintChart, openPaintChart, type ChartCell } from "./paintChart";
 import { openRandomLoadout, regionLabel, rollLoadout, type LoadoutRule, type RollSettings } from "./randomLoadout";
 import { choosePose, NOT_A_POSE, NOT_ROLLED_TAUNT, rollFace, type PoseChoice, type PoseSource } from "./randomPose";
@@ -2365,9 +2367,30 @@ export function createViewTab(els: Els) {
       }, false)
     : null;
 
-  // --- the textures of the worn cosmetics (diffuse, normal, exponent mask) under the body groups ---
+  // --- the textures of the character and its worn cosmetics (every map of each material) under the body groups; any can be replaced ---
   const texHost = document.getElementById("texView");
-  const texPreview = texHost ? createTexturePreview(texHost) : null;
+  const textureOverrides = new TextureOverrides((path, slot, data) => viewer?.mats.replaceTexture(path, slot, data));
+  textureOverrides.onChange(() => refreshTextures());
+  const texPreview = texHost ? createTexturePreview(texHost, {
+    async replace(path, slot) {
+      const material = materials.get(path);
+      if (!material?.textures[slot]) return false;
+      const picked = await open({ multiple: false, directory: false, filters: [{ name: "Image", extensions: REPLACEMENT_EXTENSIONS }] });
+      if (typeof picked !== "string") return false;
+      try {
+        const image = await decodeReplacement(await readTextureFile(picked), picked);
+        textureOverrides.replace(material, slot, image, picked.split(/[\\/]/).pop() ?? picked);
+        return true;
+      } catch (error) {
+        els.items.count.textContent = `Could not use ${picked}: ${error instanceof Error ? error.message : String(error)}`;
+        return false;
+      }
+    },
+    reset(path, slot) { const material = materials.get(path); if (material) textureOverrides.reset(material, slot); },
+    resetAll() { textureOverrides.resetAll((path) => materials.get(path)); },
+    file: (path, slot) => textureOverrides.file(path, slot),
+    count: () => textureOverrides.size,
+  }) : null;
 
   function refreshTextures() {
     if (!texPreview) return;
@@ -2395,7 +2418,7 @@ export function createViewTab(els: Els) {
             let entry = seen.has(p) ? list.find((x) => x.path === p) : undefined;
             if (!entry) {
               seen.add(p);
-              entry = { path: p, textures: { base: mat.textures.base, bump: mat.textures.bump, exponent: mat.textures.exponent }, meshes: [] };
+              entry = { path: p, textures: { ...mat.textures }, meshes: [] };
               list.push(entry);
             }
             entry.meshes.push({ uvs: m.uvs, indices: m.indices });
@@ -2403,6 +2426,12 @@ export function createViewTab(els: Els) {
         }
         if (list.length) items.push({ label, materials: list });
       };
+      // the character itself (its skin of the team it is on, or its zombie skin)
+      const classData = models.get(classPath(cls));
+      if (classData) {
+        const skin = e.zombie ? zombieFamily(classData.skinCount, e.team) ?? e.team : e.team;
+        add(`${e.name ?? cls[0].toUpperCase() + cls.slice(1)} (character)`, classData, (m) => m.materials[skin] ?? m.material, (p) => materials.get(p));
+      }
       for (const { item, style } of e.applied) {
         const path = itemModelFor(item, cls, style);
         const data = path ? models.get(path) : undefined;

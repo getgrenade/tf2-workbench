@@ -525,7 +525,12 @@ td.n { text-align: right; font-variant-numeric: tabular-nums; }
 .texPick { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
 .texPick select[hidden] { display: none; }
 .texTabs, .texChans { display: flex; gap: var(--ui-2); }
+.texTabs { flex-wrap: wrap; }
 .texTabs button, .texChans button { flex: 1; padding: 2px 4px; font-size: var(--ui-fs-small); }
+.texTabs button { flex: 1 0 auto; }
+.texTabs button.edited { color: var(--ui-warn); }
+.texEdit { margin-top: 6px; gap: var(--ui-2); }
+.texEdit button { flex: 1; }
 .texTabs button.on, .texChans button.on { border-color: var(--accent); color: var(--accent); }
 .texChans { margin-top: 4px; }
 .texStage { margin-top: 6px; display: grid; place-items: center; min-height: 80px; background: repeating-conic-gradient(var(--ui-input) 0% 25%, var(--ui-panel) 0% 50%) 0 0 / 14px 14px; border: 1px solid var(--line); border-radius: var(--ui-radius); overflow: hidden; }
