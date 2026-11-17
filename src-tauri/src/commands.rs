@@ -1124,3 +1124,13 @@ pub async fn eval_poses(
 pub fn player_gibs(state:State<'_,AppState>,path:String)->Result<serde_json::Value,String>{let vpk=state.vpk()?;gib_definitions(&vpk,&path)}
 #[tauri::command]
 pub fn model_physics(state:State<'_,AppState>,path:String)->Result<serde_json::Value,String>{ let vpk=state.vpk()?; workbench_core::game::model_physics(&vpk,&path) }
+
+/// Opens a page of the app's releases on GitHub in the default browser (only those pages: the update check links there).
+#[tauri::command]
+pub fn open_release_page(url: String) -> Result<(), String> {
+    if !url.starts_with("https://github.com/getgrenade/tf2-workbench/") || url.contains(['"', ' ', '\n']) {
+        return Err("Not a release page of TF2 Workbench".into());
+    }
+    std::process::Command::new("explorer").arg(&url).spawn().map_err(|e| e.to_string())?;
+    Ok(())
+}

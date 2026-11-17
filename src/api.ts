@@ -294,3 +294,6 @@ export const modelPhysics=(path:string)=>invoke<ModelPhysics>("model_physics",{p
 export const findBlender = () => invoke<string[]>("find_blender");
 /** The rig of a .blend file as JSON, read with Blender in the background (`blender`: the executable, empty for the newest found). */
 export const exportBlendRig = (blend: string, blender: string) => invoke<string>("export_blend_rig", { blend, blender });
+
+/** Opens a page of the app's releases on GitHub in the default browser. */
+export const openReleasePage = (url: string) => invoke<void>("open_release_page", { url });
