@@ -9,3 +9,12 @@ const JUNK = /aimmatrix|gesture|reload|ragdoll|attack_?swim|attackstand|attackcr
 export function isJunkSequence(name: string): boolean {
   return JUNK.test(name);
 }
+
+/**
+ * The weapon slot a sequence is played with, by its name (stand_PRIMARY, run_MELEE_ALLCLASS, crouch_SECONDARY, competitive_winnerstate_PDA):
+ * primary, secondary, melee, pda or building; null for the ones played with no weapon in particular (taunts, the class's own idles).
+ */
+export function sequenceSlot(name: string): string | null {
+  if (/^(layer_)?taunt/i.test(name)) return null;
+  return /primary|secondary|melee|pda|building/i.exec(name)?.[0].toLowerCase() ?? null;
+}
