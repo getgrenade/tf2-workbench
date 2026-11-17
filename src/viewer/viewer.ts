@@ -165,6 +165,9 @@ export class Viewer {
   private readonly unusualEffects = new Map<Actor, { key: string; settings: UnusualSettings; effect: ActorEffects | null; pending: Promise<void> }>();
   /** The particles of the conditions a character is in (drips, flames), and the seconds left of the conditions Play mode applied. */
   private readonly conditionParticles = new ConditionParticles();
+  /** The particle systems of what the characters play (a taunt's events, the Shred Alert's lightning), on lanes of their own (see setTauntParticles). */
+  private readonly tauntParticles = new ConditionParticles();
+  private readonly tauntTokens = new Map<Actor, number>();
   /** Characters that are buildings: their particles are the building's (setBuildingFx), not those of player conditions. */
   private readonly buildingActors = new Set<Actor>();
   private readonly buildingTokens = new Map<Actor, number>();
@@ -831,6 +834,7 @@ void main() {
       if (!moved && this.reactions?.animating) moved = true;
       for (const entry of this.unusualEffects.values()) entry.effect?.step(dt, this.camera);
       this.conditionParticles.step(this.conditionsPaused && this.conditionTimers.size ? 0 : dt, this.camera);
+      this.tauntParticles.step(dt, this.camera);
       for (const screens of this.dispenserScreens.values()) screens.step(dt);
       if (this.conditionTimers.size && !this.conditionsPaused) this.stepConditions(dt);
       for (const effect of this.weaponEffectList()) effect.step(dt,this.camera);
@@ -942,6 +946,7 @@ void main() {
     effects.length = 0;
     for (const entry of this.unusualEffects.values()) if (entry.effect) effects.push(entry.effect);
     for (const lane of this.conditionParticles.all) effects.push(lane);
+    for (const lane of this.tauntParticles.all) effects.push(lane);
     for (const entry of this.weaponEffects.values()) if (entry.effect) effects.push(entry.effect);
     for (const list of this.storedWeaponEffects.values()) for (const effect of list) effects.push(effect);
     let wantDepth = false, wantColor = false;
@@ -1056,6 +1061,8 @@ void main() {
     this.actorList.splice(i, 1);
     this.clearUnusuals(actor);
     this.conditionParticles.forget(actor);
+    this.tauntParticles.forget(actor);
+    this.tauntTokens.delete(actor);
     this.conditionTokens.delete(actor);
     this.conditionTimers.delete(actor);
     this.buildingActors.delete(actor);
@@ -1082,6 +1089,8 @@ void main() {
     this.actorList.splice(i, 1);
     this.clearUnusuals(actor);
     this.conditionParticles.forget(actor);
+    this.tauntParticles.forget(actor);
+    this.tauntTokens.delete(actor);
     this.conditionTokens.delete(actor);
     this.conditionTimers.delete(actor);
     this.clearWeaponEffects(actor);
@@ -1212,6 +1221,42 @@ void main() {
         if (screens.team !== team) await screens.load(team);
       }
     }).catch((error) => console.error("Building effects unavailable", error));
+  }
+
+  /**
+   * Runs the particle systems of what a character plays (see tauntFx.ts): each at the class model's attachment it names or at the origin,
+   * following it or left where it started. A system it no longer has is let die out; one whose key changed (the taunt started over) starts again.
+   */
+  setTauntParticles(actor: Actor, running: { id: string; key: string; system: string; attachment: string | null; follow: boolean }[]) {
+    const token = (this.tauntTokens.get(actor) ?? 0) + 1;
+    this.tauntTokens.set(actor, token);
+    if (!running.length) { this.tauntParticles.sync(actor, []); return; }
+    const path = actor.particleModel?.path;
+    if (!path) return;
+    void loadParticleModel(path).then((model) => {
+      if (this.tauntTokens.get(actor) !== token || !this.actorList.includes(actor)) return;
+      const wants: LaneWant[] = [];
+      for (const p of running) {
+        const attachment = p.attachment ? model.attachments.find((a) => a.name.toLowerCase() === p.attachment!.toLowerCase()) : null;
+        if (p.attachment && !attachment) continue; // this model has no such attachment: the game would not start it either
+        const at = () => {
+          const frame = new THREE.Matrix4();
+          const bone = attachment ? actor.particleBoneFrame(attachment.bone) : null;
+          if (attachment && bone) frame.copy(bone).multiply(attachment.local);
+          return frame;
+        };
+        wants.push({ system: p.system, id: p.id, key: p.key, target: () => {
+          const start = p.follow ? null : at(); // a system that does not follow stays where it started
+          return { actor, cp: () => start ? start.clone() : at(), boxes: () => [] };
+        } });
+      }
+      this.tauntParticles.sync(actor, wants);
+    }).catch((error) => console.error("Taunt effects unavailable", error));
+  }
+
+  /** Builds lanes for a system ahead of the moment a taunt starts it (starting a helper takes longer than a frame). */
+  warmTauntParticles(systems: string[]) {
+    for (const system of new Set(systems)) this.tauntParticles.warm(system, 1);
   }
 
   private async conditionWants(actor: Actor): Promise<LaneWant[]> {
@@ -1926,6 +1971,7 @@ void main() {
   setModel(actor: Actor, data: ModelData, materials: Map<string, MaterialData | null>) {
     this.clearUnusuals(actor);
     this.conditionParticles.forget(actor);
+    this.tauntParticles.forget(actor);
     this.clearBuildingScreens(actor);
     actor.setModel(data, materials);
     this.frameAfterClip = !this.cameraPlaced; // only the very first model is framed on its animated pose
@@ -3568,6 +3614,7 @@ void main() {
     const groups: THREE.Object3D[] = [];
     for (const entry of this.unusualEffects.values()) if (entry.effect) groups.push(entry.effect.group);
     for (const lane of this.conditionParticles.all) groups.push(lane.group);
+    for (const lane of this.tauntParticles.all) groups.push(lane.group);
     for (const entry of this.weaponEffects.values()) if (entry.effect) groups.push(entry.effect.group);
     for (const list of this.storedWeaponEffects.values()) for (const effect of list) groups.push(effect.group);
     return groups;
@@ -3575,7 +3622,7 @@ void main() {
 
   /** Whether these characters have a particle effect on them now (smoke, a hat's effect, a weapon's, a condition's). */
   hasParticles(actors: Actor[]): boolean {
-    return actors.some((a) => !!this.unusualEffects.get(a)?.effect || !!this.weaponEffects.get(a)?.effect || (this.storedWeaponEffects.get(a)?.length ?? 0) > 0) || this.conditionParticles.all.length > 0;
+    return actors.some((a) => !!this.unusualEffects.get(a)?.effect || !!this.weaponEffects.get(a)?.effect || (this.storedWeaponEffects.get(a)?.length ?? 0) > 0) || this.conditionParticles.all.length > 0 || this.tauntParticles.busy > 0;
   }
 
   /** Runs `job` with the particle effects hidden: what measures the characters themselves (their silhouette), not the smoke round them. */
@@ -4164,6 +4211,7 @@ void main() {
     cancelAnimationFrame(this.raf);
     for (const actor of this.unusualEffects.keys()) this.clearUnusuals(actor);
     this.conditionParticles.dispose();
+    this.tauntParticles.dispose();
     for (const actor of [...this.dispenserScreens.keys()]) this.clearBuildingScreens(actor);
     for (const actor of new Set([...this.weaponEffects.keys(),...this.storedWeaponEffects.keys()])) this.clearWeaponEffects(actor);
     this.reactions?.reset();

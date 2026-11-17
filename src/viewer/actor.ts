@@ -1976,6 +1976,9 @@ export class Actor {
    */
   faceDriver: ((playback: Playback) => FlexGlobals | null) | null = null;
 
+  /** Runs every frame the clip plays: keeps what the character plays heard and seen in step with it (its taunt's sounds and particles, see tauntFx.ts). */
+  fxDriver: ((playback: Playback) => void) | null = null;
+
   /** Runs the face driver; whether the face changed. */
   private stepFace(): boolean {
     const globals = this.faceDriver?.(this.playback);
@@ -2003,6 +2006,7 @@ export class Actor {
       return faced;
     }
     pb.advance(dt);
+    this.fxDriver?.(pb);
     const faced = this.stepFace();
     if (pb.time === this.posedTime && pb.clip === this.posedClip && !this.hasJiggle) return faced;
     this.poseBones();
