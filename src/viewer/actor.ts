@@ -998,7 +998,16 @@ export class Actor {
    * it with null. `clip` is the prop's baked animation; without one the prop stays in its bind pose. The prop's clock is the class
    * animation's, so both start and loop together.
    */
+  /** The taunt prop shown (see setProp), as it was given. */
+  private propSpec: { data: ModelData; skin: number } | null = null;
+
+  /** Every model drawn with the character besides its own: its worn and held items as they were given (see setCosmetics), then its taunt prop. */
+  drawnModels(): { data: ModelData; skin: number; itemId?: number; weapon?: boolean; material?: string; prop?: boolean }[] {
+    return [...this.cosmeticList, ...(this.propSpec ? [{ ...this.propSpec, prop: true }] : [])];
+  }
+
   setProp(prop: { data: ModelData; skin: number; clip: ClipData | null } | null) {
+    this.propSpec = prop ? { data: prop.data, skin: prop.skin } : null;
     if (this.prop) {
       this.ctx.scene.remove(this.prop.group);
       this.disposeObject(this.prop.group);
