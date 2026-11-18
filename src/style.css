@@ -530,6 +530,11 @@ td.n { text-align: right; font-variant-numeric: tabular-nums; }
 .texTabs button { flex: 1 0 auto; }
 .texTabs button.edited { color: var(--ui-warn); }
 .texEdit { margin-top: 6px; gap: var(--ui-2); }
+/* the Model row: what the item is drawn as on a line of its own, then its buttons, as tall as their text needs */
+.panel .texModel { flex-wrap: wrap; align-items: stretch; gap: var(--ui-2); margin: 2px 0 8px; }
+.panel .texModel[hidden] { display: none; }
+.texModelFile { flex: 1 0 100%; font-size: var(--ui-fs-small); overflow-wrap: anywhere; }
+.texModel button { flex: 1 1 auto; height: auto; min-height: var(--ui-h); padding: 5px 10px; white-space: nowrap; }
 .texEdit button { flex: 1; }
 .texTabs button.on, .texChans button.on { border-color: var(--accent); color: var(--accent); }
 .texChans { margin-top: 4px; }
