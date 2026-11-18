@@ -297,6 +297,8 @@ export interface ItemInfo {
   image: string | null;
   /** Class bodygroup name -> model index (1 hides the class's own geometry). */
   bodygroups: Record<string, number>;
+  /** A body part of the wearer's model (by index) put in a state while it is held (the Short Circuit empties the Engineer's right arm). */
+  wmBodygroup?: [number, number];
   equipRegions: string[];
   paintable: boolean;
   /** Wearing the item puts the character in the zombie skin of the class model (the Voodoo-Cursed souls). */
