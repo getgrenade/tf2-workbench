@@ -35,17 +35,13 @@ export interface Equipped {
   hidden?: boolean;
   /** Worn in this team's skin (0 RED, 1 BLU) whatever the character's team; absent: the character's. */
   skin?: 0 | 1;
-  /**
-   * An item with a building pose of its own (the Hotrod): "down" always in it (the mask over the face), "up" never; absent: in it while
-   * the Engineer holds a blueprint or carries a building, as in game.
-   */
-  pose?: "up" | "down";
+  /** An item with a building pose of its own (the Hotrod): "down" puts it in that pose (the mask over the face); absent: its usual one. */
+  pose?: "down";
 }
 
 /** The choices of an item's building pose (see Equipped.pose). */
 const POSES: { value: Equipped["pose"]; label: string }[] = [
-  { value: undefined, label: "Auto" },
-  { value: "up", label: "Up" },
+  { value: undefined, label: "Up" },
   { value: "down", label: "Down" },
 ];
 const poseLabel = (pose: Equipped["pose"]) => POSES.find((p) => p.value === pose)!.label;
@@ -58,7 +54,7 @@ export interface ItemsHooks {
   /** An item was put on (or taken off) the displayed character: the other selected characters get the same. */
   toggled?: (item: ItemInfo, equip: boolean) => void;
   /** The paint or the style of equipped items was changed on the displayed character: the other selected characters that wear them get the same. */
-  restyled?: (changes: { item: number; paint?: PaintInfo | null; style?: number; hidden?: boolean; skin?: 0 | 1 | null; pose?: "up" | "down" | null }[]) => void;
+  restyled?: (changes: { item: number; paint?: PaintInfo | null; style?: number; hidden?: boolean; skin?: 0 | 1 | null; pose?: "down" | null }[]) => void;
   /** Everything was taken off the displayed character: the other selected characters lose theirs too. */
   cleared?: () => void;
   /** Called with the full loadout whenever it changes (items or paints). */
@@ -216,11 +212,11 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
         card.appendChild(btn);
       }
       if (e.item.buildActivity) {
-        // the Hotrod: its mask up or down (by default down while the Engineer builds, as in game)
+        // the Hotrod: its mask up or down over the Engineer's face
         const btn = document.createElement("button");
         btn.className = "styleBtn";
         btn.textContent = `Pose: ${poseLabel(e.pose)} ▾`;
-        btn.title = "Change pose (Auto: down while the Engineer holds a blueprint or carries a building)";
+        btn.title = "Change pose";
         btn.onclick = (ev) => {
           ev.stopPropagation();
           openPoseMenu(btn, e);

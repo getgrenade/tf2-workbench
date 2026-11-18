@@ -900,9 +900,8 @@ export function createViewTab(els: Els) {
       // while its wearer taunts, an item with a `playback_activity` plays that activity's sequence in step with the taunt (the Infernal
       // Orchestrina's drum turns), whichever taunt it is
       const tauntClip = it !== weapon && it.tauntActivity ? await cosmeticActivityClip(path, it.tauntActivity) : null;
-      // while its wearer holds a blueprint or carries a building, one with a `start_building` activity holds that pose (the Hotrod's mask
-      // flips down over the Engineer's face)
-      const buildClip = it !== weapon && it.buildActivity ? await cosmeticActivityClip(path, it.buildActivity, true) : null;
+      // an item with a `start_building` pose held in it by its Pose menu (the Hotrod's mask down over the Engineer's face)
+      const buildClip = it !== weapon && pose === "down" && it.buildActivity ? await cosmeticActivityClip(path, it.buildActivity, true) : null;
       // the items that play an animation of their own all the time: a sequence the game runs on its own clock (a style without it has none:
       // it is posed as the others are)
       if (!weaponClip && it !== weapon) { weaponClip = await cosmeticClockClip(path); loop = !!weaponClip; }
@@ -4699,10 +4698,6 @@ export function createViewTab(els: Els) {
     const heldTaunt = e.held?.slot === "taunt" && (e.held.tauntScenes[gameClassOf(e.cls)] ?? "").toLowerCase() === seqName;
     // a taunt: the held taunt's sequence, or one picked from the list (the class models name theirs taunt...)
     e.actor.setTaunting(seq >= 0 && (heldTaunt || seqName.startsWith("taunt") || seqName.startsWith("layer_taunt")));
-    // building: the builder (a blueprint) in hand, or the class playing a building sequence (stand_BUILDING, the carry's
-    // stand_BUILDING_DEPLOYED...), as the game's builder weapon starts its wearer's `start_building` animations when it is deployed
-    const heldBuilder = !!e.held && e.held.slot !== "taunt" && slotForClass(e.held, gameClassOf(e.cls)) === "building" && gameClassOf(e.cls) === "engineer";
-    e.actor.setBuilding(heldBuilder || (seq >= 0 && /(^|_)building(_|$)/.test(seqName)));
     if (!viewer || isBuildingCls(e.cls) || !path || seq < 0) return;
     const key = `${path}|${seq}`;
     let lookup = eventCache.get(key);

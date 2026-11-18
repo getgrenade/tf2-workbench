@@ -82,12 +82,12 @@ export interface CosmeticSpec {
    */
   tauntClip?: ClipData | null;
   /**
-   * What the item's model plays while its wearer holds a building's blueprint or carries one (`playback_activity` `start_building`: the
-   * Hotrod's mask flips down over the Engineer's face); the rest of the time `clip` poses it.
+   * The item's building pose (`playback_activity` `start_building`: the Hotrod's mask down over the Engineer's face), held in place of
+   * `clip` when `buildPose` is "down".
    */
   buildClip?: ClipData | null;
-  /** The building pose held ("down") or never shown ("up") whatever the character does; absent: while it builds. */
-  buildPose?: "up" | "down";
+  /** "down": the item is held in its building pose (see buildClip). */
+  buildPose?: "down";
   /** The item this model belongs to (what a click on it picks). */
   itemId?: number;
   /** The weapon the character holds. */
@@ -205,11 +205,9 @@ export class Actor {
   private flexGlobals: FlexGlobals = new Map();
   private flexClass: FlexMesh[] = [];
   private flexCosmetic: FlexMesh[] = [];
-  private cosmetics: { rig: Rig; bones: THREE.Bone[]; bindLocal: THREE.Matrix4[]; map: number[]; jiggles: (JiggleBone | null)[]; own: Playback | null; idle: boolean; loop: boolean; clock: number; taunt: Playback | null; build: Playback | null; buildAlways: boolean }[] = [];
+  private cosmetics: { rig: Rig; bones: THREE.Bone[]; bindLocal: THREE.Matrix4[]; map: number[]; jiggles: (JiggleBone | null)[]; own: Playback | null; idle: boolean; loop: boolean; clock: number; taunt: Playback | null; build: Playback | null }[] = [];
   /** The character plays a taunt: worn items with a taunt animation of their own play it (see CosmeticSpec.tauntClip). */
   private taunting = false;
-  /** The character holds a blueprint or carries a building: worn items with a building pose of their own show it (see CosmeticSpec.buildClip). */
-  private building = false;
   /** A manual aim (a turn about the bone's own axes, clamped to the bone's limits) on an overridden jiggle bone, keyed by lowercase name. */
   private boneAims = new Map<string, BoneTurn>();
   /** Jiggle bones whose rotation is overridden by hand (posed, held, not simulated), keyed by lowercase name; the jiggle inspector sets this. */
@@ -969,11 +967,11 @@ export class Actor {
         taunt.clip = tauntClip;
       }
       let build: Playback | null = null;
-      if (buildClip && buildPose !== "up") {
+      if (buildClip && buildPose === "down") {
         build = new Playback();
         build.clip = buildClip;
       }
-      this.cosmetics.push({ rig, bones, bindLocal, map, jiggles, own, idle: !!idle && !!own, loop: !!loop && !!own, clock: 0, taunt, build, buildAlways: buildPose === "down" });
+      this.cosmetics.push({ rig, bones, bindLocal, map, jiggles, own, idle: !!idle && !!own, loop: !!loop && !!own, clock: 0, taunt, build });
       for (const [partIndex, bp] of data.bodyParts.entries()) {
         const sub = (list[index].weapon && partIndex === 0 ? bp.models[this.heldBodyState] : null) ?? bp.models[0];
         if (!sub) continue;
@@ -1957,8 +1955,8 @@ export class Actor {
           const local = ownLocal(p.clip!, p.frame(), i, _cosLocal);
           if (c.rig.parents[i] >= 0) world[i].multiplyMatrices(world[c.rig.parents[i]], local);
           else world[i].copy(local);
-        } else if (c.build && (this.building || c.buildAlways)) {
-          // the item's pose while its wearer builds, held as the game holds it (the Hotrod's mask down while the Engineer carries a blueprint)
+        } else if (c.build) {
+          // the item held in its building pose (the Hotrod's mask down over the Engineer's face)
           const p = c.build;
           p.time = 0;
           const local = ownLocal(p.clip!, p.frame(), i, _cosLocal);
@@ -2016,14 +2014,6 @@ export class Actor {
    * values to show, or null when they did not change.
    */
   faceDriver: ((playback: Playback) => FlexGlobals | null) | null = null;
-
-  /** Whether the character holds a building's blueprint or carries a building now (the worn items' building poses show, see buildClip). */
-  setBuilding(on: boolean) {
-    if (this.building === on) return;
-    this.building = on;
-    this.updateCosmetics();
-    this.changed = true;
-  }
 
   /** Whether the character plays a taunt now (the worn items' taunt animations play with it). */
   setTaunting(on: boolean) {
