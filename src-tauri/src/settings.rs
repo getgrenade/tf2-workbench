@@ -14,7 +14,7 @@ pub struct Settings {
     pub match_hlmv_colors: bool,
     /// Picking a weapon switches the animation to the matching `stand_*` sequence (on by default).
     pub auto_weapon_animation: bool,
-    /// The robots' own cosmetics (Scoutbot Armor, the gate bots' lights) are left out of the Cosmetics list.
+    /// The robots' own items (Scoutbot Armor, the gate bots' lights, the Deflector) are left out of the Cosmetics and Weapons lists.
     pub hide_robot_items: bool,
     /// Ease camera movement and navigation-axis transitions (on by default).
     pub camera_smoothing: bool,
