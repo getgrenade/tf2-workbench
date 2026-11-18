@@ -34,7 +34,11 @@ export interface SceneEntity {
   activeItem: number | null;
   /** The held weapon or taunt. */
   held: number | null;
-  /** The held weapon's war paint. */
+  /** The war paint of each weapon the character has held, by item id. */
+  warPaints?: Record<string, { kit: number; wear: number; seed: string }>;
+  /** The weapon held as each class (by game class). */
+  heldByClass?: Record<string, number | null>;
+  /** (Older scenes: the held weapon's war paint.) */
   warPaint?: { kit: number; wear: number; seed: string };
   /** Flex controller values by name. */
   flex: Record<string, number>;

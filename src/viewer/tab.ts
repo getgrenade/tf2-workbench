@@ -254,8 +254,10 @@ interface AnimPreset {
 
 /** One character in the scene and everything the panels show for it. */
 interface Entity {
-  /** The held weapon's war paint (kept when the weapon changes: it shows again on a weapon it is made for). */
-  warPaint?: WarPaint | null;
+  /** The war paint of each weapon the character has held, by item id: each weapon keeps its own, whatever the others have. */
+  warPaints?: Map<number, WarPaint>;
+  /** The weapon held as each class (by game class; null: empty hands), so switching class and back brings the weapon back. */
+  heldByClass?: Map<string, number | null>;
   /** The war paint's skin on the held weapon now, with what it was made from. */
   warPaintSkin?: { key: string; tex: THREE.Texture } | null;
   /** Counts the war paint skins asked for, so a slower one never replaces a newer. */
@@ -972,7 +974,7 @@ export function createViewTab(els: Els) {
   /** What the held weapon's skin is made from now (null: none to show). */
   function warPaintKey(e: Entity): string | null {
     const weapon = e.held ? warPaintWeaponOf(e.held) : null;
-    const p = e.warPaint;
+    const p = e.held ? e.warPaints?.get(e.held.id) : undefined;
     return weapon && p ? `${p.kit}|${weapon}|${p.wear}|${e.team === 1 ? "BLU" : "RED"}|${p.seed}` : null;
   }
   /** Gives the held weapon its war paint's skin (made when it changed), or its own texture back. */
@@ -984,10 +986,11 @@ export function createViewTab(els: Els) {
     }
     const mine = (e.warPaintToken = (e.warPaintToken ?? 0) + 1);
     let tex: THREE.Texture | null = null;
-    if (key && e.held && e.warPaint) {
+    const paint = e.held ? e.warPaints?.get(e.held.id) : undefined;
+    if (key && e.held && paint) {
       try {
         const weapon = warPaintWeaponOf(e.held)!;
-        tex = await (await warPaintCompositor()).composite(weapon, e.warPaint, e.team === 1 ? "BLU" : "RED", seedOf(e.warPaint.seed));
+        tex = await (await warPaintCompositor()).composite(weapon, paint, e.team === 1 ? "BLU" : "RED", seedOf(paint.seed));
       } catch (err) {
         console.warn("could not paint the weapon:", err);
       }
@@ -1006,12 +1009,15 @@ export function createViewTab(els: Els) {
     if (e === selected) void warPaintUi.refresh();
   }
   const warPaintUi = createWarPaintUi(document.getElementById("warPaint") ?? document.createElement("div"), {
-    current: () => ({ weapon: selected?.held ? warPaintWeaponOf(selected.held) : null, paint: selected?.warPaint ?? null }),
+    current: () => ({ weapon: selected?.held ? warPaintWeaponOf(selected.held) : null, paint: (selected?.held && selected.warPaints?.get(selected.held.id)) || null }),
     kits: async (weapon) => [...(await warPaintDefs()).kits.values()].filter((k) => k.weapons[weapon]).map((k) => ({ id: k.id, name: k.name })).sort((a, b) => a.name.localeCompare(b.name)),
     set: (paint) => {
       const e = selected;
       if (!e) return;
-      e.warPaint = paint;
+      if (!e?.held) return;
+      e.warPaints ??= new Map();
+      if (paint) e.warPaints.set(e.held.id, paint);
+      else e.warPaints.delete(e.held.id);
       void refreshWarPaint(e);
     },
   });
@@ -1165,11 +1171,21 @@ export function createViewTab(els: Els) {
     for (const [mdl, b] of buttons) b.classList.toggle("on", mdl === selected?.cls);
   }
 
+  /** The weapons and taunts by id (for the weapon a class held, brought back without waiting for the item list). */
+  const heldById = new Map<number, ItemInfo>();
+  void loadItemDb().then((db) => { for (const w of [...db.weapons, ...db.taunts]) heldById.set(w.id, w); }).catch(() => {});
   function pick(mdl: string) {
     const e = selected;
     if (!e) return;
     stopPlay();
+    // the weapon held as the class left is remembered for it, and the one held as the class picked comes back
+    const was = gameClassOf(e.cls), next = gameClassOf(mdl);
+    if (was !== next && !isBuildingCls(e.cls)) (e.heldByClass ??= new Map()).set(was, e.held?.id ?? null);
+    const back = e.heldByClass?.has(next) ? e.heldByClass.get(next) ?? null : undefined;
+    if (back !== undefined && back !== (e.held?.id ?? null)) e.held = back === null ? null : heldById.get(back) ?? e.held;
     e.cls = mdl;
+    weapons.load(e.held);
+    void warPaintUi.refresh();
     // the item under construction is per class: the last class's model comes off before this one loads
     if (compilerOn && e === selected) { showCompilerItem(null); compiler.selectionChanged(); }
     markSelected();
@@ -6532,7 +6548,8 @@ export function createViewTab(els: Els) {
         loadout: e.items.loadout.map((l) => ({ item: l.item.id, paint: l.paint?.id ?? null, style: l.style, ...(l.hidden ? { hidden: true } : {}), ...(l.skin !== undefined ? { skin: l.skin } : {}) })),
         activeItem: e.items.activeId,
         held: e.held?.id ?? null,
-        ...(e.warPaint ? { warPaint: { ...e.warPaint } } : {}),
+        ...(e.warPaints?.size ? { warPaints: Object.fromEntries([...e.warPaints].map(([id, p]) => [id, { ...p }])) } : {}),
+        ...(e.heldByClass?.size ? { heldByClass: Object.fromEntries(e.heldByClass) } : {}),
         ...(isBuildingCls(e.cls) ? { building: { ...e.fx } } : {}),
         flex: Object.fromEntries(e.flex),
         anim: { sequence: e.anim.info?.sequences.find((q) => q.index === e.anim.seq)?.name ?? null, encoded: e.anim.encoded },
@@ -6608,7 +6625,10 @@ export function createViewTab(els: Els) {
       });
       e.items = { loadout, activeId: loadout.some((x) => x.item.id === s.activeItem) ? s.activeItem : loadout.at(-1)?.item.id ?? null };
       e.held = s.held !== null ? byId.get(s.held) ?? null : null;
-      e.warPaint = s.warPaint ? { ...s.warPaint } : null;
+      e.warPaints = new Map(Object.entries(s.warPaints ?? {}).map(([id, p]) => [Number(id), { ...p }]));
+      // (a scene from before each weapon kept its own: its one war paint was the held weapon's)
+      if (s.warPaint && e.held && !e.warPaints.has(e.held.id)) e.warPaints.set(e.held.id, { ...s.warPaint });
+      e.heldByClass = new Map(Object.entries(s.heldByClass ?? {}));
       if (s.building) e.fx = { ...s.building };
       e.flex = new Map(Object.entries(s.flex));
       const cls = gameClassOf(e.cls);
