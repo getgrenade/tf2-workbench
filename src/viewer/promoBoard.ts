@@ -19,7 +19,8 @@ import { DEFAULT_CHART, DEFAULT_GLOW, DEFAULT_STROKE, DEFAULT_TEXT, TEXT_FONTS, 
 export interface BoardHost {
   /** Writes every picture (asks where); resolves to what to say. */
   /** Writes the pictures to a folder the user picks: as PNGs, or as layered Photoshop files. */
-  exportAll(pictures: PromoPicture[], look: BoardLook, format?: "png" | "psd"): Promise<string>;
+  /** `psd-one`: every picture in one Photoshop file, each in a folder of its own. */
+  exportAll(pictures: PromoPicture[], look: BoardLook, format?: "png" | "psd" | "psd-one"): Promise<string>;
   /** Takes a layer's shot again as its spec now says (in the promo scene), replacing its image. */
   retake(layer: PromoLayer, live?: boolean): Promise<void>;
   /** A small picture through a layer's camera as its spec now says (w × h), to aim it by. */
@@ -129,7 +130,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       <div class="promoLookFx"></div>
       <div class="promoSideFoot">
         <p class="chartInfo promoStatus" role="status"></p>
-        <div class="btns"><button class="promoNew" title="Make the pictures of another set">New set…</button><button class="promoExportPsd" title="Every picture as a Photoshop file, each layer of it a layer (texts editable, the glow and the text outline and shadow as layer effects)">Export PSDs…</button><button class="primary promoExportAll">Export all…</button></div>
+        <div class="btns"><button class="promoNew" title="Make the pictures of another set">New set…</button><button class="promoExportPsd" title="Every picture as a Photoshop file, each layer of it a layer (texts editable, the glow and the text outline and shadow as layer effects)">Export PSDs…</button><button class="promoExportOnePsd" title="Every picture in one Photoshop file: each in a folder of its own, its backdrop in a Background folder in it">Export one PSD…</button><button class="primary promoExportAll">Export all…</button></div>
       </div>
     </aside>
     <main class="promoCenter">
@@ -2950,6 +2951,10 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
   $(".promoExportPsd").onclick = async () => {
     status.textContent = "Exporting the Photoshop files…";
     status.textContent = await host.exportAll(pictures, look, "psd").catch((err) => `Could not export: ${String(err)}`);
+  };
+  $(".promoExportOnePsd").onclick = async () => {
+    status.textContent = "Exporting the Photoshop file…";
+    status.textContent = await host.exportAll(pictures, look, "psd-one").catch((err) => `Could not export: ${String(err)}`);
   };
   $(".promoExportAll").onclick = async () => {
     status.textContent = "Exporting…";
