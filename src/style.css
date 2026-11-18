@@ -1499,3 +1499,6 @@ body.dndActive.dndRefused * { cursor: no-drop !important; }
 .paintMenu .paintSkin span { margin-right: auto; }
 .paintMenu .paintSkin button { height: 22px; padding: 0 10px; font-size: var(--ui-fs-small); }
 .paintMenu .paintSkin button.on { background: var(--ui-accent-soft); border-color: var(--ui-accent-line); color: var(--fg); }
+/* the Weapons panel's Festivized switch, under the slot buttons */
+#weaponFestive { display: flex; align-items: center; gap: 6px; margin: 6px 0 0; cursor: pointer; }
+#weaponFestive[hidden] { display: none; }

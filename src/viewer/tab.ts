@@ -273,6 +273,8 @@ interface Entity {
   applied: Equipped[];
   /** The picked weapon or taunt, as picked. */
   held: ItemInfo | null;
+  /** The weapons the character has festivized (by item id): a Festivizer's lights are drawn on them while held. */
+  festive?: Set<number>;
   anim: AnimState;
   /** Buildings only: what the building is doing (see buildingFx.ts). */
   fx: BuildingFx;
@@ -900,6 +902,8 @@ export function createViewTab(els: Els) {
       if (it === weapon && list.length) list[list.length - 1].weapon = true;
       // Models that travel with the item (a weapon's backpack, an attached part) share its paint and skin.
       for (const extra of it.extraModels ?? []) await add(extra, rgb, skin, null, it.id);
+      // a festivized weapon: the Festivizer's lights, on the weapon's bones (they are not painted)
+      if (it === weapon && e.festive?.has(it.id)) for (const lights of it.festiveModels ?? []) await add(lights, null, skin, null, it.id);
       Object.assign(groups, it.bodygroups, it.styles[style]?.bodygroups);
     }
     // the item being built hides what its Hides chips say, as an item of the game does
@@ -927,6 +931,7 @@ export function createViewTab(els: Els) {
     void syncConditions(e);
     if (e === selected) refreshTextures();
     if (e === selected) renderJiggles();
+    if (e === selected) refreshFestive();
     if (imported) {
       const target = classPath(e.cls);
       if (e.anim.modelPath !== imported.animation || e.anim.targetPath !== target) {
@@ -2488,6 +2493,28 @@ export function createViewTab(els: Els) {
     selCameras = new Set();
   }
 
+  // --- the Festivized switch of the Weapons panel: shown while the held weapon can take a Festivizer ---
+  const festiveRow = document.getElementById("weaponFestive");
+  const festiveBox = festiveRow?.querySelector("input") ?? null;
+  function refreshFestive() {
+    if (!festiveRow || !festiveBox) return;
+    const weapon = selected?.held;
+    const can = !!weapon && weapon.slot !== "taunt" && !!weapon.festiveModels?.length;
+    festiveRow.hidden = !can;
+    festiveBox.checked = can && !!selected!.festive?.has(weapon!.id);
+  }
+  if (festiveBox) festiveBox.onchange = () => {
+    const e = selected, weapon = e?.held;
+    if (!e || !weapon) return;
+    const on = festiveBox.checked;
+    // every selected character holding that weapon, as the other weapon edits go
+    for (const t of entities.filter((x) => x === e || (multi.has(x.id) && x.held?.id === weapon.id))) {
+      t.festive ??= new Set();
+      if (on) t.festive.add(weapon.id); else t.festive.delete(weapon.id);
+      void applyLoadout(t, t.applied);
+    }
+  };
+
   function selectEntity(e: Entity, keepMulti = false) {
     nothingSelected = false;
     if (propsKind !== "character") propsKind = "character";
@@ -2507,6 +2534,7 @@ export function createViewTab(els: Els) {
     selectedJiggle = null;
     viewer?.select(e.actor);
     restoreUi(e);
+    refreshFestive();
     renderEntities();
   }
 
@@ -6454,6 +6482,7 @@ export function createViewTab(els: Els) {
         loadout: e.items.loadout.map((l) => ({ item: l.item.id, paint: l.paint?.id ?? null, style: l.style, ...(l.hidden ? { hidden: true } : {}), ...(l.skin !== undefined ? { skin: l.skin } : {}) })),
         activeItem: e.items.activeId,
         held: e.held?.id ?? null,
+        ...(e.festive?.size ? { festive: [...e.festive] } : {}),
         ...(isBuildingCls(e.cls) ? { building: { ...e.fx } } : {}),
         flex: Object.fromEntries(e.flex),
         anim: { sequence: e.anim.info?.sequences.find((q) => q.index === e.anim.seq)?.name ?? null, encoded: e.anim.encoded },
@@ -6529,6 +6558,7 @@ export function createViewTab(els: Els) {
       });
       e.items = { loadout, activeId: loadout.some((x) => x.item.id === s.activeItem) ? s.activeItem : loadout.at(-1)?.item.id ?? null };
       e.held = s.held !== null ? byId.get(s.held) ?? null : null;
+      e.festive = s.festive?.length ? new Set(s.festive) : undefined;
       if (s.building) e.fx = { ...s.building };
       e.flex = new Map(Object.entries(s.flex));
       const cls = gameClassOf(e.cls);

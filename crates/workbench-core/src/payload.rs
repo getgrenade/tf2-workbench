@@ -456,6 +456,8 @@ struct ItemJson<'a> {
     base_item: bool,
     pose_params: &'a std::collections::BTreeMap<String, f32>,
     extra_models: &'a [String],
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    festive_models: &'a [String],
     class_slots: &'a std::collections::BTreeMap<String, String>,
     styles: Vec<StyleJson<'a>>,
     id: u32,
@@ -521,6 +523,7 @@ fn item_json(i: &source_formats::items::Item) -> ItemJson<'_> {
         base_item: i.base_item,
         pose_params: &i.pose_params,
         extra_models: &i.extra_models,
+        festive_models: &i.festive_models,
         class_slots: &i.class_slots,
         classes: &i.classes,
         model: i.model.as_deref(),

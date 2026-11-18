@@ -34,6 +34,8 @@ export interface SceneEntity {
   activeItem: number | null;
   /** The held weapon or taunt. */
   held: number | null;
+  /** The weapons it has festivized (a Festivizer's lights on them). */
+  festive?: number[];
   /** Flex controller values by name. */
   flex: Record<string, number>;
   anim: { sequence: string | null; encoded: number[] };
@@ -153,6 +155,7 @@ export function parseScene(text: string): SceneFile {
         : [],
       activeItem: isNum(e.activeItem) ? e.activeItem : null,
       held: isNum(e.held) ? e.held : null,
+      ...(Array.isArray(e.festive) && e.festive.every(isNum) && e.festive.length ? { festive: e.festive } : {}),
       inspectOnly: e.inspectOnly === true ? true : undefined,
       bodyTris: e.bodyTris && typeof e.bodyTris === "object" ? Object.fromEntries(Object.entries(e.bodyTris).filter(([, v]) => typeof v === "string")) : undefined,
       fogged: e.fogged === false ? false : undefined,
