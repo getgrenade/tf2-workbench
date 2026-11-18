@@ -315,6 +315,22 @@ export function seedOf(text: string): number {
   }
 }
 
+/** The war paint grades, by the collections' names for them, with the game's name and colour of each (clientscheme.res ItemRarity*). */
+export const GRADES: Record<string, { name: string; color: string }> = {
+  common: { name: "Civilian", color: "#b0c3d9" },
+  uncommon: { name: "Freelance", color: "#5e98d9" },
+  rare: { name: "Mercenary", color: "#4b69ff" },
+  mythical: { name: "Commando", color: "#8847ff" },
+  legendary: { name: "Assassin", color: "#d32ce6" },
+  ancient: { name: "Elite", color: "#eb4b4b" },
+};
+
+/** A war paint's grade on a weapon (a paint can be graded differently on different weapons), or null when no collection has it. */
+export function gradeOf(grades: Record<string, string> | undefined, kit: number, weapon: string): { name: string; color: string } | null {
+  const key = grades?.[`${kit}/${weapon}`] ?? grades?.[String(kit)];
+  return key ? GRADES[key] ?? null : null;
+}
+
 /** A random seed as the game would give one (two random 31-bit halves). */
 export function randomSeed(): string {
   const half = () => BigInt(Math.floor(Math.random() * 0x7fffffff));

@@ -69,3 +69,12 @@ test("a scene keeps each weapon's own war paint and the weapon each class held",
   assert.deepEqual(s.entities[0].warPaints, { 13: { kit: 104, wear: 2, seed: "42" }, 23: { kit: 14, wear: 1, seed: "7" } });
   assert.deepEqual(s.entities[0].heldByClass, { scout: 13, soldier: null });
 });
+
+test("a war paint's grade is the weapon's own, else the any-weapon paint's", async () => {
+  const { gradeOf } = await import("../src/viewer/warPaints");
+  const grades = { "80/rocketlauncher": "ancient", "80/flamethrower": "legendary", "102": "rare" };
+  assert.equal(gradeOf(grades, 80, "rocketlauncher")?.name, "Elite");
+  assert.equal(gradeOf(grades, 80, "flamethrower")?.name, "Assassin");
+  assert.equal(gradeOf(grades, 102, "smg")?.color, "#4b69ff");
+  assert.equal(gradeOf(grades, 5, "smg"), null);
+});

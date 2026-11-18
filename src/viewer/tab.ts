@@ -13,7 +13,7 @@ import { fadeAmount, maskIcon, type IconFade } from "../compiler/iconMask";
 import { searchPaths, importSourceDir, readItemSession, readPropSession, saveItemIcon, buildItem, buildProp, loadTextureFrames, readGameFile, readSourceFile, revealFile, sourceSiblings, sourceStamp, mountItemZips } from "../api";
 import { FILE_DROP_EVENT, type FileDropDetail } from "../fileDrop";
 import { parseTextureFrames } from "./sourceMaterials";
-import { parseLocalization, parsePaintKits, seedOf, warPaintWeaponOf, type PaintKitDefs } from "./warPaints";
+import { gradeOf, parseLocalization, parsePaintKits, seedOf, warPaintWeaponOf, type PaintKitDefs } from "./warPaints";
 import { WarPaintCompositor, type WarPaint } from "./warPaintCompositor";
 import { createWarPaintUi } from "./warPaintUi";
 import { getWeaponProfile, importEffectZip, removeCustomEffect, type WeaponProfile, type UnusualEffectInfo } from "../api";
@@ -1010,7 +1010,10 @@ export function createViewTab(els: Els) {
   }
   const warPaintUi = createWarPaintUi(document.getElementById("warPaint") ?? document.createElement("div"), {
     current: () => ({ weapon: selected?.held ? warPaintWeaponOf(selected.held) : null, paint: (selected?.held && selected.warPaints?.get(selected.held.id)) || null }),
-    kits: async (weapon) => [...(await warPaintDefs()).kits.values()].filter((k) => k.weapons[weapon]).map((k) => ({ id: k.id, name: k.name })).sort((a, b) => a.name.localeCompare(b.name)),
+    kits: async (weapon) => {
+      const grades = (await loadItemDb()).paintkitGrades;
+      return [...(await warPaintDefs()).kits.values()].filter((k) => k.weapons[weapon]).map((k) => ({ id: k.id, name: k.name, grade: gradeOf(grades, k.id, weapon) })).sort((a, b) => a.name.localeCompare(b.name));
+    },
     set: (paint) => {
       const e = selected;
       if (!e) return;

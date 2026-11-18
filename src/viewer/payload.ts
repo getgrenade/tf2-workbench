@@ -344,6 +344,8 @@ export interface ItemDb {
   equipConflicts: Record<string, string[]>;
   /** The war-painted weapons' entries (15000 and up) by id, each with its weapon (`sniperrifle`). */
   paintkitWeapons?: Record<string, string>;
+  /** Each war paint's grade (`rare`), by "<paint kit>/<weapon>" for a war-painted weapon and by "<paint kit>" for one that fits any weapon. */
+  paintkitGrades?: Record<string, string>;
 }
 
 export function parseItems(buf: ArrayBuffer): ItemDb {

@@ -147,6 +147,10 @@ pub struct ItemDb {
     /// The war-painted weapons' entries (15000 and up: the Night Owl Sniper Rifle is 15000) by id, each with the weapon its
     /// `paintkit_weapon_<weapon>` prefab names (`sniperrifle`). A war paint names the weapons it is made for by these ids.
     pub paintkit_weapons: BTreeMap<u32, String>,
+    /// The grade of each war paint, from the case and contract collections (`item_collections`): by `"<paint kit>/<weapon>"` for a
+    /// war-painted weapon (the Warhawk is Elite on the Rocket Launcher, Assassin on the Flame Thrower) and by `"<paint kit>"` for a war
+    /// paint that goes on any weapon; the collection's grade name (`common` Civilian ... `ancient` Elite).
+    pub paintkit_grades: BTreeMap<String, String>,
 }
 
 fn find<'a>(nodes: &'a [Node], key: &str) -> Option<&'a Node> {
@@ -667,9 +671,18 @@ pub fn parse_with_schema(text: &str, names: &HashMap<String, String>, workshop: 
     let mut taunts = Vec::new();
     let mut paints = Vec::new();
     let mut paintkit_weapons = BTreeMap::new();
+    // the war paints by item name (what the collections list): their paint kit, and the weapon a war-painted weapon is (none: any weapon)
+    let mut paintkit_items: HashMap<String, (String, Option<String>)> = HashMap::new();
     if let Some(block) = get_block(game, "items") {
         for n in block {
             let (Ok(id), Some(own)) = (n.key.parse::<u32>(), n.block()) else { continue };
+            if let (Some(name), Some(kit)) = (get_str(own, "name"), get_block(own, "static_attrs").and_then(|a| get_str(a, "paintkit_proto_def_index"))) {
+                let prefabs = get_str(own, "prefab").unwrap_or("").to_ascii_lowercase();
+                let weapon = prefabs.split_whitespace().find_map(|x| x.strip_prefix("paintkit_weapon_").map(str::to_string));
+                if weapon.is_some() || prefabs.split_whitespace().any(|x| x == "paintkit_tool") {
+                    paintkit_items.insert(name.to_ascii_lowercase(), (kit.trim().to_string(), weapon));
+                }
+            }
             if let Some(weapon) = get_str(own, "prefab").and_then(|p| p.split_whitespace().find_map(|x| x.to_ascii_lowercase().strip_prefix("paintkit_weapon_").map(str::to_string))) {
                 paintkit_weapons.insert(id, weapon);
             }
@@ -728,7 +741,20 @@ pub fn parse_with_schema(text: &str, names: &HashMap<String, String>, workshop: 
             }
         }
     }
-    Ok(ItemDb { items, weapons, taunts, paints, equip_conflicts, paintkit_weapons })
+    let mut paintkit_grades = BTreeMap::new();
+    if let Some(collections) = get_block(game, "item_collections") {
+        for c in collections.iter().filter_map(|c| c.block()) {
+            for grade in get_block(c, "items").unwrap_or(&[]) {
+                let Some(listed) = grade.block() else { continue };
+                for entry in listed {
+                    let Some((kit, weapon)) = paintkit_items.get(&entry.key.to_ascii_lowercase()) else { continue };
+                    let key = match weapon { Some(w) => format!("{kit}/{w}"), None => kit.clone() };
+                    paintkit_grades.entry(key).or_insert_with(|| grade.key.to_ascii_lowercase());
+                }
+            }
+        }
+    }
+    Ok(ItemDb { items, weapons, taunts, paints, equip_conflicts, paintkit_weapons, paintkit_grades })
 }
 
 /// Loads the cosmetics database from the TF2 install (loose files, falling back to VPK contents).

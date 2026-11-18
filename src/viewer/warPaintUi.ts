@@ -5,7 +5,7 @@ export interface WarPaintHooks {
   /** The held weapon's war paint key (`sniperrifle`, null when it can't be painted) and its war paint. */
   current(): { weapon: string | null; paint: WarPaint | null };
   /** The war paints made for a weapon, by name (they are read from the game's files the first time). */
-  kits(weapon: string): Promise<{ id: number; name: string }[]>;
+  kits(weapon: string): Promise<{ id: number; name: string; grade?: { name: string; color: string } | null }[]>;
   /** A war paint chosen (null: none). */
   set(paint: WarPaint | null): void;
 }
@@ -54,11 +54,13 @@ export function createWarPaintUi(host: HTMLElement, hooks: WarPaintHooks) {
     hooks.set({ kit: id, wear: Number(wear.value) || 1, seed: digits || "0" });
     syncEnabled();
   };
+  /** The closed list shows the chosen paint in its grade's colour too. */
+  const tintKit = () => { kit.style.color = kit.selectedOptions[0]?.dataset.color ?? ""; };
   const syncEnabled = () => {
     const on = !!kit.value;
     wear.disabled = seed.disabled = random.disabled = !on;
   };
-  kit.onchange = changed;
+  kit.onchange = () => { tintKit(); changed(); };
   wear.onchange = changed;
   seed.onchange = changed;
   seed.onkeydown = (ev) => { if (ev.key === "Enter") { ev.preventDefault(); changed(); } };
@@ -74,7 +76,7 @@ export function createWarPaintUi(host: HTMLElement, hooks: WarPaintHooks) {
       kit.innerHTML = "";
       kit.add(new Option("None", ""));
       kit.disabled = true;
-      let kits: { id: number; name: string }[] = [];
+      let kits: Awaited<ReturnType<WarPaintHooks["kits"]>> = [];
       try {
         kits = await hooks.kits(weapon);
       } catch (err) {
@@ -85,11 +87,17 @@ export function createWarPaintUi(host: HTMLElement, hooks: WarPaintHooks) {
         return;
       }
       if (mine !== token) return;
-      for (const k of kits) kit.add(new Option(k.name, String(k.id)));
+      // each in the colour of its grade, as the game shows it
+      for (const k of kits) {
+        const option = new Option(k.name, String(k.id));
+        if (k.grade) { option.style.color = k.grade.color; option.dataset.color = k.grade.color; option.title = `${k.grade.name} grade`; }
+        kit.add(option);
+      }
       kit.disabled = false;
       shownWeapon = weapon;
     }
     kit.value = paint && [...kit.options].some((o) => o.value === String(paint.kit)) ? String(paint.kit) : "";
+    tintKit();
     wear.value = String(paint?.wear ?? 1);
     if (document.activeElement !== seed) seed.value = paint?.seed ?? "0";
     syncEnabled();
