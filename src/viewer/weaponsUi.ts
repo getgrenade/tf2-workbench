@@ -1,3 +1,5 @@
+import { isRobotOnlyItem } from "./robotItems";
+import { onSettingsChange, settings } from "../settingsStore";
 import { showContextMenu } from "./contextMenu";
 import { itemIcon } from "./itemIcons";
 import { createBrowserSort, createBrowserView, makeTile, setTileImage } from "./browserView";
@@ -57,6 +59,8 @@ export function createWeaponsUi(els: WeaponsEls, hooks: WeaponsHooks) {
   /** Selected category button: a weapon category or "taunt". */
   let category = "primary";
 
+  // (the robots' own weapons come and go with their setting)
+  onSettingsChange(() => { if (db) render(); });
   const shownHeld = () => (held && itemUsableBy(held, hooks.gameClass()) ? held : null);
 
   function render() {
@@ -72,7 +76,7 @@ export function createWeaponsUi(els: WeaponsEls, hooks: WeaponsHooks) {
     const matches = (category === "taunt"
       ? db.taunts.filter((t) => itemUsableBy(t, cls) && textMatch(t)).sort(order)
       : db.weapons
-      .filter((w) => itemUsableBy(w, cls) && weaponCategory(slotForClass(w, cls)) === slot && textMatch(w))
+      .filter((w) => itemUsableBy(w, cls) && weaponCategory(slotForClass(w, cls)) === slot && textMatch(w) && !(settings().hideRobotItems && isRobotOnlyItem(w)))
             .sort((a, b) => (SLOT_ORDER[weaponCategory(slotForClass(a, cls))] ?? 9) - (SLOT_ORDER[weaponCategory(slotForClass(b, cls))] ?? 9) || order(a, b)));
 
     iconObserver = new IntersectionObserver(

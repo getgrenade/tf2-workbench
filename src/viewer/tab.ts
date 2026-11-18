@@ -1,4 +1,5 @@
 import { icon as svgIcon, ICONS as LUCIDE, type IconName } from "../icons";
+import { isRobotOnlyItem } from "./robotItems";
 import { shadowLayer, shadowOf, solidOf, type ShotEffects } from "./promo";
 import { partsOf } from "./promoMask";
 import { picturePsd } from "./promoPsd";
@@ -4481,7 +4482,7 @@ export function createViewTab(els: Els) {
       const fresh = !e.actor.hasModel;
       const mdl = s.classes === "same" ? base.cls : pickOne(classes)![1];
       const game = gameClassOf(mdl);
-      const pool = db.items.filter((i) => i.slot !== "taunt" && wears(i, game));
+      const pool = db.items.filter((i) => i.slot !== "taunt" && wears(i, game) && !(settings().hideRobotItems && isRobotOnlyItem(i)));
       const rolled = rollLoadout(pool, db.paints, conflicts, s.rules, s);
       if ("failed" in rolled) {
         const r = rolled.failed;
@@ -6091,7 +6092,7 @@ export function createViewTab(els: Els) {
     const game = gameClassOf(e.cls);
     const conflicts = (a: ItemInfo, b: ItemInfo) => a.equipRegions.some((ra) => b.equipRegions.some((rb) => ra === rb || db.equipConflicts[ra]?.includes(rb) || db.equipConflicts[rb]?.includes(ra)));
     // the others are the game's own cosmetics; the item kept is in it too, a workshop one included (the set being promoted often is)
-    const pool = db.items.filter((i) => i.slot !== "taunt" && (!i.workshop || i.id === spec.reroll!.item) && itemUsableBy(i, game) && itemModelFor(i, game) !== null);
+    const pool = db.items.filter((i) => i.slot !== "taunt" && (!i.workshop || i.id === spec.reroll!.item) && itemUsableBy(i, game) && itemModelFor(i, game) !== null && !(settings().hideRobotItems && isRobotOnlyItem(i)));
     const rules: LoadoutRule[] = [{ mode: "include", kind: "item", value: String(spec.reroll.item) }, { mode: "exclude", kind: "medal", value: "" }];
     const rolled = rollLoadout(pool, db.paints, conflicts, rules, { count: 3, paintChance: 0, styles: false, workshop: false });
     if ("items" in rolled) spec.loadout = rolled.items.map((x) => ({ item: x.item.id, name: x.item.displayName, paintable: x.item.paintable, paint: null, style: 0 }));
