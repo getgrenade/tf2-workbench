@@ -108,12 +108,13 @@ const PSD_BLEND: Record<LayerBlend, NonNullable<Layer["blendMode"]>> = {
   "source-over": "normal", multiply: "multiply", screen: "screen", overlay: "overlay", "soft-light": "soft light", "hard-light": "hard light", "color-dodge": "color dodge", "color-burn": "color burn", luminosity: "luminosity",
 };
 
-/** The PSD of a picture, as the board has it. */
-export async function picturePsd(p: PromoPicture, look: BoardLook): Promise<Uint8Array> {
+/** A picture's layers for a Photoshop file: its backdrop, and the rest from the bottom up (the border where it is in the stack). */
+async function pictureLayers(p: PromoPicture, look: BoardLook): Promise<{ backdrop: Layer; layers: Layer[] }> {
   const backdrop = p.backdrop ?? look.backdrop;
   const glow = look.glow?.on ? look.glow : null;
   // (round corners that are cut: the backdrop is cut round them; what is over it is left whole, to be masked in Photoshop as wanted)
-  const children: Layer[] = [{ name: p.backdrop ? "Backdrop (its own)" : "Backdrop", canvas: full(p, (ctx) => { paintBackdrop(ctx, p.w, p.h, backdrop); cutCorners(ctx, p.w, p.h, look.stroke); }), left: 0, top: 0 }];
+  const back: Layer = { name: p.backdrop ? "Backdrop (its own)" : "Backdrop", canvas: full(p, (ctx) => { paintBackdrop(ctx, p.w, p.h, backdrop); cutCorners(ctx, p.w, p.h, look.stroke); }), left: 0, top: 0 };
+  const children: Layer[] = [];
   const border = (): Layer => ({ name: "Border", hidden: !look.stroke.on, canvas: full(p, (ctx) => paintStroke(ctx, p.w, p.h, { ...look.stroke, on: true }, backdrop)), left: 0, top: 0 });
   const strokeAt = Math.min(p.strokeAt ?? p.layers.length, p.layers.length);
   for (const [i, l] of p.layers.entries()) {
@@ -133,8 +134,44 @@ export async function picturePsd(p: PromoPicture, look: BoardLook): Promise<Uint
     });
   }
   if (strokeAt >= p.layers.length) children.push(border());
+  return { backdrop: back, layers: children };
+}
+
+/** The PSD of a picture, as the board has it. */
+export async function picturePsd(p: PromoPicture, look: BoardLook): Promise<Uint8Array> {
+  const { backdrop, layers } = await pictureLayers(p, look);
   const merged = document.createElement("canvas");
   renderPicture(merged, p, look);
-  const buffer = writePsd({ width: p.w, height: p.h, canvas: merged, children }, { noBackground: true, generateThumbnail: true });
+  const buffer = writePsd({ width: p.w, height: p.h, canvas: merged, children: [backdrop, ...layers] }, { noBackground: true, generateThumbnail: true });
+  return new Uint8Array(buffer);
+}
+
+/**
+ * The size of one Photoshop file holding every picture of the board stacked: the size of the pictures (the largest, when they differ).
+ * Each picture sits at the top left, as in its own file.
+ */
+export function stackSize(sizes: { w: number; h: number }[]): { width: number; height: number } {
+  return { width: Math.max(1, ...sizes.map((s) => s.w)), height: Math.max(1, ...sizes.map((s) => s.h)) };
+}
+
+/**
+ * Every picture of the board in one Photoshop file of the pictures' size: each a folder of its own (named as the picture), stacked over the
+ * others in the board's order (the first on top), with its backdrop in a Background folder at the bottom of it and its other layers over
+ * it as in the picture's own file. Only the first picture's folder is shown, so the file opens looking like it; the others are a click away.
+ */
+export async function boardPsd(pictures: PromoPicture[], look: BoardLook): Promise<Uint8Array> {
+  const { width, height } = stackSize(pictures.map((p) => ({ w: p.w, h: p.h })));
+  const merged = document.createElement("canvas");
+  merged.width = width;
+  merged.height = height;
+  const folders: Layer[] = [];
+  for (const [i, p] of pictures.entries()) {
+    const { backdrop, layers } = await pictureLayers(p, look);
+    folders.push({ name: p.name, opened: false, hidden: i > 0, children: [{ name: "Background", opened: false, children: [backdrop] }, ...layers] });
+    if (i === 0) renderPicture(merged, p, look);
+  }
+  // (a Photoshop file lists its layers bottom first: the board's first picture goes last, on top)
+  folders.reverse();
+  const buffer = writePsd({ width, height, canvas: merged, children: folders }, { noBackground: true, generateThumbnail: true });
   return new Uint8Array(buffer);
 }
