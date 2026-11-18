@@ -331,6 +331,8 @@ export interface ItemInfo {
    */
   tauntSounds?: { name: string; offset: number; looping: boolean }[];
   /** The activity the item's own model plays while its wearer taunts (`visuals/playback_activity`: the Infernal Orchestrina's `ACT_RUN`). */
+  /** What its model plays while its wearer holds a blueprint or carries a building (`start_building`: the Hotrod's ACT_RUN, mask down). */
+  buildActivity?: string;
   tauntActivity?: string;
   /** A cosmetic from the workshop importer's zips (tf/workshop/import_source), not from the game's own items. */
   workshop: boolean;

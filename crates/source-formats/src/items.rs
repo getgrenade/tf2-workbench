@@ -109,6 +109,10 @@ pub struct Item {
     /// `visuals/playback_activity`: the activity the item's own model plays while its wearer taunts (`start_taunting`, the Infernal
     /// Orchestrina's `ACT_RUN`), upper case; empty when it has none.
     pub taunt_activity: String,
+    /// `visuals/playback_activity` `start_building`: the activity the item's model plays while its wearer holds a building's blueprint or
+    /// carries one (the builder deployed, tf_weapon_builder.cpp's WAP_START_BUILDING): the Hotrod's `ACT_RUN`, its mask down. Upper
+    /// case; empty when it has none.
+    pub build_activity: String,
     /// A cosmetic from the workshop importer's zips (`tf/workshop/import_source`), not from the game's own schema.
     pub workshop: bool,
     /// A workshop item: when its zip was last written (seconds since 1970), its place in a newest-first list. 0 for the game's items.
@@ -401,6 +405,11 @@ fn build_item(id: u32, nodes: &[Node], names: &HashMap<String, String>) -> Item 
         taunt_activity: get_block(nodes, "visuals")
             .and_then(|v| get_block(v, "playback_activity"))
             .and_then(|b| get_str(b, "start_taunting"))
+            .map(|a| a.trim().to_ascii_uppercase())
+            .unwrap_or_default(),
+        build_activity: get_block(nodes, "visuals")
+            .and_then(|v| get_block(v, "playback_activity"))
+            .and_then(|b| get_str(b, "start_building"))
             .map(|a| a.trim().to_ascii_uppercase())
             .unwrap_or_default(),
         workshop: false,

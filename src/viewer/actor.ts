@@ -81,6 +81,11 @@ export interface CosmeticSpec {
    * character's clock; the rest of the time `clip` poses it.
    */
   tauntClip?: ClipData | null;
+  /**
+   * What the item's model plays while its wearer holds a building's blueprint or carries one (`playback_activity` `start_building`: the
+   * Hotrod's mask flips down over the Engineer's face); the rest of the time `clip` poses it.
+   */
+  buildClip?: ClipData | null;
   /** The item this model belongs to (what a click on it picks). */
   itemId?: number;
   /** The weapon the character holds. */
@@ -198,9 +203,11 @@ export class Actor {
   private flexGlobals: FlexGlobals = new Map();
   private flexClass: FlexMesh[] = [];
   private flexCosmetic: FlexMesh[] = [];
-  private cosmetics: { rig: Rig; bones: THREE.Bone[]; bindLocal: THREE.Matrix4[]; map: number[]; jiggles: (JiggleBone | null)[]; own: Playback | null; idle: boolean; loop: boolean; clock: number; taunt: Playback | null }[] = [];
+  private cosmetics: { rig: Rig; bones: THREE.Bone[]; bindLocal: THREE.Matrix4[]; map: number[]; jiggles: (JiggleBone | null)[]; own: Playback | null; idle: boolean; loop: boolean; clock: number; taunt: Playback | null; build: Playback | null }[] = [];
   /** The character plays a taunt: worn items with a taunt animation of their own play it (see CosmeticSpec.tauntClip). */
   private taunting = false;
+  /** The character holds a blueprint or carries a building: worn items with a building pose of their own show it (see CosmeticSpec.buildClip). */
+  private building = false;
   /** A manual aim (a turn about the bone's own axes, clamped to the bone's limits) on an overridden jiggle bone, keyed by lowercase name. */
   private boneAims = new Map<string, BoneTurn>();
   /** Jiggle bones whose rotation is overridden by hand (posed, held, not simulated), keyed by lowercase name; the jiggle inspector sets this. */
@@ -932,7 +939,7 @@ export class Actor {
     this.boneAims.clear(); // the worn items changed; any hand-aim/override no longer refers to a bone that is on
     this.boneOverride.clear();
     const classIndex = new Map(this.classData.bones.map((b, i) => [b.name.toLowerCase(), i]));
-    for (const [index, { data, paint, skin, clip, idle, loop, tauntClip }] of list.entries()) {
+    for (const [index, { data, paint, skin, clip, idle, loop, tauntClip, buildClip }] of list.entries()) {
       const rig = new Rig(data.bones);
       const bones = data.bones.map((info) => {
         const b = new THREE.Bone();
@@ -959,7 +966,12 @@ export class Actor {
         taunt = new Playback();
         taunt.clip = tauntClip;
       }
-      this.cosmetics.push({ rig, bones, bindLocal, map, jiggles, own, idle: !!idle && !!own, loop: !!loop && !!own, clock: 0, taunt });
+      let build: Playback | null = null;
+      if (buildClip) {
+        build = new Playback();
+        build.clip = buildClip;
+      }
+      this.cosmetics.push({ rig, bones, bindLocal, map, jiggles, own, idle: !!idle && !!own, loop: !!loop && !!own, clock: 0, taunt, build });
       for (const [partIndex, bp] of data.bodyParts.entries()) {
         const sub = (list[index].weapon && partIndex === 0 ? bp.models[this.heldBodyState] : null) ?? bp.models[0];
         if (!sub) continue;
@@ -1943,6 +1955,13 @@ export class Actor {
           const local = ownLocal(p.clip!, p.frame(), i, _cosLocal);
           if (c.rig.parents[i] >= 0) world[i].multiplyMatrices(world[c.rig.parents[i]], local);
           else world[i].copy(local);
+        } else if (c.build && this.building) {
+          // the item's pose while its wearer builds, held as the game holds it (the Hotrod's mask down while the Engineer carries a blueprint)
+          const p = c.build;
+          p.time = 0;
+          const local = ownLocal(p.clip!, p.frame(), i, _cosLocal);
+          if (c.rig.parents[i] >= 0) world[i].multiplyMatrices(world[c.rig.parents[i]], local);
+          else world[i].copy(local);
         } else if (c.own && (c.loop || c.idle || this.playback.clip || c.own.clip!.frames <= 1)) {
           // extra bone of a model with its own animation (the tank's tracks): the clip's local transform under the parent
           const p = c.own;
@@ -1995,6 +2014,14 @@ export class Actor {
    * values to show, or null when they did not change.
    */
   faceDriver: ((playback: Playback) => FlexGlobals | null) | null = null;
+
+  /** Whether the character holds a building's blueprint or carries a building now (the worn items' building poses show, see buildClip). */
+  setBuilding(on: boolean) {
+    if (this.building === on) return;
+    this.building = on;
+    this.updateCosmetics();
+    this.changed = true;
+  }
 
   /** Whether the character plays a taunt now (the worn items' taunt animations play with it). */
   setTaunting(on: boolean) {
