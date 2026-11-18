@@ -31,6 +31,14 @@ export interface TextureEditHooks {
   file(path: string, slot: string): string | null;
   /** How many maps are replaced in all. */
   count(): number;
+  /** The model of a worn item swapped for a file of the user's (absent: no Model row). `id` is the item's ("item:<id>"). */
+  model?: {
+    /** The file it is drawn as, or null when it is the game's. */
+    file(id: string): string | null;
+    /** Asks for a model file and draws the item as it; whether it was swapped. */
+    replace(id: string): Promise<boolean>;
+    reset(id: string): void;
+  };
   /** The VMT editor (absent: no VMT section). */
   vmt?: {
     /** The text to show: the edit, or the game's. */
@@ -57,6 +65,7 @@ const CHANNELS: { id: Channel; label: string }[] = [
  */
 export function createTexturePreview(root: HTMLElement, edit?: TextureEditHooks): { show: (items: PreviewItem[]) => void; focus: (id: string) => void } {
   root.innerHTML = `<div class="texPick"><select class="texItem"></select><select class="texMat"></select></div>
+    <div class="texModel row2" hidden><span class="texModelFile dim"></span><button class="texModelReplace" title="Draw this cosmetic as a model of your own: a compiled .mdl (with its .vvd and .vtx beside it), or an .smd, .dmx or .fbx fitted to the character's skeleton and worn in this cosmetic's materials. The game's files are not changed.">Replace model…</button><button class="texModelReset" title="Draw the game's own model again">Reset model</button></div>
     <div class="texTabs"></div>
     <div class="texStage"><canvas class="texImage"></canvas><canvas class="texWire"></canvas><div class="texNone dim" hidden></div></div>
     <div class="texChans"></div>
@@ -78,6 +87,10 @@ export function createTexturePreview(root: HTMLElement, edit?: TextureEditHooks)
   const none = root.querySelector<HTMLElement>(".texNone")!;
   const info = root.querySelector<HTMLElement>(".texInfo")!;
   const replaceBtn = root.querySelector<HTMLButtonElement>(".texReplace")!;
+  const modelRow = root.querySelector<HTMLElement>(".texModel")!;
+  const modelFile = root.querySelector<HTMLElement>(".texModelFile")!;
+  const modelReplace = root.querySelector<HTMLButtonElement>(".texModelReplace")!;
+  const modelReset = root.querySelector<HTMLButtonElement>(".texModelReset")!;
   const resetBtn = root.querySelector<HTMLButtonElement>(".texReset")!;
   const resetAllBtn = root.querySelector<HTMLButtonElement>(".texResetAll")!;
   const vmtText = root.querySelector<HTMLTextAreaElement>(".texVmtText")!;
@@ -156,7 +169,18 @@ export function createTexturePreview(root: HTMLElement, edit?: TextureEditHooks)
     tabs.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.id === slot));
   };
   const markChans = buttons(chans, CHANNELS, () => channel, (id) => (channel = id as Channel));
+  /** The Model row, for the item shown: only a worn item's model can be swapped. */
+  const markModel = () => {
+    const id = items[itemSelect.selectedIndex]?.id;
+    const hooks = edit?.model;
+    modelRow.hidden = !hooks || !id?.startsWith("item:");
+    if (modelRow.hidden) return;
+    const file = hooks!.file(id!);
+    modelFile.textContent = file ? `Model: ${file}` : "Model: the game's";
+    modelReset.disabled = !file;
+  };
   const mark = () => {
+    markModel();
     markTabs();
     markChans();
     markEdit();
@@ -267,6 +291,16 @@ export function createTexturePreview(root: HTMLElement, edit?: TextureEditHooks)
     };
     resetBtn.onclick = () => { const m = material(); if (m) edit.reset(m.path, slot); };
     resetAllBtn.onclick = () => edit.resetAll();
+    if (edit.model) {
+      const hooks = edit.model;
+      modelReplace.onclick = async () => {
+        const id = items[itemSelect.selectedIndex]?.id;
+        if (!id) return;
+        modelReplace.disabled = true;
+        try { await hooks.replace(id); } finally { modelReplace.disabled = false; markModel(); }
+      };
+      modelReset.onclick = () => { const id = items[itemSelect.selectedIndex]?.id; if (id) { hooks.reset(id); markModel(); } };
+    }
     const vmt = edit.vmt;
     if (vmt) {
       // live: what is typed is drawn a moment after the typing stops
@@ -319,7 +353,7 @@ export function createTexturePreview(root: HTMLElement, edit?: TextureEditHooks)
       items = next;
       itemSelect.replaceChildren();
       items.forEach((it, i) => {
-        const replaced = it.materials.some((m) => TEXTURE_SLOTS.some((s) => edit?.file(m.path, s.id)) || !!edit?.vmt?.edited(m.path));
+        const replaced = it.materials.some((m) => TEXTURE_SLOTS.some((s) => edit?.file(m.path, s.id)) || !!edit?.vmt?.edited(m.path)) || (!!it.id && !!edit?.model?.file(it.id));
         itemSelect.add(new Option(replaced ? `${it.label} (edited)` : it.label, String(i)));
       });
       const keep = items.findIndex((it) => it.label === wasLabel);

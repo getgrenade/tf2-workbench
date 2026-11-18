@@ -71,6 +71,7 @@ fn main() {
             commands::write_text_file,
             commands::read_text_file,
             commands::read_source_file,
+            commands::load_model_file,
             commands::build_item,
             commands::build_prop,
             commands::read_prop_session,
