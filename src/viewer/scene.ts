@@ -159,6 +159,8 @@ export function parseScene(text: string): SceneFile {
         : [],
       activeItem: isNum(e.activeItem) ? e.activeItem : null,
       held: isNum(e.held) ? e.held : null,
+      // (the held weapon's war paint: its seed is kept as text, a 64-bit number)
+      ...(e.warPaint && isNum(e.warPaint.kit) ? { warPaint: { kit: e.warPaint.kit, wear: isNum(e.warPaint.wear) ? Math.min(5, Math.max(1, Math.round(e.warPaint.wear))) : 1, seed: /^\d+$/.test(String(e.warPaint.seed ?? "")) ? String(e.warPaint.seed) : "0" } } : {}),
       inspectOnly: e.inspectOnly === true ? true : undefined,
       bodyTris: e.bodyTris && typeof e.bodyTris === "object" ? Object.fromEntries(Object.entries(e.bodyTris).filter(([, v]) => typeof v === "string")) : undefined,
       fogged: e.fogged === false ? false : undefined,

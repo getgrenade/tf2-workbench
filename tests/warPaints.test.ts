@@ -44,3 +44,16 @@ test("an empty definitions file has no paint kits", () => {
   const d = parsePaintKits(new Uint8Array(0), new Map(), () => undefined);
   assert.equal(d.kits.size, 0);
 });
+
+test("a scene keeps each character's war paint, its 64-bit seed as written", async () => {
+  const { parseScene } = await import("../src/viewer/scene.ts");
+  const base = { app: "tf2-workbench", version: 1, camera: { position: [0, 50, 300], target: [0, 40, 0] } };
+  const s = parseScene(JSON.stringify({ ...base, entities: [
+    { cls: "sniper", team: 0, loadout: [], held: 14, warPaint: { kit: 14, wear: 3, seed: "18446744073709551615" } },
+    { cls: "scout", team: 1, loadout: [], held: 13, warPaint: { kit: 200, wear: 9, seed: "oops" } },
+    { cls: "heavy", team: 0, loadout: [], held: 15 },
+  ] }));
+  assert.deepEqual(s.entities[0].warPaint, { kit: 14, wear: 3, seed: "18446744073709551615" });
+  assert.deepEqual(s.entities[1].warPaint, { kit: 200, wear: 5, seed: "0" });
+  assert.equal(s.entities[2].warPaint, undefined);
+});
