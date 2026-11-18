@@ -132,6 +132,13 @@ function parseScenePose(p: any): SceneEntity["pose"] {
  * Parses and checks the text of a scene file. Throws with a short reason when it is not a scene of this version; fields that are
  * missing or of the wrong type in an otherwise valid scene are replaced by neutral defaults where that is safe.
  */
+/** A war paint read from a scene file (its seed kept as text, a 64-bit number), or null when it is not one. */
+function warPaintOf(p: any): { kit: number; wear: number; seed: string } | null {
+  if (!p || typeof p !== "object" || typeof p.kit !== "number" || !Number.isFinite(p.kit)) return null;
+  const wear = typeof p.wear === "number" && Number.isFinite(p.wear) ? Math.min(5, Math.max(1, Math.round(p.wear))) : 1;
+  return { kit: p.kit, wear, seed: /^\d+$/.test(String(p.seed ?? "")) ? String(p.seed) : "0" };
+}
+
 export function parseScene(text: string): SceneFile {
   let raw: any;
   try {
@@ -160,7 +167,10 @@ export function parseScene(text: string): SceneFile {
       activeItem: isNum(e.activeItem) ? e.activeItem : null,
       held: isNum(e.held) ? e.held : null,
       // (the held weapon's war paint: its seed is kept as text, a 64-bit number)
-      ...(e.warPaint && isNum(e.warPaint.kit) ? { warPaint: { kit: e.warPaint.kit, wear: isNum(e.warPaint.wear) ? Math.min(5, Math.max(1, Math.round(e.warPaint.wear))) : 1, seed: /^\d+$/.test(String(e.warPaint.seed ?? "")) ? String(e.warPaint.seed) : "0" } } : {}),
+      ...(warPaintOf(e.warPaint) ? { warPaint: warPaintOf(e.warPaint)! } : {}),
+      // each weapon's war paint, by item id, and the weapon each class held
+      ...(e.warPaints && typeof e.warPaints === "object" ? { warPaints: Object.fromEntries(Object.entries(e.warPaints).filter(([id]) => /^\d+$/.test(id)).flatMap(([id, p]) => (warPaintOf(p) ? [[id, warPaintOf(p)!]] : []))) } : {}),
+      ...(e.heldByClass && typeof e.heldByClass === "object" ? { heldByClass: Object.fromEntries(Object.entries(e.heldByClass).filter(([, v]) => v === null || isNum(v))) as Record<string, number | null> } : {}),
       inspectOnly: e.inspectOnly === true ? true : undefined,
       bodyTris: e.bodyTris && typeof e.bodyTris === "object" ? Object.fromEntries(Object.entries(e.bodyTris).filter(([, v]) => typeof v === "string")) : undefined,
       fogged: e.fogged === false ? false : undefined,

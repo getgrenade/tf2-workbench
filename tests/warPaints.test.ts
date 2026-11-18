@@ -57,3 +57,15 @@ test("a scene keeps each character's war paint, its 64-bit seed as written", asy
   assert.deepEqual(s.entities[1].warPaint, { kit: 200, wear: 5, seed: "0" });
   assert.equal(s.entities[2].warPaint, undefined);
 });
+
+test("a scene keeps each weapon's own war paint and the weapon each class held", async () => {
+  const { parseScene } = await import("../src/viewer/scene.ts");
+  const base = { app: "tf2-workbench", version: 1, camera: { position: [0, 50, 300], target: [0, 40, 0] } };
+  const s = parseScene(JSON.stringify({ ...base, entities: [{
+    cls: "scout", team: 0, loadout: [], held: 13,
+    warPaints: { 13: { kit: 104, wear: 2, seed: "42" }, 23: { kit: 14, wear: 1, seed: "7" }, x: { kit: 1 }, 45: { nope: true } },
+    heldByClass: { scout: 13, soldier: null, pyro: "oops" },
+  }] }));
+  assert.deepEqual(s.entities[0].warPaints, { 13: { kit: 104, wear: 2, seed: "42" }, 23: { kit: 14, wear: 1, seed: "7" } });
+  assert.deepEqual(s.entities[0].heldByClass, { scout: 13, soldier: null });
+});
