@@ -146,60 +146,32 @@ export async function picturePsd(p: PromoPicture, look: BoardLook): Promise<Uint
   return new Uint8Array(buffer);
 }
 
-/** Moves a layer (and its mask, its text, and the layers of a folder) by `dx`, `dy`. */
-function shiftLayer(l: Layer, dx: number, dy: number) {
-  if (l.left !== undefined) l.left += dx;
-  if (l.top !== undefined) l.top += dy;
-  if (l.right !== undefined) l.right += dx;
-  if (l.bottom !== undefined) l.bottom += dy;
-  if (l.mask) {
-    if (l.mask.left !== undefined) l.mask.left += dx;
-    if (l.mask.top !== undefined) l.mask.top += dy;
-    if (l.mask.right !== undefined) l.mask.right += dx;
-    if (l.mask.bottom !== undefined) l.mask.bottom += dy;
-  }
-  if (l.text?.transform) { l.text.transform[4] += dx; l.text.transform[5] += dy; }
-  for (const c of l.children ?? []) shiftLayer(c, dx, dy);
-}
-
-/** Where each picture goes in one file: in rows, left to right, apart from each other, the rows no wider than the widest picture or 4096. */
-export function sheetLayout(sizes: { w: number; h: number }[], gap = 128): { x: number; y: number }[] & { width: number; height: number } {
-  const limit = Math.max(4096, ...sizes.map((s) => s.w));
-  const out = [] as unknown as { x: number; y: number }[] & { width: number; height: number };
-  let x = 0, y = 0, rowH = 0, width = 0;
-  for (const s of sizes) {
-    if (x > 0 && x + s.w > limit) { x = 0; y += rowH + gap; rowH = 0; }
-    out.push({ x, y });
-    width = Math.max(width, x + s.w);
-    rowH = Math.max(rowH, s.h);
-    x += s.w + gap;
-  }
-  out.width = Math.max(1, width);
-  out.height = Math.max(1, y + rowH);
-  return out;
+/**
+ * The size of one Photoshop file holding every picture of the board stacked: the size of the pictures (the largest, when they differ).
+ * Each picture sits at the top left, as in its own file.
+ */
+export function stackSize(sizes: { w: number; h: number }[]): { width: number; height: number } {
+  return { width: Math.max(1, ...sizes.map((s) => s.w)), height: Math.max(1, ...sizes.map((s) => s.h)) };
 }
 
 /**
- * Every picture of the board in one Photoshop file: each a folder of its own (named as the picture), laid out in rows apart from each
- * other, with its backdrop in a Background folder at the bottom of it and its other layers over it as in the picture's own file.
+ * Every picture of the board in one Photoshop file of the pictures' size: each a folder of its own (named as the picture), stacked over the
+ * others in the board's order (the first on top), with its backdrop in a Background folder at the bottom of it and its other layers over
+ * it as in the picture's own file. Only the first picture's folder is shown, so the file opens looking like it; the others are a click away.
  */
 export async function boardPsd(pictures: PromoPicture[], look: BoardLook): Promise<Uint8Array> {
-  const at = sheetLayout(pictures.map((p) => ({ w: p.w, h: p.h })));
+  const { width, height } = stackSize(pictures.map((p) => ({ w: p.w, h: p.h })));
   const merged = document.createElement("canvas");
-  merged.width = at.width;
-  merged.height = at.height;
-  const mctx = merged.getContext("2d")!;
+  merged.width = width;
+  merged.height = height;
   const folders: Layer[] = [];
   for (const [i, p] of pictures.entries()) {
-    const { x, y } = at[i];
     const { backdrop, layers } = await pictureLayers(p, look);
-    const folder: Layer = { name: p.name, opened: false, children: [{ name: "Background", opened: false, children: [backdrop] }, ...layers] };
-    shiftLayer(folder, x, y);
-    folders.push(folder);
-    const one = document.createElement("canvas");
-    renderPicture(one, p, look);
-    mctx.drawImage(one, x, y);
+    folders.push({ name: p.name, opened: false, hidden: i > 0, children: [{ name: "Background", opened: false, children: [backdrop] }, ...layers] });
+    if (i === 0) renderPicture(merged, p, look);
   }
-  const buffer = writePsd({ width: at.width, height: at.height, canvas: merged, children: folders }, { noBackground: true, generateThumbnail: true });
+  // (a Photoshop file lists its layers bottom first: the board's first picture goes last, on top)
+  folders.reverse();
+  const buffer = writePsd({ width, height, canvas: merged, children: folders }, { noBackground: true, generateThumbnail: true });
   return new Uint8Array(buffer);
 }

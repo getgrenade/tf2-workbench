@@ -1293,6 +1293,8 @@ body.dndActive.dndRefused * { cursor: no-drop !important; }
 .promoSideFoot { margin-top: auto; padding-top: var(--ui-5); }
 .promoSideFoot .btns { display: grid; grid-template-columns: 1fr 1fr; }
 .promoSideFoot .btns .primary { grid-column: 1 / -1; }
+/* (the buttons grow with their text, which wraps in the narrow side panel) */
+.promoSideFoot .btns button { height: auto; min-height: var(--ui-h); padding: 5px 8px; line-height: 1.2; white-space: normal; text-align: center; }
 .promoSideFoot .chartInfo:empty { display: none; }
 .promoCenter { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
 .promoThumbs { display: flex; gap: var(--ui-6); overflow-x: auto; overflow-y: hidden; padding: var(--ui-4) var(--ui-5) var(--ui-5); border-bottom: 1px solid var(--line); background: var(--panel); flex: none; }

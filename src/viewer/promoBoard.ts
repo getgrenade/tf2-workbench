@@ -130,7 +130,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       <div class="promoLookFx"></div>
       <div class="promoSideFoot">
         <p class="chartInfo promoStatus" role="status"></p>
-        <div class="btns"><button class="promoNew" title="Make the pictures of another set">New set…</button><button class="promoExportPsd" title="Every picture as a Photoshop file, each layer of it a layer (texts editable, the glow and the text outline and shadow as layer effects)">Export PSDs…</button><button class="promoExportOnePsd" title="Every picture in one Photoshop file: each in a folder of its own, its backdrop in a Background folder in it">Export one PSD…</button><button class="primary promoExportAll">Export all…</button></div>
+        <div class="btns"><button class="promoNew" title="Make the pictures of another set">New set…</button><button class="promoExportPsd" title="Every picture as a Photoshop file, each layer of it a layer (texts editable, the glow and the text outline and shadow as layer effects)">Export PSDs…</button><button class="promoExportOnePsd" title="Every picture in one Photoshop file the same size as the pictures, stacked: each in a folder of its own (the first shown, the others hidden), its backdrop in a Background folder in it">Export one PSD…</button><button class="primary promoExportAll">Export all…</button></div>
       </div>
     </aside>
     <main class="promoCenter">
