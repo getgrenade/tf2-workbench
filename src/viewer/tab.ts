@@ -1149,7 +1149,7 @@ export function createViewTab(els: Els) {
     if (e === selected) refreshKillstreak();
     if (e === compilerTarget) void bakeCompilerVisDev();
     void syncConditions(e);
-    if (e === selected) refreshTextures();
+    refreshTextures(); // (the panel lists every character's models, not only the selected one's)
     if (e === selected) renderJiggles();
     if (imported) {
       const target = modelPath(e);
@@ -2977,8 +2977,11 @@ export function createViewTab(els: Els) {
   function wornModelPath(id: string): string | null {
     const e = selected;
     if (!e || !id.startsWith("item:")) return null;
-    const worn = e.applied.find((w) => w.item.id === Number(id.slice(5)));
-    return worn ? itemModelFor(worn.item, gameClassOf(e.cls), worn.style) : null;
+    const itemId = Number(id.slice(5));
+    const worn = e.applied.find((w) => w.item.id === itemId);
+    if (worn) return itemModelFor(worn.item, gameClassOf(e.cls), worn.style);
+    // the held weapon: its model as drawn (a swap keeps the game's path)
+    return e.actor.drawnModels().find((s) => s.itemId === itemId && !s.prop)?.data.path ?? null;
   }
   /** Draws again every character that wears a model, after its swap changed. */
   function redrawWearers(path: string) {
@@ -2986,7 +2989,7 @@ export function createViewTab(els: Els) {
     for (const [k] of swapBuilt) if (k.startsWith(`${want}|`)) swapBuilt.delete(k);
     for (const e of entities) {
       const cls = gameClassOf(e.cls);
-      if (e.applied.some((w) => itemModelFor(w.item, cls, w.style)?.toLowerCase() === want)) void applyLoadout(e, e.applied);
+      if (e.applied.some((w) => itemModelFor(w.item, cls, w.style)?.toLowerCase() === want) || e.actor.drawnModels().some((s) => s.data.path.toLowerCase() === want)) void applyLoadout(e, e.applied);
     }
   }
   const modelSwapHooks = {
@@ -3087,21 +3090,37 @@ export function createViewTab(els: Els) {
     refreshTextures();
   }
 
+  /** What a character or prop is called in lists: its own name, its class, or its model's file name. */
+  function entityTitle(e: Entity): string {
+    if (e.name) return e.name;
+    const label = CLASSES.find(([, m]) => m === e.cls)?.[0];
+    return label ?? e.cls.split(/[\\/]/).pop()?.replace(/\.mdl$/i, "") ?? e.cls;
+  }
+
   function refreshTextures() {
     if (!texPreview) return;
-    const e = selected;
     const items: PreviewItem[] = [];
     const counts: { name: string; tris: number; verts: number }[] = [];
-    if (e) {
-      const cls = gameClassOf(e.cls);
-      // one worn model: its counts, and its materials with their textures and UVs
-      const add = (label: string, data: ModelData, materialOf: (m: ModelData["bodyParts"][number]["models"][number]["meshes"][number]) => string, lookup: (path: string) => MaterialData | null | undefined, id?: string) => {
+    // every model in the scene: the selected character's first (its own, then what it wears and holds), then the other characters' and props'
+    const listed = new Set<string>();
+    const order = selected ? [selected, ...entities.filter((x) => x !== selected)] : [...entities];
+    for (const e of order) {
+      const own = e === selected;
+      const prefix = own ? "" : `${entityTitle(e)} · `;
+      // one model: its counts (the selected character's), and its materials with their textures and UVs; a model drawn the same way twice is listed once
+      const add = (label: string, data: ModelData, materialOf: (m: ModelData["bodyParts"][number]["models"][number]["meshes"][number]) => string, lookup: (path: string) => MaterialData | null | undefined, id?: string, learn?: number) => {
+        const firstPath = materialOf(data.bodyParts[0]?.models[0]?.meshes[0] ?? ({ material: "", materials: [] } as never));
+        const key = `${data.path}|${firstPath}`;
+        if (!own && listed.has(key)) return;
+        listed.add(key);
         let tris = 0, verts = 0;
         for (const bp of data.bodyParts) for (const m of bp.models[0]?.meshes ?? []) {
           tris += m.indices.length / 3;
           verts += m.positions.length / 3;
         }
-        counts.push({ name: label, tris, verts });
+        if (own) counts.push({ name: label, tris, verts });
+        label = prefix + label;
+        id = own ? id : `ent:${entities.indexOf(e)}:${id ?? label}`;
         const seen = new Set<string>();
         const list: PreviewItem["materials"] = [];
         for (const bp of data.bodyParts) {
@@ -3120,26 +3139,36 @@ export function createViewTab(els: Els) {
           }
         }
         if (list.length) items.push({ label, materials: list, id });
-        if (id?.startsWith("item:")) editedItems.learn(Number(id.slice(5)), list.map((x) => x.path));
+        if (learn !== undefined) editedItems.learn(learn, list.map((x) => x.path));
       };
       // the character itself (its skin of the team it is on, or its zombie skin)
       // (by the character's own class name: the Demoman's model is demo.mdl, not the game class's demoman.mdl)
       const classData = models.get(modelPath(e));
       if (classData) {
         const skin = e.zombie ? zombieFamily(classData.skinCount, e.team) ?? e.team : e.team;
-        add(`${e.name ?? cls[0].toUpperCase() + cls.slice(1)} (character)`, classData, (m) => m.materials[skin] ?? m.material, (p) => materials.get(p), "character");
+        const kind = CLASSES.some(([, m]) => m === e.cls) ? "character" : isBuildingCls(e.cls) ? "building" : "prop";
+        add(`${entityTitle(e)} (${kind})`, classData, (m) => m.materials[skin] ?? m.material, (p) => materials.get(p), "character");
       }
-      for (const { item, style } of e.applied) {
-        const path = itemModelFor(item, cls, style);
-        const data = path ? swapBuilt.get(swapKey(path, e.cls)) ?? models.get(path) : undefined;
-        if (!data) continue;
-        const skin = itemSkinFor(item, e.team, style) ?? e.team;
-        add(item.displayName, data, (m) => itemMaterialOverride(item) ?? m.materials[skin] ?? m.material, (p) => materials.get(p), `item:${item.id}`);
-      }
-      // the item being built in the compiler, while this character wears it (its materials are its own, not the game's)
+      // what it wears and holds, as drawn (cosmetics and their extra parts, the weapon, a taunt's prop), with the item each is of
+      const named = new Map<number, ItemInfo>();
+      for (const w of e.applied) named.set(w.item.id, w.item);
+      if (e.held) named.set(e.held.id, e.held);
+      const seenItem = new Set<number>();
       const preview = compilerPreview;
-      if (preview && e === compilerTarget && preview.cls === e.cls) {
-        add(preview.name || "Compiler item", preview.data, (m) => m.materials[e.team] ?? m.material, (p) => preview.materials.get(p) ?? materials.get(p));
+      for (const spec of e.actor.drawnModels()) {
+        const file = spec.data.path.split(/[\\/]/).pop()?.replace(/\.mdl$/i, "") ?? "model";
+        const materialOf = (m: ModelData["bodyParts"][number]["models"][number]["meshes"][number]) => spec.material ?? m.materials[spec.skin] ?? m.material;
+        if (spec.itemId === TEMPORARY_ITEM && preview) {
+          // the item being built in the compiler, while this character wears it (its materials are its own, not the game's)
+          add(preview.name || "Compiler item", spec.data, materialOf, (p) => preview.materials.get(p) ?? materials.get(p));
+          continue;
+        }
+        const item = spec.itemId !== undefined ? named.get(spec.itemId) : undefined;
+        const part = spec.itemId !== undefined && seenItem.has(spec.itemId);
+        if (spec.itemId !== undefined) seenItem.add(spec.itemId);
+        const name = spec.prop ? `${item?.displayName ?? file} (taunt prop)` : item ? `${item.displayName}${part ? ` (${file})` : spec.weapon ? " (weapon)" : ""}` : file;
+        // (an item's first model is the one its Model row swaps)
+        add(name, spec.data, materialOf, (p) => materials.get(p), item && !part && !spec.prop ? `item:${item.id}` : `model:${spec.data.path}`, item?.id);
       }
     }
     texPreview.show(items);
@@ -4367,6 +4396,7 @@ export function createViewTab(els: Els) {
     clearFace(e);
     const i = entities.indexOf(e);
     entities.splice(i, 1);
+    queueMicrotask(refreshTextures); // (its models leave the Textures panel)
     if (gizmoEntity === e) {
       gizmoEntity = null;
     }
