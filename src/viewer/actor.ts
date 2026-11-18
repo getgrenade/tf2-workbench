@@ -86,6 +86,8 @@ export interface CosmeticSpec {
    * Hotrod's mask flips down over the Engineer's face); the rest of the time `clip` poses it.
    */
   buildClip?: ClipData | null;
+  /** The building pose held ("down") or never shown ("up") whatever the character does; absent: while it builds. */
+  buildPose?: "up" | "down";
   /** The item this model belongs to (what a click on it picks). */
   itemId?: number;
   /** The weapon the character holds. */
@@ -203,7 +205,7 @@ export class Actor {
   private flexGlobals: FlexGlobals = new Map();
   private flexClass: FlexMesh[] = [];
   private flexCosmetic: FlexMesh[] = [];
-  private cosmetics: { rig: Rig; bones: THREE.Bone[]; bindLocal: THREE.Matrix4[]; map: number[]; jiggles: (JiggleBone | null)[]; own: Playback | null; idle: boolean; loop: boolean; clock: number; taunt: Playback | null; build: Playback | null }[] = [];
+  private cosmetics: { rig: Rig; bones: THREE.Bone[]; bindLocal: THREE.Matrix4[]; map: number[]; jiggles: (JiggleBone | null)[]; own: Playback | null; idle: boolean; loop: boolean; clock: number; taunt: Playback | null; build: Playback | null; buildAlways: boolean }[] = [];
   /** The character plays a taunt: worn items with a taunt animation of their own play it (see CosmeticSpec.tauntClip). */
   private taunting = false;
   /** The character holds a blueprint or carries a building: worn items with a building pose of their own show it (see CosmeticSpec.buildClip). */
@@ -939,7 +941,7 @@ export class Actor {
     this.boneAims.clear(); // the worn items changed; any hand-aim/override no longer refers to a bone that is on
     this.boneOverride.clear();
     const classIndex = new Map(this.classData.bones.map((b, i) => [b.name.toLowerCase(), i]));
-    for (const [index, { data, paint, skin, clip, idle, loop, tauntClip, buildClip }] of list.entries()) {
+    for (const [index, { data, paint, skin, clip, idle, loop, tauntClip, buildClip, buildPose }] of list.entries()) {
       const rig = new Rig(data.bones);
       const bones = data.bones.map((info) => {
         const b = new THREE.Bone();
@@ -967,11 +969,11 @@ export class Actor {
         taunt.clip = tauntClip;
       }
       let build: Playback | null = null;
-      if (buildClip) {
+      if (buildClip && buildPose !== "up") {
         build = new Playback();
         build.clip = buildClip;
       }
-      this.cosmetics.push({ rig, bones, bindLocal, map, jiggles, own, idle: !!idle && !!own, loop: !!loop && !!own, clock: 0, taunt, build });
+      this.cosmetics.push({ rig, bones, bindLocal, map, jiggles, own, idle: !!idle && !!own, loop: !!loop && !!own, clock: 0, taunt, build, buildAlways: buildPose === "down" });
       for (const [partIndex, bp] of data.bodyParts.entries()) {
         const sub = (list[index].weapon && partIndex === 0 ? bp.models[this.heldBodyState] : null) ?? bp.models[0];
         if (!sub) continue;
@@ -1955,7 +1957,7 @@ export class Actor {
           const local = ownLocal(p.clip!, p.frame(), i, _cosLocal);
           if (c.rig.parents[i] >= 0) world[i].multiplyMatrices(world[c.rig.parents[i]], local);
           else world[i].copy(local);
-        } else if (c.build && this.building) {
+        } else if (c.build && (this.building || c.buildAlways)) {
           // the item's pose while its wearer builds, held as the game holds it (the Hotrod's mask down while the Engineer carries a blueprint)
           const p = c.build;
           p.time = 0;
