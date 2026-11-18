@@ -34,6 +34,8 @@ export interface SceneEntity {
   activeItem: number | null;
   /** The held weapon or taunt. */
   held: number | null;
+  /** The held weapon's war paint. */
+  warPaint?: { kit: number; wear: number; seed: string };
   /** Flex controller values by name. */
   flex: Record<string, number>;
   anim: { sequence: string | null; encoded: number[] };

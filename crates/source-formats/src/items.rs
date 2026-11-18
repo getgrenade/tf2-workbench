@@ -144,6 +144,9 @@ pub struct ItemDb {
     pub paints: Vec<Paint>,
     /// Equip region -> regions it conflicts with (both directions are looked up by consumers).
     pub equip_conflicts: BTreeMap<String, Vec<String>>,
+    /// The war-painted weapons' entries (15000 and up: the Night Owl Sniper Rifle is 15000) by id, each with the weapon its
+    /// `paintkit_weapon_<weapon>` prefab names (`sniperrifle`). A war paint names the weapons it is made for by these ids.
+    pub paintkit_weapons: BTreeMap<u32, String>,
 }
 
 fn find<'a>(nodes: &'a [Node], key: &str) -> Option<&'a Node> {
@@ -663,9 +666,13 @@ pub fn parse_with_schema(text: &str, names: &HashMap<String, String>, workshop: 
     let mut weapons = Vec::new();
     let mut taunts = Vec::new();
     let mut paints = Vec::new();
+    let mut paintkit_weapons = BTreeMap::new();
     if let Some(block) = get_block(game, "items") {
         for n in block {
             let (Ok(id), Some(own)) = (n.key.parse::<u32>(), n.block()) else { continue };
+            if let Some(weapon) = get_str(own, "prefab").and_then(|p| p.split_whitespace().find_map(|x| x.to_ascii_lowercase().strip_prefix("paintkit_weapon_").map(str::to_string))) {
+                paintkit_weapons.insert(id, weapon);
+            }
             let resolved = resolve(own, &prefabs, 0);
             if let Some(paint) = build_paint(id, &resolved, names) {
                 paints.push(paint);
@@ -721,7 +728,7 @@ pub fn parse_with_schema(text: &str, names: &HashMap<String, String>, workshop: 
             }
         }
     }
-    Ok(ItemDb { items, weapons, taunts, paints, equip_conflicts })
+    Ok(ItemDb { items, weapons, taunts, paints, equip_conflicts, paintkit_weapons })
 }
 
 /// Loads the cosmetics database from the TF2 install (loose files, falling back to VPK contents).

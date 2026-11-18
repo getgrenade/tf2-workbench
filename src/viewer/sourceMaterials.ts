@@ -133,12 +133,12 @@ export class SourceMaterials {
    * The material for a mesh: shared between entities for the same VMT and paint, except eye materials, which carry
    * the eyeball's own constants. Shared materials are never disposed (their textures are cached anyway).
    */
-  material(m: MaterialData | null, eye?: EyeballData, paint: Rgb | null = null, fx?: MaterialEffects): THREE.ShaderMaterial {
+  material(m: MaterialData | null, eye?: EyeballData, paint: Rgb | null = null, fx?: MaterialEffects, skin?: THREE.Texture | null): THREE.ShaderMaterial {
     if (m && eye && m.shader === "eyerefract") return this.makeMaterial(m, eye, paint);
-    const key = `${m?.path ?? ""}|${paint ? paint.join(",") : ""}${fx ? `|${JSON.stringify(fx)}` : ""}`;
+    const key = `${m?.path ?? ""}|${paint ? paint.join(",") : ""}${fx ? `|${JSON.stringify(fx)}` : ""}${skin ? `|skin:${skin.uuid}` : ""}`;
     let mat = this.cache.get(key);
     if (!mat) {
-      mat = this.makeMaterial(m, undefined, paint, fx);
+      mat = this.makeMaterial(m, undefined, paint, fx, skin);
       mat.userData.shared = true;
       this.cache.set(key, mat);
     }
@@ -153,6 +153,15 @@ export class SourceMaterials {
       const frames = parseTextureFrames(buffer).map((frame) => makeTexture(frame, "srgb"));
       this.detailFrames.set(name, frames.length ? frames : null);
     }).catch((error) => console.error(`Detail texture ${name} unavailable`, error));
+  }
+
+  /** Lets go of the materials made with a skin (a war paint's texture) that is no longer worn. */
+  forgetSkin(skin: THREE.Texture) {
+    for (const [k, mat] of [...this.cache]) {
+      if (!k.endsWith(`|skin:${skin.uuid}`)) continue;
+      this.cache.delete(k);
+      mat.dispose();
+    }
   }
 
   /** Forgets the materials and textures of the VMT paths `match` accepts, so they are read again (their files changed). */
@@ -171,14 +180,15 @@ export class SourceMaterials {
   }
 
   /** Builds the Source-style material for a VMT (or a flat gray fallback). */
-  makeMaterial(m: MaterialData | null, eye?: EyeballData, paint: Rgb | null = null, fx?: MaterialEffects): THREE.ShaderMaterial {
+  /** `skin`: a base texture in place of the material's own (a war-painted weapon's, see warPaintCompositor.ts). */
+  makeMaterial(m: MaterialData | null, eye?: EyeballData, paint: Rgb | null = null, fx?: MaterialEffects, skin?: THREE.Texture | null): THREE.ShaderMaterial {
     if (m && eye && m.shader === "eyerefract") return this.makeEyeMaterial(m, eye);
     const p = m?.params ?? {};
     // the engine reads a switch as a whole number (GetIntValue): "$phong" ".5" is 0, off
     const flag = (k: string) => Math.trunc(Number(p[k] ?? 0)) !== 0;
     const num = (k: string, d: number) => (p[k] !== undefined && !Number.isNaN(Number(p[k])) ? Number(p[k]) : d);
 
-    const base = m ? this.texture(m, "base") : null;
+    const base = skin ?? (m ? this.texture(m, "base") : null);
     // a self-shadowing bump map ($ssbump) holds the weights of three lighting directions, not a normal: read as one it would only darken
     const bump = m && !flag("$ssbump") ? this.texture(m, "bump") : null;
     const warp = m ? this.texture(m, "warp") : null;

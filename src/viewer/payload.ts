@@ -342,6 +342,8 @@ export interface ItemDb {
   taunts: ItemInfo[];
   paints: PaintInfo[];
   equipConflicts: Record<string, string[]>;
+  /** The war-painted weapons' entries (15000 and up) by id, each with its weapon (`sniperrifle`). */
+  paintkitWeapons?: Record<string, string>;
 }
 
 export function parseItems(buf: ArrayBuffer): ItemDb {

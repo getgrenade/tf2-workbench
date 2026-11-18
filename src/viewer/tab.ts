@@ -10,9 +10,12 @@ import { propLabel } from "../props/propList";
 import { forgetThumbnail } from "../props/propThumbs";
 import { decodeTga, encodeTga, iconProblem, ICON_SAFE_ROWS } from "../compiler/tga";
 import { fadeAmount, maskIcon, type IconFade } from "../compiler/iconMask";
-import { searchPaths, importSourceDir, readItemSession, readPropSession, saveItemIcon, buildItem, buildProp, loadTextureFrames, readSourceFile, revealFile, sourceSiblings, sourceStamp, mountItemZips } from "../api";
+import { searchPaths, importSourceDir, readItemSession, readPropSession, saveItemIcon, buildItem, buildProp, loadTextureFrames, readGameFile, readSourceFile, revealFile, sourceSiblings, sourceStamp, mountItemZips } from "../api";
 import { FILE_DROP_EVENT, type FileDropDetail } from "../fileDrop";
 import { parseTextureFrames } from "./sourceMaterials";
+import { parseLocalization, parsePaintKits, seedOf, warPaintWeaponOf, type PaintKitDefs } from "./warPaints";
+import { WarPaintCompositor, type WarPaint } from "./warPaintCompositor";
+import { createWarPaintUi } from "./warPaintUi";
 import { getWeaponProfile, importEffectZip, removeCustomEffect, type WeaponProfile, type UnusualEffectInfo } from "../api";
 import { lipSync, loadScene, phonemeClasses, scenePlaying, voiceLines, type VoiceLine } from "../api";
 import { closeVoiceLines, openVoiceLines } from "./voiceLinesUi";
@@ -251,6 +254,12 @@ interface AnimPreset {
 
 /** One character in the scene and everything the panels show for it. */
 interface Entity {
+  /** The held weapon's war paint (kept when the weapon changes: it shows again on a weapon it is made for). */
+  warPaint?: WarPaint | null;
+  /** The war paint's skin on the held weapon now, with what it was made from. */
+  warPaintSkin?: { key: string; tex: THREE.Texture } | null;
+  /** Counts the war paint skins asked for, so a slower one never replaces a newer. */
+  warPaintToken?: number;
   unusuals: UnusualSettings;
   unusualError: string;
   /** A worn item sets the player skin override (a Voodoo-Cursed soul): the class model is drawn in its zombie skin family. */
@@ -922,6 +931,8 @@ export function createViewTab(els: Els) {
       const rgb = compilerPaint && compilerPreview.paintable ? (team === 1 ? compilerPaint.rgb2 ?? compilerPaint.rgb : compilerPaint.rgb) : null;
       list.push({ data: compilerPreview.data, paint: rgb === null ? null : unpackRgb(rgb), skin: team, clip: null, itemId: TEMPORARY_ITEM });
     }
+    // a skin made for another weapon (or team, or paint) is not given to the weapon now held: the right one follows
+    if ((e.warPaintSkin?.key ?? null) !== warPaintKey(e)) e.actor.setHeldSkin(null);
     e.actor.setCosmetics(list);
     e.actor.setProp(prop);
     void syncConditions(e);
@@ -938,7 +949,72 @@ export function createViewTab(els: Els) {
       if (token === e.loadoutToken) playWeaponAnimation(e, weapon);
     }
     if (token === e.loadoutToken) await applyUnusuals(e);
+    if (token === e.loadoutToken) void refreshWarPaint(e);
   }
+
+  // ---- war paints (see warPaints.ts and warPaintCompositor.ts) ----
+  let warPaintData: Promise<PaintKitDefs> | null = null;
+  /** The game's war paints, read once (proto_defs.vpd and its names; the 15000s' weapons come from the item list). */
+  function warPaintDefs(): Promise<PaintKitDefs> {
+    warPaintData ??= (async () => {
+      const [proto, names, db] = await Promise.all([readGameFile("scripts/protodefs/proto_defs.vpd"), readGameFile("resource/tf_proto_obj_defs_english.txt"), loadItemDb()]);
+      return parsePaintKits(new Uint8Array(proto), parseLocalization(new Uint8Array(names)), (id) => db.paintkitWeapons?.[String(id)]);
+    })();
+    warPaintData.catch(() => { warPaintData = null; });
+    return warPaintData;
+  }
+  let warPaintComp: WarPaintCompositor | null = null;
+  async function warPaintCompositor(): Promise<WarPaintCompositor> {
+    const defs = await warPaintDefs();
+    warPaintComp ??= new WarPaintCompositor(ensureViewer().renderer, defs, async (path) => parseTextureFrames(await loadTextureFrames(path, 1))[0] ?? null);
+    return warPaintComp;
+  }
+  /** What the held weapon's skin is made from now (null: none to show). */
+  function warPaintKey(e: Entity): string | null {
+    const weapon = e.held ? warPaintWeaponOf(e.held) : null;
+    const p = e.warPaint;
+    return weapon && p ? `${p.kit}|${weapon}|${p.wear}|${e.team === 1 ? "BLU" : "RED"}|${p.seed}` : null;
+  }
+  /** Gives the held weapon its war paint's skin (made when it changed), or its own texture back. */
+  async function refreshWarPaint(e: Entity) {
+    const key = warPaintKey(e);
+    if ((e.warPaintSkin?.key ?? null) === key) {
+      e.actor.setHeldSkin(e.warPaintSkin?.tex ?? null);
+      return;
+    }
+    const mine = (e.warPaintToken = (e.warPaintToken ?? 0) + 1);
+    let tex: THREE.Texture | null = null;
+    if (key && e.held && e.warPaint) {
+      try {
+        const weapon = warPaintWeaponOf(e.held)!;
+        tex = await (await warPaintCompositor()).composite(weapon, e.warPaint, e.team === 1 ? "BLU" : "RED", seedOf(e.warPaint.seed));
+      } catch (err) {
+        console.warn("could not paint the weapon:", err);
+      }
+    }
+    if (mine !== e.warPaintToken || !entities.includes(e)) {
+      (tex?.userData.dispose as (() => void) | undefined)?.();
+      return;
+    }
+    const old = e.warPaintSkin;
+    e.warPaintSkin = key && tex ? { key, tex } : null;
+    e.actor.setHeldSkin(tex);
+    if (old) {
+      viewer?.mats.forgetSkin(old.tex);
+      (old.tex.userData.dispose as (() => void) | undefined)?.();
+    }
+    if (e === selected) void warPaintUi.refresh();
+  }
+  const warPaintUi = createWarPaintUi(document.getElementById("warPaint") ?? document.createElement("div"), {
+    current: () => ({ weapon: selected?.held ? warPaintWeaponOf(selected.held) : null, paint: selected?.warPaint ?? null }),
+    kits: async (weapon) => [...(await warPaintDefs()).kits.values()].filter((k) => k.weapons[weapon]).map((k) => ({ id: k.id, name: k.name })).sort((a, b) => a.name.localeCompare(b.name)),
+    set: (paint) => {
+      const e = selected;
+      if (!e) return;
+      e.warPaint = paint;
+      void refreshWarPaint(e);
+    },
+  });
 
   /** The cosmetics that play a sequence of their own on a loop, by item id: Pet RoBro (its idle). (The Hat of Undeniable Wealth and Respect has a "blink" sequence too, but it holds no bone motion we can read: it has to be scale, which the animation baker does not read yet.). */
   const ANIMATED_IDLE: Record<number, string> = { 733: "idle" };
@@ -1005,6 +1081,7 @@ export function createViewTab(els: Els) {
       if (!picked || !e) return; // class switches reapply the loadout through the cosmetics browser
       e.held = weapons.getHeld();
       void applyLoadout(e, e.applied);
+      void warPaintUi.refresh();
       // in pose mode (or on a held pose) the weapon changes in the hands without touching the pose: no idle sequence is switched to
       if (!e.actor.isPosing && !e.actor.holdsPose) playWeaponAnimation(e, weapon);
     },
@@ -2464,6 +2541,7 @@ export function createViewTab(els: Els) {
     renderConditions();
     renderJiggles();
     bodyPicker?.sync();
+    void warPaintUi.refresh();
     itemsUi.load(e.items);
     weapons.load(e.held);
     flex.restore(e.flex, models.get(classPath(e.cls)) ?? null);
@@ -6454,6 +6532,7 @@ export function createViewTab(els: Els) {
         loadout: e.items.loadout.map((l) => ({ item: l.item.id, paint: l.paint?.id ?? null, style: l.style, ...(l.hidden ? { hidden: true } : {}), ...(l.skin !== undefined ? { skin: l.skin } : {}) })),
         activeItem: e.items.activeId,
         held: e.held?.id ?? null,
+        ...(e.warPaint ? { warPaint: { ...e.warPaint } } : {}),
         ...(isBuildingCls(e.cls) ? { building: { ...e.fx } } : {}),
         flex: Object.fromEntries(e.flex),
         anim: { sequence: e.anim.info?.sequences.find((q) => q.index === e.anim.seq)?.name ?? null, encoded: e.anim.encoded },
@@ -6529,6 +6608,7 @@ export function createViewTab(els: Els) {
       });
       e.items = { loadout, activeId: loadout.some((x) => x.item.id === s.activeItem) ? s.activeItem : loadout.at(-1)?.item.id ?? null };
       e.held = s.held !== null ? byId.get(s.held) ?? null : null;
+      e.warPaint = s.warPaint ? { ...s.warPaint } : null;
       if (s.building) e.fx = { ...s.building };
       e.flex = new Map(Object.entries(s.flex));
       const cls = gameClassOf(e.cls);
