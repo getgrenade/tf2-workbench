@@ -35,7 +35,16 @@ export interface Equipped {
   hidden?: boolean;
   /** Worn in this team's skin (0 RED, 1 BLU) whatever the character's team; absent: the character's. */
   skin?: 0 | 1;
+  /** An item with a building pose of its own (the Hotrod): "down" puts it in that pose (the mask over the face); absent: its usual one. */
+  pose?: "down";
 }
+
+/** The choices of an item's building pose (see Equipped.pose). */
+const POSES: { value: Equipped["pose"]; label: string }[] = [
+  { value: undefined, label: "Up" },
+  { value: "down", label: "Down" },
+];
+const poseLabel = (pose: Equipped["pose"]) => POSES.find((p) => p.value === pose)!.label;
 
 export interface ItemsHooks {
   /** Game class name of the displayed class (`demoman`, not `demo`). */
@@ -45,7 +54,7 @@ export interface ItemsHooks {
   /** An item was put on (or taken off) the displayed character: the other selected characters get the same. */
   toggled?: (item: ItemInfo, equip: boolean) => void;
   /** The paint or the style of equipped items was changed on the displayed character: the other selected characters that wear them get the same. */
-  restyled?: (changes: { item: number; paint?: PaintInfo | null; style?: number; hidden?: boolean; skin?: 0 | 1 | null }[]) => void;
+  restyled?: (changes: { item: number; paint?: PaintInfo | null; style?: number; hidden?: boolean; skin?: 0 | 1 | null; pose?: "down" | null }[]) => void;
   /** Everything was taken off the displayed character: the other selected characters lose theirs too. */
   cleared?: () => void;
   /** Called with the full loadout whenever it changes (items or paints). */
@@ -202,6 +211,18 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
         };
         card.appendChild(btn);
       }
+      if (e.item.buildActivity) {
+        // the Hotrod: its mask up or down over the Engineer's face
+        const btn = document.createElement("button");
+        btn.className = "styleBtn";
+        btn.textContent = `Pose: ${poseLabel(e.pose)} ▾`;
+        btn.title = "Change pose";
+        btn.onclick = (ev) => {
+          ev.stopPropagation();
+          openPoseMenu(btn, e);
+        };
+        card.appendChild(btn);
+      }
       card.oncontextmenu = (ev) => {
         ev.preventDefault();
         showContextMenu(ev.clientX, ev.clientY, itemMenu(e.item, ev.clientX, ev.clientY));
@@ -269,6 +290,33 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
       };
       menu.appendChild(row);
     });
+    const r = anchor.getBoundingClientRect();
+    menu.style.left = `${Math.max(4, Math.min(r.left, window.innerWidth - 170))}px`;
+    menu.style.top = `${r.bottom + 2}px`;
+    document.body.appendChild(menu);
+    styleMenu = menu;
+  }
+  /** The dropdown for an item's building pose (see Equipped.pose), in the style menu's place. */
+  function openPoseMenu(anchor: HTMLElement, e: Equipped) {
+    const wasOpenFor = styleMenu?.dataset.item;
+    closeStyleMenu();
+    if (wasOpenFor === `pose${e.item.id}`) return;
+    const menu = document.createElement("div");
+    menu.className = "styleMenu";
+    menu.dataset.item = `pose${e.item.id}`;
+    for (const p of POSES) {
+      const row = document.createElement("div");
+      row.className = "styleOpt" + (p.value === e.pose ? " on" : "");
+      row.textContent = p.label;
+      row.onclick = (ev) => {
+        ev.stopPropagation();
+        if (p.value) e.pose = p.value; else delete e.pose;
+        closeStyleMenu();
+        changed();
+        hooks.restyled?.([{ item: e.item.id, pose: p.value ?? null }]);
+      };
+      menu.appendChild(row);
+    }
     const r = anchor.getBoundingClientRect();
     menu.style.left = `${Math.max(4, Math.min(r.left, window.innerWidth - 170))}px`;
     menu.style.top = `${r.bottom + 2}px`;

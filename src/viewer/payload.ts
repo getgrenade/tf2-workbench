@@ -215,6 +215,8 @@ export interface SequenceInfo {
   activity?: string;
   /** A taunt's part of the cycle (0..1) outside the blends into and out of it, where it is itself and not a mix with the stand pose. */
   window?: [number, number];
+  /** The game runs it on its own clock (an autoplay or real-time sequence): a worn item's idle that never stops. */
+  onClock?: boolean;
 }
 
 export interface PoseParamInfo {
@@ -320,6 +322,18 @@ export interface ItemInfo {
   tauntPropScenes: Record<string, string>;
   /** Taunts only: class -> the player's scene path (`scenes/player/heavy/low/taunt_x.vcd`): the face it makes. */
   tauntScenePaths?: Record<string, string>;
+  /** Taunts only: the `taunt attack name` (`TAUNTATK_ALLCLASS_GUITAR_RIFF`) and the seconds after the taunt's start it happens at. */
+  tauntAttack?: string;
+  tauntAttackTime?: number;
+  /**
+   * The sounds the item plays while its wearer taunts (sound script names): a taunt's success sound and its loop, `offset` seconds after the
+   * taunt starts, or a cosmetic's taunt sound (the Boombox, the Infernal Orchestrina).
+   */
+  tauntSounds?: { name: string; offset: number; looping: boolean }[];
+  /** The activity the item's own model plays while its wearer taunts (`visuals/playback_activity`: the Infernal Orchestrina's `ACT_RUN`). */
+  /** What its model plays while its wearer holds a blueprint or carries a building (`start_building`: the Hotrod's ACT_RUN, mask down). */
+  buildActivity?: string;
+  tauntActivity?: string;
   /** A cosmetic from the workshop importer's zips (tf/workshop/import_source), not from the game's own items. */
   workshop: boolean;
 }

@@ -138,8 +138,8 @@ export const stopNativeParticles = (handle: number) => invoke<void>("native_part
 export const listSequences = (path: string) => invoke<ArrayBuffer>("list_sequences", { path });
 
 /** Bakes a sequence with encoded (0..1) pose parameters; decode with `parseClip`. */
-export const bakeSequence = (path: string, sequence: number, params: number[], targetPath?: string, blend = true) =>
-  invoke<ArrayBuffer>("bake_sequence", { path, sequence, params, targetPath, blend });
+export const bakeSequence = (path: string, sequence: number, params: number[], targetPath?: string, blend = true, onClock = false) =>
+  invoke<ArrayBuffer>("bake_sequence", { path, sequence, params, targetPath, blend, ...(onClock ? { onClock } : {}) });
 
 export interface WorkshopTaunt { animation: string; sequence: string; prop: string | null }
 export const prepareWorkshopTaunt = (itemId: number, className: string) =>
@@ -169,6 +169,15 @@ export interface VoiceLine {
 export const voiceLines = (className: string) => invoke<VoiceLine[]>("voice_lines", { class: className });
 /** The lip sync of a wave (the game's phoneme data for its voice lines), or null. */
 export const lipSync = (wave: string) => invoke<import("./viewer/faceScene").LipSync | null>("lip_sync", { wave });
+/** A sound script entry: what it plays (paths from `sound/`). */
+export interface SoundEntry { name: string; waves: string[] }
+/** An animation event of a sequence: seconds after its start, its name (`AE_CL_PLAYSOUND`) and options (the sound, or the particle system and where). */
+export interface AnimEvent { time: number; name: string; options: string }
+/** A sequence's animation events and the sound script entries its sound events play (by lower case name). */
+export const sequenceEvents = (path: string, sequence: number) =>
+  invoke<{ events: AnimEvent[]; sounds: Record<string, SoundEntry> }>("sequence_events", { path, sequence });
+/** Sound script entries by name, keyed by the lower case name. */
+export const soundEntries = (names: string[]) => invoke<Record<string, SoundEntry>>("sound_entries", { names });
 /** A sound file's bytes (from `sound/`). */
 export const readSound = (wave: string) => invoke<ArrayBuffer>("read_sound", { wave });
 

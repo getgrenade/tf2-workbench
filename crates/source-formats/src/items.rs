@@ -36,6 +36,15 @@ pub struct ItemParticle {
     pub attachment: Option<String>,
 }
 
+/// A sound an item plays while its wearer taunts: a taunt's `taunt success sound` (`taunt success sound loop`, played over and over), each with its
+/// offset (seconds after the taunt starts), or a cosmetic's `cosmetic taunt sound` (the Boombox, the Infernal Orchestrina). A sound script name.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ItemSound {
+    pub name: String,
+    pub offset: f32,
+    pub looping: bool,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Item {
     /// Stock loadout item (`baseitem`), including its retained upgradeable equivalent.
@@ -91,6 +100,19 @@ pub struct Item {
     pub taunt_prop_scenes: BTreeMap<String, String>,
     /// Taunts only: class -> the player's scene path (`scenes/player/heavy/low/taunt_x.vcd`, lower case, forward slashes): its face.
     pub taunt_scene_paths: BTreeMap<String, String>,
+    /// Taunts only: the `taunt attack name` (`TAUNTATK_ALLCLASS_GUITAR_RIFF`), upper case, empty when the taunt has none, and the
+    /// `taunt attack time` (seconds after the taunt starts) it happens at.
+    pub taunt_attack: String,
+    pub taunt_attack_time: f32,
+    /// The sounds the item plays while its wearer taunts (see [`ItemSound`]).
+    pub taunt_sounds: Vec<ItemSound>,
+    /// `visuals/playback_activity`: the activity the item's own model plays while its wearer taunts (`start_taunting`, the Infernal
+    /// Orchestrina's `ACT_RUN`), upper case; empty when it has none.
+    pub taunt_activity: String,
+    /// `visuals/playback_activity` `start_building`: the activity the item's model plays while its wearer holds a building's blueprint or
+    /// carries one (the builder deployed, tf_weapon_builder.cpp's WAP_START_BUILDING): the Hotrod's `ACT_RUN`, its mask down. Upper
+    /// case; empty when it has none.
+    pub build_activity: String,
     /// A cosmetic from the workshop importer's zips (`tf/workshop/import_source`), not from the game's own schema.
     pub workshop: bool,
     /// A workshop item: when its zip was last written (seconds since 1970), its place in a newest-first list. 0 for the game's items.
@@ -377,6 +399,19 @@ fn build_item(id: u32, nodes: &[Node], names: &HashMap<String, String>) -> Item 
         taunt_scenes: BTreeMap::new(),
         taunt_prop_scenes: BTreeMap::new(),
         taunt_scene_paths: BTreeMap::new(),
+        taunt_attack: attribute_text(nodes, "taunt_attack_name").map(|a| a.to_ascii_uppercase()).unwrap_or_default(),
+        taunt_attack_time: attribute_text(nodes, "taunt_attack_time").and_then(|t| t.parse().ok()).unwrap_or(0.0),
+        taunt_sounds: item_sounds(nodes),
+        taunt_activity: get_block(nodes, "visuals")
+            .and_then(|v| get_block(v, "playback_activity"))
+            .and_then(|b| get_str(b, "start_taunting"))
+            .map(|a| a.trim().to_ascii_uppercase())
+            .unwrap_or_default(),
+        build_activity: get_block(nodes, "visuals")
+            .and_then(|v| get_block(v, "playback_activity"))
+            .and_then(|b| get_str(b, "start_building"))
+            .map(|a| a.trim().to_ascii_uppercase())
+            .unwrap_or_default(),
         workshop: false,
         added: 0,
         extra_models: extra_models(nodes),
@@ -412,6 +447,32 @@ fn item_particles(nodes: &[Node]) -> Vec<ItemParticle> {
             let Some(system) = get_str(b, "system").map(|s| s.trim()).filter(|s| !s.is_empty()) else { continue };
             out.push(ItemParticle { effect: None, system: Some(system.to_string()), attachment: get_str(b, "attachment").map(|a| a.trim().to_string()).filter(|a| !a.is_empty()) });
         }
+    }
+    out
+}
+
+/// The value of an attribute of an item's `attributes` / `static_attrs` block, found by its `attribute_class`, trimmed (none when empty).
+fn attribute_text(nodes: &[Node], class: &str) -> Option<String> {
+    ["attributes", "static_attrs"].iter().filter_map(|block| get_block(nodes, block)).flatten().find_map(|n| match &n.value {
+        Value::Block(b) if get_str(b, "attribute_class").is_some_and(|c| c.trim().eq_ignore_ascii_case(class)) => {
+            get_str(b, "value").map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+        }
+        _ => None,
+    })
+}
+
+/// The sounds an item plays while its wearer taunts (see [`ItemSound`]).
+fn item_sounds(nodes: &[Node]) -> Vec<ItemSound> {
+    let offset = |class: &str| attribute_text(nodes, class).and_then(|t| t.parse::<f32>().ok()).unwrap_or(0.0);
+    let mut out = Vec::new();
+    if let Some(name) = attribute_text(nodes, "taunt_success_sound") {
+        out.push(ItemSound { name, offset: offset("taunt_success_sound_offset"), looping: false });
+    }
+    if let Some(name) = attribute_text(nodes, "taunt_success_sound_loop") {
+        out.push(ItemSound { name, offset: offset("taunt_success_sound_loop_offset"), looping: true });
+    }
+    if let Some(name) = attribute_text(nodes, "cosmetic_taunt_sound") {
+        out.push(ItemSound { name, offset: 0.0, looping: false });
     }
     out
 }

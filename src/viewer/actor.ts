@@ -76,6 +76,18 @@ export interface CosmeticSpec {
   idle?: boolean;
   /** The clip is an animation the item plays over and over on a clock of its own (a pet's idle), whatever the class does. */
   loop?: boolean;
+  /**
+   * What the item's model plays while its wearer taunts (`playback_activity` `start_taunting`: the Infernal Orchestrina's drum), on the
+   * character's clock; the rest of the time `clip` poses it.
+   */
+  tauntClip?: ClipData | null;
+  /**
+   * The item's building pose (`playback_activity` `start_building`: the Hotrod's mask down over the Engineer's face), held in place of
+   * `clip` when `buildPose` is "down".
+   */
+  buildClip?: ClipData | null;
+  /** "down": the item is held in its building pose (see buildClip). */
+  buildPose?: "down";
   /** The item this model belongs to (what a click on it picks). */
   itemId?: number;
   /** The weapon the character holds. */
@@ -193,7 +205,9 @@ export class Actor {
   private flexGlobals: FlexGlobals = new Map();
   private flexClass: FlexMesh[] = [];
   private flexCosmetic: FlexMesh[] = [];
-  private cosmetics: { rig: Rig; bones: THREE.Bone[]; bindLocal: THREE.Matrix4[]; map: number[]; jiggles: (JiggleBone | null)[]; own: Playback | null; idle: boolean; loop: boolean; clock: number }[] = [];
+  private cosmetics: { rig: Rig; bones: THREE.Bone[]; bindLocal: THREE.Matrix4[]; map: number[]; jiggles: (JiggleBone | null)[]; own: Playback | null; idle: boolean; loop: boolean; clock: number; taunt: Playback | null; build: Playback | null }[] = [];
+  /** The character plays a taunt: worn items with a taunt animation of their own play it (see CosmeticSpec.tauntClip). */
+  private taunting = false;
   /** A manual aim (a turn about the bone's own axes, clamped to the bone's limits) on an overridden jiggle bone, keyed by lowercase name. */
   private boneAims = new Map<string, BoneTurn>();
   /** Jiggle bones whose rotation is overridden by hand (posed, held, not simulated), keyed by lowercase name; the jiggle inspector sets this. */
@@ -925,7 +939,7 @@ export class Actor {
     this.boneAims.clear(); // the worn items changed; any hand-aim/override no longer refers to a bone that is on
     this.boneOverride.clear();
     const classIndex = new Map(this.classData.bones.map((b, i) => [b.name.toLowerCase(), i]));
-    for (const [index, { data, paint, skin, clip, idle, loop }] of list.entries()) {
+    for (const [index, { data, paint, skin, clip, idle, loop, tauntClip, buildClip, buildPose }] of list.entries()) {
       const rig = new Rig(data.bones);
       const bones = data.bones.map((info) => {
         const b = new THREE.Bone();
@@ -947,7 +961,17 @@ export class Actor {
         own = new Playback();
         own.clip = clip;
       }
-      this.cosmetics.push({ rig, bones, bindLocal, map, jiggles, own, idle: !!idle && !!own, loop: !!loop && !!own, clock: 0 });
+      let taunt: Playback | null = null;
+      if (tauntClip) {
+        taunt = new Playback();
+        taunt.clip = tauntClip;
+      }
+      let build: Playback | null = null;
+      if (buildClip && buildPose === "down") {
+        build = new Playback();
+        build.clip = buildClip;
+      }
+      this.cosmetics.push({ rig, bones, bindLocal, map, jiggles, own, idle: !!idle && !!own, loop: !!loop && !!own, clock: 0, taunt, build });
       for (const [partIndex, bp] of data.bodyParts.entries()) {
         const sub = (list[index].weapon && partIndex === 0 ? bp.models[this.heldBodyState] : null) ?? bp.models[0];
         if (!sub) continue;
@@ -1923,6 +1947,21 @@ export class Actor {
         } else if (j >= 0 && j < classWorld.length) {
           world[i].copy(classWorld[j]); // merged bone: identical transform
           if (correction && lock!.follow.has(j)) world[i].premultiply(correction);
+        } else if (c.taunt && this.taunting && this.playback.clip) {
+          // the item's own animation of the taunt, from the taunt's start (the Infernal Orchestrina's drum turns while the Pyro taunts)
+          const p = c.taunt;
+          p.time = this.playback.time;
+          p.loopAll = this.playback.loopAll;
+          const local = ownLocal(p.clip!, p.frame(), i, _cosLocal);
+          if (c.rig.parents[i] >= 0) world[i].multiplyMatrices(world[c.rig.parents[i]], local);
+          else world[i].copy(local);
+        } else if (c.build) {
+          // the item held in its building pose (the Hotrod's mask down over the Engineer's face)
+          const p = c.build;
+          p.time = 0;
+          const local = ownLocal(p.clip!, p.frame(), i, _cosLocal);
+          if (c.rig.parents[i] >= 0) world[i].multiplyMatrices(world[c.rig.parents[i]], local);
+          else world[i].copy(local);
         } else if (c.own && (c.loop || c.idle || this.playback.clip || c.own.clip!.frames <= 1)) {
           // extra bone of a model with its own animation (the tank's tracks): the clip's local transform under the parent
           const p = c.own;
@@ -1976,6 +2015,17 @@ export class Actor {
    */
   faceDriver: ((playback: Playback) => FlexGlobals | null) | null = null;
 
+  /** Whether the character plays a taunt now (the worn items' taunt animations play with it). */
+  setTaunting(on: boolean) {
+    if (this.taunting === on) return;
+    this.taunting = on;
+    this.updateCosmetics();
+    this.changed = true;
+  }
+
+  /** Runs every frame the clip plays: keeps what the character plays heard and seen in step with it (its taunt's sounds and particles, see tauntFx.ts). */
+  fxDriver: ((playback: Playback) => void) | null = null;
+
   /** Runs the face driver; whether the face changed. */
   private stepFace(): boolean {
     const globals = this.faceDriver?.(this.playback);
@@ -2003,6 +2053,7 @@ export class Actor {
       return faced;
     }
     pb.advance(dt);
+    this.fxDriver?.(pb);
     const faced = this.stepFace();
     if (pb.time === this.posedTime && pb.clip === this.posedClip && !this.hasJiggle) return faced;
     this.poseBones();

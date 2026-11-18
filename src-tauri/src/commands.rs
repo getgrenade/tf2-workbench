@@ -584,7 +584,8 @@ pub async fn list_sequences(state: State<'_, AppState>, path: String) -> Result<
 
 
 /// Bakes a sequence at its native frame rate with the given encoded (0..1) pose parameters. `blend` (default on) plays a taunt over the
-/// class's stand pose as the game does; off, it is sampled alone, as the animation file holds it.
+/// class's stand pose as the game does; off, it is sampled alone, as the animation file holds it. `on_clock`: one loop of a sequence the
+/// game runs on its own clock (a worn item's autoplay or real-time idle).
 #[tauri::command]
 pub async fn bake_sequence(
     state: State<'_, AppState>,
@@ -593,8 +594,9 @@ pub async fn bake_sequence(
     params: Vec<f32>,
     target_path: Option<String>,
     blend: Option<bool>,
+    on_clock: Option<bool>,
 ) -> Result<tauri::ipc::Response, String> {
-    Ok(tauri::ipc::Response::new(workbench_core::dispatch::bake_sequence(&state, &path, sequence, &params, target_path.as_deref(), blend)?))
+    Ok(tauri::ipc::Response::new(workbench_core::dispatch::bake_sequence(&state, &path, sequence, &params, target_path.as_deref(), blend, on_clock)?))
 }
 
 /// Source-only Workshop taunts are compiled on demand into the app's cache.
@@ -651,6 +653,18 @@ pub async fn phoneme_classes(state: State<'_, AppState>, class: String) -> Resul
 #[tauri::command]
 pub async fn lip_sync(state: State<'_, AppState>, wave: String) -> Result<serde_json::Value, String> {
     workbench_core::voice::lip_sync(&state, &wave)
+}
+
+/// A sequence's animation events (the sounds and particle effects of a taunt) and the sound script entries its sound events play.
+#[tauri::command]
+pub async fn sequence_events(state: State<'_, AppState>, path: String, sequence: usize) -> Result<serde_json::Value, String> {
+    workbench_core::voice::sequence_events(&state, &path, sequence)
+}
+
+/// Sound script entries by name: the waves each plays.
+#[tauri::command]
+pub async fn sound_entries(state: State<'_, AppState>, names: Vec<String>) -> Result<serde_json::Value, String> {
+    workbench_core::voice::sound_entries(&state, &names)
 }
 
 /// A sound file's bytes (from `sound/`).

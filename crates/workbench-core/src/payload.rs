@@ -363,6 +363,9 @@ struct SeqJson {
     /// A taunt's part of the cycle (0..1) outside the blends in and out of it (see `taunt_window`).
     #[serde(skip_serializing_if = "Option::is_none")]
     window: Option<[f32; 2]>,
+    /// The game runs the sequence on its own clock (autoplay or real time): a worn item's idle that never stops.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    on_clock: bool,
 }
 
 #[derive(Serialize)]
@@ -390,7 +393,7 @@ pub fn encode_anim_info(set: &source_formats::anim::AnimSet) -> Vec<u8> {
         sequences: set
             .sequences()
             .into_iter()
-            .map(|s| { let activity = set.activity_name(s.index); SeqJson { index: s.index, name: s.name, frames: s.frames, fps: s.fps, looping: s.looping, hidden: s.hidden, activity, window: set.taunt_window(s.index).map(|(a, b)| [a, b]) } })
+            .map(|s| { let activity = set.activity_name(s.index); SeqJson { index: s.index, name: s.name, frames: s.frames, fps: s.fps, looping: s.looping, hidden: s.hidden, activity, window: set.taunt_window(s.index).map(|(a, b)| [a, b]), on_clock: set.runs_on_clock(s.index) } })
             .collect(),
         pose_params: set
             .pose_params
@@ -482,6 +485,19 @@ struct ItemJson<'a> {
     taunt_scenes: &'a std::collections::BTreeMap<String, String>,
     taunt_prop_scenes: &'a std::collections::BTreeMap<String, String>,
     taunt_scene_paths: &'a std::collections::BTreeMap<String, String>,
+    /// A taunt's `taunt attack name` (upper case) and the seconds after the taunt's start it happens at.
+    #[serde(skip_serializing_if = "str::is_empty")]
+    taunt_attack: &'a str,
+    #[serde(skip_serializing_if = "is_zero_f32")]
+    taunt_attack_time: f32,
+    /// The sounds the item plays while its wearer taunts.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    taunt_sounds: Vec<ItemSoundJson<'a>>,
+    /// The activity the item's model plays while its wearer taunts (`visuals/playback_activity`), upper case.
+    #[serde(skip_serializing_if = "str::is_empty")]
+    taunt_activity: &'a str,
+    #[serde(skip_serializing_if = "str::is_empty")]
+    build_activity: &'a str,
     workshop: bool,
     /// A workshop item: when its zip was last written (seconds since 1970).
     #[serde(skip_serializing_if = "is_zero")]
@@ -489,6 +505,15 @@ struct ItemJson<'a> {
 }
 
 fn is_zero(n: &u64) -> bool { *n == 0 }
+fn is_zero_f32(n: &f32) -> bool { *n == 0.0 }
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ItemSoundJson<'a> {
+    name: &'a str,
+    offset: f32,
+    looping: bool,
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -537,6 +562,11 @@ fn item_json(i: &source_formats::items::Item) -> ItemJson<'_> {
         taunt_scenes: &i.taunt_scenes,
         taunt_prop_scenes: &i.taunt_prop_scenes,
         taunt_scene_paths: &i.taunt_scene_paths,
+        taunt_attack: &i.taunt_attack,
+        taunt_attack_time: i.taunt_attack_time,
+        taunt_sounds: i.taunt_sounds.iter().map(|t| ItemSoundJson { name: &t.name, offset: t.offset, looping: t.looping }).collect(),
+        taunt_activity: &i.taunt_activity,
+        build_activity: &i.build_activity,
         workshop: i.workshop,
         added: i.added,
         styles: i

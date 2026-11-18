@@ -11,12 +11,16 @@ fn workshop_taunt_class(path: &str) -> Option<String> {
 }
 
 /// Bakes a sequence at its native frame rate with the given encoded (0..1) pose parameters. `blend` (default on) plays a taunt over the
-/// class's stand pose as the game does; off, it is sampled alone, as the animation file holds it.
-pub fn bake_sequence(state: &AppState, path: &str, sequence: usize, params: &[f32], target_path: Option<&str>, blend: Option<bool>) -> Result<Vec<u8>, String> {
+/// class's stand pose as the game does; off, it is sampled alone, as the animation file holds it. `on_clock` samples one loop of a sequence
+/// the game runs on its own clock (a worn item's autoplay or real-time idle, see `AnimSet::bake_on_clock`).
+pub fn bake_sequence(state: &AppState, path: &str, sequence: usize, params: &[f32], target_path: Option<&str>, blend: Option<bool>, on_clock: Option<bool>) -> Result<Vec<u8>, String> {
     let blend = blend.unwrap_or(true);
     let set = state.anim_set(path)?;
     if sequence >= set.num_sequences() {
         return Err(format!("sequence {sequence} out of range ({})", set.num_sequences()));
+    }
+    if on_clock.unwrap_or(false) {
+        return Ok(payload::encode_clip(&set.bake_on_clock(sequence, params)));
     }
     // A Workshop taunt is compiled on its own, with no stand pose: it is layered over its class's, as the game layers a taunt over the player
     let class = workshop_taunt_class(path).map(|c| state.anim_set(&c)).transpose()?;
