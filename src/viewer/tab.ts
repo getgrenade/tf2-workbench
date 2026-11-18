@@ -850,6 +850,9 @@ export function createViewTab(els: Els) {
       }
       // at a lower LOD every item is drawn at that LOD too (one with fewer LODs at its own last)
       if (e.lod > 0) data = await modelAtLod(path, e.lod).catch(() => data!);
+      // a skin past the model's families: the team's own, else the first (studiorender draws family 0; a Botkiller's fob is drawn with its
+      // weapon's skin 4 to 11, and has only the two team families)
+      if (skin >= data!.skinCount) skin = team < data!.skinCount ? team : 0;
       if (material) await loadMaterials([material]);
       else await ensureMaterials(data!, skin);
       list.push({ data: data!, paint: rgb === null ? null : unpackRgb(rgb), skin, clip, itemId, idle, loop, material });
