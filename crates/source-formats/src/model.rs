@@ -162,6 +162,19 @@ pub fn load_lod(vpk: &VpkSet, mdl_path: &str, lod: usize) -> Result<Model, Model
     Ok(model)
 }
 
+/// A compiled model from files of its own (`.mdl`, `.vvd` and `.vtx` bytes, not from the game), at LOD 0: its materials are still looked
+/// up in the game's (`cdmaterials`), as a model dropped into tf/custom would be. `path` names it in errors and in the result.
+pub fn load_files(vpk: &VpkSet, path: &str, mdl_bytes: &[u8], vvd_bytes: &[u8], vtx_bytes: &[u8]) -> Result<Model, ModelError> {
+    let mdl = mdl::parse(mdl_bytes).map_err(parse_err(path))?;
+    let vvd = vvd::parse(vvd_bytes, 0).map_err(parse_err(path))?;
+    let vtx = vtx::parse(vtx_bytes, 0).map_err(parse_err(path))?;
+    let resolve = |name: &str, cds: &[String]| resolve_material(vpk, name, cds);
+    let mut model = build(path, &mdl, &vvd, &vtx, &resolve).map_err(parse_err(path))?;
+    model.lod = 0;
+    model.lod_count = 1;
+    Ok(model)
+}
+
 /// A mesh whose strip groups are not flagged as flexed at this LOD has no flexes (what `nofacial` does).
 fn drop_unflexed(model: &mut Model, vtx: &vtx::Vtx) {
     for (bp, vbp) in model.body_parts.iter_mut().zip(&vtx.body_parts) {

@@ -717,6 +717,35 @@ fn source_path(path: &str) -> Result<PathBuf, String> {
     }
 }
 
+/// A compiled model the user picked on disk (an `.mdl` with its `.vvd` and `.dx90.vtx`, `.dx80.vtx` or `.sw.vtx` beside it), in the
+/// payload format: a cosmetic's model swapped for it in the viewer (see the Textures panel). Its materials come from the game's.
+#[tauri::command]
+pub async fn load_model_file(state: State<'_, AppState>, path: String) -> Result<tauri::ipc::Response, String> {
+    let vpk = state.vpk()?;
+    let bytes = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let p = PathBuf::from(&path);
+        if !p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("mdl")) {
+            return Err(format!("refusing to read {path}: not an .mdl"));
+        }
+        let stem = p.with_extension("");
+        let sibling = |ext: &str| PathBuf::from(format!("{}.{ext}", stem.display()));
+        let read = |q: &PathBuf| -> Result<Vec<u8>, String> {
+            let len = std::fs::metadata(q).map_err(|e| format!("{}: {e}", q.display()))?.len();
+            if len > 256 << 20 { return Err(format!("{} is larger than 256 MB", q.display())); }
+            std::fs::read(q).map_err(|e| format!("{}: {e}", q.display()))
+        };
+        let mdl = read(&p)?;
+        let vvd = read(&sibling("vvd")).map_err(|e| format!("the .vvd beside the model is missing ({e})"))?;
+        let vtx_path = ["dx90.vtx", "dx80.vtx", "sw.vtx"].iter().map(|v| sibling(v)).find(|q| q.is_file())
+            .ok_or_else(|| format!("no .dx90.vtx beside {path}"))?;
+        let vtx = read(&vtx_path)?;
+        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("model.mdl").to_string();
+        let model = source_formats::model::load_files(&vpk, &name, &mdl, &vvd, &vtx).map_err(|e| e.to_string())?;
+        Ok(crate::payload::encode(&model))
+    }).await.map_err(|e| e.to_string())??;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 /// Reads a source model or texture for the item compiler (at most 256 MB).
 #[tauri::command]
 pub async fn read_source_file(path: String) -> Result<tauri::ipc::Response, String> {

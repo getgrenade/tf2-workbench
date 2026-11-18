@@ -4,7 +4,10 @@ import { partsOf } from "./promoMask";
 import { picturePsd } from "./promoPsd";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { createCompilerUi, type PreviewApplication } from "../compiler/compilerUi";
-import { MODEL_EXTENSIONS } from "../compiler/importModel";
+import { importModel, MODEL_EXTENSIONS } from "../compiler/importModel";
+import type { ImportedModel } from "../compiler/fbx";
+import { buildPreviewModel } from "../compiler/preview";
+import { isCompiledModel, loadModelSwaps, saveModelSwaps, swapMaterials, SWAP_EXTENSIONS } from "./modelSwaps";
 import { createPropPanel, PROP_DRAG_TYPE } from "../props/propPanel";
 import { propLabel } from "../props/propList";
 import { forgetThumbnail } from "../props/propThumbs";
@@ -20,7 +23,7 @@ import { FaceDriver, type FaceLine } from "./faceDriver";
 import type { FlexGlobals } from "./flex";
 import type { LipSync, PhonemeClasses, SceneData } from "./faceScene";
 import { loadVoice, setVoiceMuted, stopAll as stopVoices, voiceMuted } from "./voicePlayer";
-import { materialFromText, readMaterialText, readTextureFile } from "../api";
+import { loadModelFile, materialFromText, readMaterialText, readTextureFile } from "../api";
 import { editedItems } from "./editedItems";
 import { VmtEdits } from "./vmtEdits";
 import { editsFor, loadMaterialEdits, saveMaterialEdits } from "./materialEditsStore";
@@ -855,6 +858,9 @@ export function createViewTab(els: Els) {
       }
       // at a lower LOD every item is drawn at that LOD too (one with fewer LODs at its own last)
       if (e.lod > 0) data = await modelAtLod(path, e.lod).catch(() => data!);
+      // a worn item's model swapped for the user's own (the Textures panel's Model row)
+      const swapped = itemId !== undefined ? await swappedModel(path, e.cls, data!) : null;
+      if (swapped) data = swapped;
       if (material) await loadMaterials([material]);
       else await ensureMaterials(data!, skin);
       list.push({ data: data!, paint: rgb === null ? null : unpackRgb(rgb), skin, clip, itemId, idle, loop, material });
@@ -2424,7 +2430,95 @@ export function createViewTab(els: Els) {
   }
   const vmtEdits = new VmtEdits();
   const vmtTexts = new Map<string, Promise<string>>();
+  // --- worn items' models swapped for the user's own files (the Textures panel's Model row, see modelSwaps.ts) ---
+  let modelSwaps = loadModelSwaps();
+  /** Each picked file as read (by file): a compiled model as it is, or a source model, fitted to each class that wears it. */
+  const swapSources = new Map<string, Promise<{ compiled: ModelData } | { imported: ImportedModel }>>();
+  /** The model drawn in place of a game model, for one class (by swapKey). */
+  const swapBuilt = new Map<string, ModelData>();
+  const swapKey = (path: string, cls: string) => `${path.toLowerCase()}|${cls}`;
+  const swapOf = (path: string) => modelSwaps.find((s) => s.path.toLowerCase() === path.toLowerCase());
+  function readSwap(file: string) {
+    let source = swapSources.get(file);
+    if (!source) {
+      source = (async () => isCompiledModel(file)
+        ? { compiled: parsePayload(await loadModelFile(file)) }
+        : { imported: importModel(file, await readSourceFile(file)) })();
+      source.catch(() => swapSources.delete(file));
+      swapSources.set(file, source);
+    }
+    return source;
+  }
+  /** What a worn item's model is drawn as for a class when it is swapped (null: the game's). A swap whose file cannot be read is shown as the game's. */
+  async function swappedModel(path: string, cls: string, original: ModelData): Promise<ModelData | null> {
+    const swap = swapOf(path);
+    if (!swap) return null;
+    const key = swapKey(path, cls);
+    const built = swapBuilt.get(key);
+    if (built) return built;
+    try {
+      const source = await readSwap(swap.file);
+      let data: ModelData;
+      // (under the game's path: what is looked up of a worn model by its path, its body groups and the like, still finds it)
+      if ("compiled" in source) data = { ...source.compiled, path };
+      else {
+        // fitted to the wearer's skeleton as the compiler's preview is, and worn in the item's own materials (its textures, its paint)
+        const classData = models.get(classPath(cls));
+        if (!classData) return null;
+        data = buildPreviewModel(source.imported, classData, path, (m) => swapMaterials(original, m)).data;
+      }
+      if (swapOf(path) !== swap) return null; // (reset or swapped again meanwhile)
+      swapBuilt.set(key, data);
+      return data;
+    } catch (error) {
+      els.items.count.textContent = `Model swap not used (${swap.file}): ${error instanceof Error ? error.message : String(error)}`;
+      return null;
+    }
+  }
+  /** The model path of a worn item of the selected character ("item:<id>"), as it is drawn now. */
+  function wornModelPath(id: string): string | null {
+    const e = selected;
+    if (!e || !id.startsWith("item:")) return null;
+    const worn = e.applied.find((w) => w.item.id === Number(id.slice(5)));
+    return worn ? itemModelFor(worn.item, gameClassOf(e.cls), worn.style) : null;
+  }
+  /** Draws again every character that wears a model, after its swap changed. */
+  function redrawWearers(path: string) {
+    const want = path.toLowerCase();
+    for (const [k] of swapBuilt) if (k.startsWith(`${want}|`)) swapBuilt.delete(k);
+    for (const e of entities) {
+      const cls = gameClassOf(e.cls);
+      if (e.applied.some((w) => itemModelFor(w.item, cls, w.style)?.toLowerCase() === want)) void applyLoadout(e, e.applied);
+    }
+  }
+  const modelSwapHooks = {
+    file: (id: string) => { const path = wornModelPath(id); return path ? swapOf(path)?.file.split(/[\\/]/).pop() ?? null : null; },
+    async replace(id: string) {
+      const path = wornModelPath(id);
+      if (!path) return false;
+      const picked = await open({ multiple: false, directory: false, filters: [{ name: "Model", extensions: SWAP_EXTENSIONS }] });
+      if (typeof picked !== "string") return false;
+      swapSources.delete(picked); // (read again: it may have been rebuilt since)
+      try { await readSwap(picked); }
+      catch (error) {
+        els.items.count.textContent = `Could not use ${picked}: ${error instanceof Error ? error.message : String(error)}`;
+        return false;
+      }
+      modelSwaps = [...modelSwaps.filter((s) => s.path.toLowerCase() !== path.toLowerCase()), { path, file: picked }];
+      saveModelSwaps(modelSwaps);
+      redrawWearers(path);
+      return true;
+    },
+    reset(id: string) {
+      const path = wornModelPath(id);
+      if (!path || !swapOf(path)) return;
+      modelSwaps = modelSwaps.filter((s) => s.path.toLowerCase() !== path.toLowerCase());
+      saveModelSwaps(modelSwaps);
+      redrawWearers(path);
+    },
+  };
   const texPreview = texHost ? createTexturePreview(texHost, {
+    model: modelSwapHooks,
     async replace(path, slot) {
       const material = materials.get(path);
       if (!material?.textures[slot]) return false;
@@ -2539,7 +2633,7 @@ export function createViewTab(els: Els) {
       }
       for (const { item, style } of e.applied) {
         const path = itemModelFor(item, cls, style);
-        const data = path ? models.get(path) : undefined;
+        const data = path ? swapBuilt.get(swapKey(path, e.cls)) ?? models.get(path) : undefined;
         if (!data) continue;
         const skin = itemSkinFor(item, e.team, style) ?? e.team;
         add(item.displayName, data, (m) => itemMaterialOverride(item) ?? m.materials[skin] ?? m.material, (p) => materials.get(p), `item:${item.id}`);

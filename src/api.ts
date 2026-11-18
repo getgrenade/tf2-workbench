@@ -176,6 +176,8 @@ export const readSound = (wave: string) => invoke<ArrayBuffer>("read_sound", { w
 export const writeTextFile = (path: string, contents: string) => invoke<void>("write_text_file", { path, contents });
 export const readTextFile = (path: string) => invoke<string>("read_text_file", { path });
 /** A source model (.fbx, .smd, .dmx) or texture (.tga) from the artist's folders, for the item compiler. */
+/** A compiled model the user picked on disk (.mdl with its .vvd and .vtx beside it), as a payload for `parsePayload`. */
+export const loadModelFile = (path: string) => invoke<ArrayBuffer>("load_model_file", { path });
 export const readSourceFile = (path: string) => invoke<ArrayBuffer>("read_source_file", { path });
 /** The names of the model (.fbx, .smd, .dmx) and .tga files in the folder of a source file. */
 export const sourceSiblings = (path: string) => invoke<string[]>("source_siblings", { path });
