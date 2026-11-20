@@ -18,135 +18,35 @@ export interface BodyHost {
   clearBoxMask(): void;
 }
 
-/** Authored class group checklist, with independent manual view selection tools. */
-type Tool = "box" | "lasso" | "brush";
-const TOOLS: { id: Tool; label: string; title: string; hint: string }[] = [
-  { id: "box", label: "Box", title: "Box: drag a rectangle over the view; what it covers of the body is hidden", hint: "Drag a box over the character: what it covers is hidden (Shift: shown again)" },
+/** The tools that hide triangles by hand over the 3D view. */
+export type HideTool = "box" | "lasso" | "brush";
+export const HIDE_TOOLS: { id: HideTool; label: string; title: string; hint: string }[] = [
+  { id: "box", label: "Box", title: "Box: drag a rectangle over the view; what it covers is hidden", hint: "Drag a box over it: what it covers is hidden (Shift: shown again)" },
   { id: "lasso", label: "Lasso", title: "Lasso: draw a free shape over the view; what it encloses is hidden", hint: "Draw around what to hide (Shift: shown again)" },
   { id: "brush", label: "Brush", title: "Brush: paint over the view; what you paint over is hidden at once", hint: "Paint over what to hide (Shift: paint it back)" },
 ];
-let brushSize = 24;
-let tool: Tool | null = null;
-let ring: HTMLElement | null = null;
+
+export interface HideToolsHost {
+  /** Starts a selection over what the tools hide (null when there is nothing). */
+  beginSelect(): ViewSelection | null;
+  /** Changes whenever the camera moves (a selection made earlier no longer lines up with the view). */
+  viewStamp(): string;
+  /** A tool was picked or put away (null). */
+  toolChanged?(tool: HideTool | null): void;
+  /** A stroke hid or brought back something. */
+  stroked?(): void;
+}
 
 /**
- * The parts picker: which parts of the selected character are drawn, as a checklist with All and None (in `panel`, a block of the
- * properties panel, beside the bodygroups; in the view's popup when there is no panel), and the view tools that hide triangles by hand
- * (box, lasso, brush), in a popup off a button at the bottom right of the view.
+ * The box, lasso and brush over the 3D view (`view`): while one is on, the left button over the view hides the triangles it covers
+ * (Shift brings them back), Alt + drag still turns the camera and Esc puts the tool away.
  */
-export function createBodyPicker(tools: HTMLElement, host: BodyHost, panel?: HTMLElement | null | false): { sync: () => void } {
-  /** The checklist is in the popup (no panel given): the popup is the parts picker; otherwise it holds the triangle tools alone. */
-  const inPopup = panel === undefined || panel === null;
-  const button = document.createElement("button");
-  button.id = "hudBody";
-  button.innerHTML = ICON;
-  button.title = inPopup ? "Character parts: choose which parts of the character are shown" : "Hide triangles: box, lasso or brush over the view hides what they cover (which parts are drawn is under Properties, Bodygroups)";
-  button.setAttribute("aria-label", inPopup ? "Character parts" : "Hide triangles");
-  tools.parentElement?.appendChild(button); // bottom right corner of the view
-
-  const pop = document.createElement("div");
-  pop.id = "bodyPop";
-  pop.hidden = true;
-  pop.innerHTML = `<div class="bpHead">${inPopup ? "Show character parts" : "Hide triangles"}</div>`;
-  // the checklist and its presets: in the panel, in the popup when there is none, nowhere when the panel is `false` (the properties
-  // panel lists the parts itself)
-  const listHost = panel === false ? null : panel ?? pop;
-  const presets = document.createElement("div");
-  presets.className = "bpPresets";
-  const list = document.createElement("div");
-  list.className = "bpGroupList";
-  listHost?.append(presets, list);
-  const checks = new Map<string, HTMLInputElement>();
-  let groupKey = "";
-  const hint = document.createElement("div");
-  hint.className = "bpHint dim";
-  hint.textContent = inPopup ? "Checked groups are visible. View tools hide selected triangles (Shift restores them)." : "What a tool covers is hidden (Shift: shown again). Which parts are drawn at all is set under Properties, Bodygroups.";
-  pop.appendChild(hint);
-  const toolRow = document.createElement("div");
-  toolRow.className = "bpBoxRow";
-  const toolButtons = new Map<Tool, HTMLButtonElement>();
-  for (const t of TOOLS) {
-    const b = document.createElement("button");
-    b.className = "bpBoxBtn";
-    b.textContent = t.label;
-    b.title = t.title;
-    b.onclick = () => setTool(tool === t.id ? null : t.id);
-    toolButtons.set(t.id, b);
-    toolRow.appendChild(b);
-  }
-  const clearButton = document.createElement("button");
-  clearButton.textContent = "Clear";
-  clearButton.title = "Bring back everything hidden with the view tools";
-  clearButton.onclick = () => {
-    host.clearBoxMask();
-    paint();
-  };
-  toolRow.appendChild(clearButton);
-  const sizeRow = document.createElement("label");
-  sizeRow.className = "bpSize";
-  sizeRow.hidden = true;
-  const sizeInput = document.createElement("input");
-  sizeInput.type = "range";
-  sizeInput.min = "6";
-  sizeInput.max = "120";
-  sizeInput.value = String(brushSize);
-  sizeInput.oninput = () => {
-    brushSize = Number(sizeInput.value);
-    if (ring) {
-      ring.style.width = ring.style.height = `${brushSize}px`;
-    }
-  };
-  sizeRow.append("Brush size", sizeInput);
-  if (listHost === pop) presets.after(toolRow, sizeRow);
-  else pop.querySelector(".bpHead")!.after(toolRow, sizeRow);
-  for (const [label, all] of [["All", true], ["None", false]] as const) {
-    const b = document.createElement("button");
-    b.textContent = label;
-    b.onclick = () => {
-      host.set(new Set(all ? host.groups().map(g => g.id) : []));
-      if (all) host.clearBoxMask();
-      paint();
-    };
-    presets.appendChild(b);
-  }
-  tools.parentElement?.appendChild(pop);
-
-  function paint() {
-    if (!listHost) return;
-    const groups = host.groups();
-    const key = groups.map(g => g.id).join(",");
-    if (groupKey !== key) {
-      groupKey = key;
-      list.replaceChildren();
-      checks.clear();
-      for (const group of groups) {
-        const row = document.createElement("label");
-        const check = document.createElement("input");
-        check.type = "checkbox";
-        check.onchange = () => {
-          const next = new Set(host.get());
-          if (check.checked) next.add(group.id); else next.delete(group.id);
-          host.set(next);
-          paint();
-        };
-        row.append(check, group.label);
-        list.appendChild(row);
-        checks.set(group.id, check);
-      }
-    }
-    const now = host.get();
-    for (const [key, check] of checks) check.checked = now.has(key) || now.has("*");
-    if (panel) panel.hidden = groups.length === 0; // (a prop or a building has no parts to pick)
-  }
-
-  // --- the view tools: box, lasso and brush over the 3D view ---
-  const view = tools.parentElement;
+export function createHideTools(view: HTMLElement, host: HideToolsHost) {
+  let brushSize = 24;
+  let tool: HideTool | null = null;
+  let ring: HTMLElement | null = null;
   let layer: HTMLDivElement | null = null;
   let selection: ViewSelection | null = null;
-
-  function syncButton() {
-    button.classList.toggle("on", !pop.hidden || tool !== null);
-  }
 
   function stopTool() {
     clearHover();
@@ -158,23 +58,21 @@ export function createBodyPicker(tools: HTMLElement, host: BodyHost, panel?: HTM
     layer?.remove();
     layer = null;
     ring = null;
-    view?.classList.remove("selecting", "brushing");
-    view?.removeEventListener("pointerdown", onDown, true);
-    view?.removeEventListener("pointermove", onHover);
+    view.classList.remove("selecting", "brushing");
+    view.removeEventListener("pointerdown", onDown, true);
+    view.removeEventListener("pointermove", onHover);
     window.removeEventListener("keydown", onEsc, true);
     tool = null;
   }
 
-  function setTool(next: Tool | null) {
+  function setTool(next: HideTool | null) {
     if (tool) stopTool();
-    for (const [id, b] of toolButtons) b.classList.toggle("on", id === next);
-    sizeRow.hidden = next !== "brush";
-    if (next && view) {
+    if (next) {
       tool = next;
       layer = document.createElement("div");
       layer.id = "bodyToolLayer";
       layer.innerHTML = `<div class="bboxHint"></div><div class="bboxRect" hidden></div><svg class="lassoSvg"><polygon points="" /></svg><div class="brushRing" hidden></div>`;
-      layer.querySelector(".bboxHint")!.textContent = `${TOOLS.find((t) => t.id === next)!.hint}. Alt + drag turns the camera. Esc to stop.`;
+      layer.querySelector(".bboxHint")!.textContent = `${HIDE_TOOLS.find((t) => t.id === next)!.hint}. Alt + drag turns the camera. Esc to stop.`;
       ring = layer.querySelector<HTMLElement>(".brushRing");
       if (ring) ring.style.width = ring.style.height = `${brushSize}px`;
       view.appendChild(layer);
@@ -186,7 +84,12 @@ export function createBodyPicker(tools: HTMLElement, host: BodyHost, panel?: HTM
       window.addEventListener("keydown", onShiftKey);
       window.addEventListener("keyup", onShiftKey);
     }
-    syncButton();
+    host.toolChanged?.(tool);
+  }
+
+  function setBrushSize(px: number) {
+    brushSize = px;
+    if (ring) ring.style.width = ring.style.height = `${brushSize}px`;
   }
 
   function onEsc(ev: KeyboardEvent) {
@@ -309,12 +212,139 @@ export function createBodyPicker(tools: HTMLElement, host: BodyHost, panel?: HTM
         current.clear();
       }
       selection = null;
-      paint();
+      host.stroked?.();
       if (used === "brush") queueHover();
     };
     view.addEventListener("pointermove", onMove);
     view.addEventListener("pointerup", onUp);
     view.addEventListener("pointercancel", onUp);
+  }
+
+  return { setTool, setBrushSize, get tool() { return tool; }, get brushSize() { return brushSize; } };
+}
+
+/**
+ * The parts picker: which parts of the selected character are drawn, as a checklist with All and None (in `panel`, a block of the
+ * properties panel, beside the bodygroups; in the view's popup when there is no panel), and the view tools that hide triangles by hand
+ * (box, lasso, brush), in a popup off a button at the bottom right of the view.
+ */
+export function createBodyPicker(tools: HTMLElement, host: BodyHost, panel?: HTMLElement | null | false): { sync: () => void } {
+  /** The checklist is in the popup (no panel given): the popup is the parts picker; otherwise it holds the triangle tools alone. */
+  const inPopup = panel === undefined || panel === null;
+  const button = document.createElement("button");
+  button.id = "hudBody";
+  button.innerHTML = ICON;
+  button.title = inPopup ? "Character parts: choose which parts of the character are shown" : "Hide triangles: box, lasso or brush over the view hides what they cover (which parts are drawn is under Properties, Bodygroups)";
+  button.setAttribute("aria-label", inPopup ? "Character parts" : "Hide triangles");
+  tools.parentElement?.appendChild(button); // bottom right corner of the view
+
+  const pop = document.createElement("div");
+  pop.id = "bodyPop";
+  pop.hidden = true;
+  pop.innerHTML = `<div class="bpHead">${inPopup ? "Show character parts" : "Hide triangles"}</div>`;
+  // the checklist and its presets: in the panel, in the popup when there is none, nowhere when the panel is `false` (the properties
+  // panel lists the parts itself)
+  const listHost = panel === false ? null : panel ?? pop;
+  const presets = document.createElement("div");
+  presets.className = "bpPresets";
+  const list = document.createElement("div");
+  list.className = "bpGroupList";
+  listHost?.append(presets, list);
+  const checks = new Map<string, HTMLInputElement>();
+  let groupKey = "";
+  const hint = document.createElement("div");
+  hint.className = "bpHint dim";
+  hint.textContent = inPopup ? "Checked groups are visible. View tools hide selected triangles (Shift restores them)." : "What a tool covers is hidden (Shift: shown again). Which parts are drawn at all is set under Properties, Bodygroups.";
+  pop.appendChild(hint);
+  const toolRow = document.createElement("div");
+  toolRow.className = "bpBoxRow";
+  const toolButtons = new Map<HideTool, HTMLButtonElement>();
+  for (const t of HIDE_TOOLS) {
+    const b = document.createElement("button");
+    b.className = "bpBoxBtn";
+    b.textContent = t.label;
+    b.title = t.title;
+    b.onclick = () => setTool(tool() === t.id ? null : t.id);
+    toolButtons.set(t.id, b);
+    toolRow.appendChild(b);
+  }
+  const clearButton = document.createElement("button");
+  clearButton.textContent = "Clear";
+  clearButton.title = "Bring back everything hidden with the view tools";
+  clearButton.onclick = () => {
+    host.clearBoxMask();
+    paint();
+  };
+  toolRow.appendChild(clearButton);
+  const sizeRow = document.createElement("label");
+  sizeRow.className = "bpSize";
+  sizeRow.hidden = true;
+  const sizeInput = document.createElement("input");
+  sizeInput.type = "range";
+  sizeInput.min = "6";
+  sizeInput.max = "120";
+  sizeInput.value = "24";
+  sizeInput.oninput = () => hide?.setBrushSize(Number(sizeInput.value));
+  sizeRow.append("Brush size", sizeInput);
+  if (listHost === pop) presets.after(toolRow, sizeRow);
+  else pop.querySelector(".bpHead")!.after(toolRow, sizeRow);
+  for (const [label, all] of [["All", true], ["None", false]] as const) {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.onclick = () => {
+      host.set(new Set(all ? host.groups().map(g => g.id) : []));
+      if (all) host.clearBoxMask();
+      paint();
+    };
+    presets.appendChild(b);
+  }
+  tools.parentElement?.appendChild(pop);
+
+  function paint() {
+    if (!listHost) return;
+    const groups = host.groups();
+    const key = groups.map(g => g.id).join(",");
+    if (groupKey !== key) {
+      groupKey = key;
+      list.replaceChildren();
+      checks.clear();
+      for (const group of groups) {
+        const row = document.createElement("label");
+        const check = document.createElement("input");
+        check.type = "checkbox";
+        check.onchange = () => {
+          const next = new Set(host.get());
+          if (check.checked) next.add(group.id); else next.delete(group.id);
+          host.set(next);
+          paint();
+        };
+        row.append(check, group.label);
+        list.appendChild(row);
+        checks.set(group.id, check);
+      }
+    }
+    const now = host.get();
+    for (const [key, check] of checks) check.checked = now.has(key) || now.has("*");
+    if (panel) panel.hidden = groups.length === 0; // (a prop or a building has no parts to pick)
+  }
+
+  // --- the view tools: box, lasso and brush over the 3D view ---
+  const view = tools.parentElement;
+  const hide = view ? createHideTools(view, {
+    beginSelect: () => host.beginSelect(),
+    viewStamp: () => host.viewStamp(),
+    toolChanged: (now) => {
+      for (const [id, b] of toolButtons) b.classList.toggle("on", id === now);
+      sizeRow.hidden = now !== "brush";
+      syncButton();
+    },
+    stroked: () => paint(),
+  }) : null;
+  const setTool = (next: HideTool | null) => hide?.setTool(next);
+  const tool = () => hide?.tool ?? null;
+
+  function syncButton() {
+    button.classList.toggle("on", !pop.hidden || tool() !== null);
   }
 
   button.onclick = () => {

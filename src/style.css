@@ -802,12 +802,33 @@ td.n { text-align: right; font-variant-numeric: tabular-nums; }
 #canvasWrap.iconStudio #compilerFlyout, #canvasWrap.iconStudio #flyoutToggle, #canvasWrap.iconStudio #viewHeader, #canvasWrap.iconStudio #viewToolbar { display: none; }
 .compilerPane .cmpIconGen { width: 100%; margin-top: 4px; padding: 3px 4px; font-size: var(--ui-fs-small); }
 .iconCut { position: absolute; left: 0; right: 0; background: var(--ui-shade-3); }
-#iconFadeBand { position: absolute; left: 0; right: 0; }
-#iconFade { position: absolute; top: 64px; left: 12px; z-index: 8; display: flex; flex-direction: column; gap: 6px; width: 250px; padding: 8px 10px; background: var(--ui-float); border: 1px solid var(--line); border-radius: var(--ui-radius-xl); font-size: var(--ui-fs-body); }
-#iconFade .iconFadeRow { display: grid; grid-template-columns: 44px minmax(0, 1fr) 52px; align-items: center; gap: 6px; margin: 0; color: var(--dim); }
-#iconFade .iconFadeSwitch { margin: 0; color: var(--fg); }
-#iconFade input[type=number] { width: 100%; height: 22px; padding: 0 4px; border: 1px solid transparent; border-radius: var(--ui-radius-s); background: var(--ui-input); color: var(--fg); font: 12px var(--ui-mono); text-align: right; }
-#canvasWrap.iconStudio #iconFade input[type=range] { width: 100%; margin: 0; }
+#iconFrame .iconFadeBand { position: absolute; left: 0; right: 0; }
+/* the studio's settings: a panel of its own at the top left of the view (camera, fades, character parts); the view's own part tools are not used here */
+#iconPanel { position: absolute; top: 12px; left: 12px; z-index: 8; width: 280px; max-height: calc(100% - 24px); padding: var(--ui-2) var(--ui-5) var(--ui-5); overflow: auto; background: var(--ui-float); border: 1px solid var(--line); border-radius: var(--ui-radius-xl); backdrop-filter: blur(4px); font-size: var(--ui-fs-body); --ui-label-col: 84px; }
+#iconPanel[hidden] { display: none; }
+#iconPanel h3 { margin-top: var(--ui-5); }
+#iconPanel h3.first { margin-top: 0; }
+#iconPanel h3 .bgBtns { display: inline-flex; gap: var(--ui-1); }
+#iconPanel h3 button:disabled { opacity: .4; cursor: default; }
+#iconPanel label.iconFadeSwitch { display: flex; align-items: center; gap: var(--ui-3); margin: var(--ui-4) 0 0; color: var(--fg); font-weight: 600; cursor: pointer; }
+#iconPanel label.iconFadeSwitch input { margin: 0; accent-color: var(--accent); }
+#iconPanel .iconFadeEdge .ui-prop { padding-left: 18px; }
+#iconPanel .iconFadeEdge.off .ui-prop { opacity: .45; }
+#iconPanel .iconParts { display: grid; grid-template-columns: 1fr 1fr; gap: 1px var(--ui-4); padding-top: var(--ui-2); }
+#iconPanel label.iconPart { display: flex; align-items: center; gap: var(--ui-3); min-height: 20px; margin: 0; padding: 0 2px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-radius: var(--ui-radius); cursor: pointer; }
+#iconPanel label.iconPart:hover { background: var(--ui-wash-1); }
+#iconPanel label.iconPart input { margin: 0; accent-color: var(--accent); flex: none; }
+#iconPanel .iconParts .hint { grid-column: 1 / -1; }
+#canvasWrap.iconStudio #hudBody, #canvasWrap.iconStudio #bodyPop { display: none; }
+#iconPanel .iconSeg { display: flex; }
+#iconPanel .iconSeg button { flex: 1; height: var(--ui-row-height); padding: 0 var(--ui-3); border-radius: 0; font-size: var(--ui-fs-body); }
+#iconPanel .iconSeg button + button { margin-left: -1px; }
+#iconPanel .iconSeg button:first-child { border-radius: var(--ui-radius) 0 0 var(--ui-radius); }
+#iconPanel .iconSeg button:last-child { border-radius: 0 var(--ui-radius) var(--ui-radius) 0; }
+#iconPanel .iconSeg button.on { position: relative; background: var(--ui-accent-soft); border-color: var(--ui-accent-line); color: var(--ui-text-hi); }
+#iconPanel .iconHint { margin-top: var(--ui-3); font-size: var(--ui-fs-small); line-height: 1.4; }
+/* (the tool's hint under the studio's bar, not behind it) */
+#canvasWrap.iconStudio #bodyToolLayer .bboxHint { top: 56px; }
 /* The jiggle bone editor in the materials panel: the item's own bones, and the one being set up */
 .compilerPane .cmpBoneList { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
 .compilerPane .cmpBone { display: flex; align-items: center; gap: 6px; padding: 3px 6px; border: 1px solid var(--ui-line); border-radius: var(--ui-radius); background: var(--ui-raised); cursor: pointer; }
@@ -1022,10 +1043,6 @@ body.dockDragging * { cursor: grabbing !important; }
 #viewHud svg { fill: currentColor; }
 #hudBody { background: var(--ui-float); border-radius: var(--ui-radius-xl); width: calc(var(--ui-h-float) + 8px); height: calc(var(--ui-h-float) + 8px); }
 #hudBody svg { fill: none; stroke: currentColor; }
-/* in the icon studio the button that hides parts of the character is a main tool: it says so, and stands out from the black view */
-#canvasWrap.iconStudio #hudBody { width: auto; padding: 0 var(--ui-5) 0 var(--ui-4); grid-auto-flow: column; gap: var(--ui-3); background: var(--ui-accent-soft); border: 1px solid var(--ui-accent-line); color: var(--ui-text-hi); }
-#canvasWrap.iconStudio #hudBody::after { content: "Hide parts"; font-size: 12px; font-weight: 600; }
-#canvasWrap.iconStudio #hudBody:hover { background: var(--ui-accent-mid); border: 1px solid var(--ui-accent-line); }
 #viewToolbar #viewSelect button.once { outline: 1px dashed var(--accent); outline-offset: -3px; }
 .phBar { position: absolute; top: 44px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: var(--ui-1); padding: var(--ui-2); background: var(--ui-float); border: 0; border-radius: var(--ui-radius-xl); backdrop-filter: blur(4px); }
 .phSep { width: 1px; height: 16px; margin: 0 var(--ui-2); background: var(--ui-divider); }

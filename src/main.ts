@@ -151,14 +151,30 @@ app.innerHTML = `
       <div id="flyoutGrip" title="Drag to change the width of the panel (double-click: the usual width)" role="separator" aria-orientation="vertical"></div>
       <div id="iconFrame" hidden>
         <i class="iconCut" style="top:0;height:17.7734%"></i><i class="iconCut" style="top:82.0313%;bottom:0"></i>
-        <i id="iconFadeBand"></i>
+        <i class="iconFadeBand" data-edge="top"></i><i class="iconFadeBand" data-edge="bottom"></i>
         <i class="iconLine" style="top:17.7734%"></i><i class="iconLine" style="top:82.0313%"></i><span class="iconTag">512 × 512</span>
       </div>
-      <div id="iconFade" hidden>
-        <label class="iconFadeSwitch" title="Eases the bottom of the picture out inside the safe zone, so the cut at the lower line is not a hard edge"><input type="checkbox" id="iconFadeOn" /> Fade the bottom</label>
-        <label class="iconFadeRow" title="How many rows (of 512) the fade takes, up from the lower line">Height <input type="range" class="ui-range" id="iconFadeHeight" min="0" max="200" step="1" /><input type="number" id="iconFadeHeightNumber" min="0" max="329" step="1" /></label>
-        <label class="iconFadeRow" title="1 is a straight ramp; more keeps the picture solid longer and drops faster at the end, less drops early">Curve <input type="range" class="ui-range" id="iconFadeCurve" min="0.3" max="4" step="0.1" /><input type="number" id="iconFadeCurveNumber" min="0.1" max="8" step="0.1" /></label>
-        <div class="dim">Outside the lines the picture is cut away.</div>
+      <div id="iconPanel" class="panel" hidden>
+        <h3 class="first" title="The camera the icon is taken with">Camera <span class="bgBtns"><button id="iconFovReset" title="Back to 5 degrees">Reset</button></span></h3>
+        <div class="ui-prop" title="The vertical field of view (degrees): less flattens the item like a long lens, more gives it depth"><span class="ui-key">Field of view</span><div class="ui-val"><input type="range" class="ui-range" id="iconFov" min="5" max="60" step="1" /><input type="number" class="ui-num" id="iconFovNumber" min="1" max="90" step="1" /></div></div>
+        <h3 title="Eases the picture out at the lines, so the cut there is not a hard edge. Outside the lines the picture is cut away.">Fade</h3>
+        <div class="iconFadeEdge" data-edge="top">
+          <label class="iconFadeSwitch" title="Eases the top of the picture out, down from the upper line"><input type="checkbox" data-k="on" /> Top</label>
+          <div class="ui-prop" title="How many rows (of 512) the fade takes, down from the upper line"><span class="ui-key">Height</span><div class="ui-val"><input type="range" class="ui-range" data-k="height" min="0" max="200" step="1" /><input type="number" class="ui-num" data-k="height" min="0" max="329" step="1" /></div></div>
+          <div class="ui-prop" title="1 is a straight ramp; more keeps the picture solid longer and drops faster at the end, less drops early"><span class="ui-key">Curve</span><div class="ui-val"><input type="range" class="ui-range" data-k="curve" min="0.3" max="4" step="0.1" /><input type="number" class="ui-num" data-k="curve" min="0.1" max="8" step="0.1" /></div></div>
+        </div>
+        <div class="iconFadeEdge" data-edge="bottom">
+          <label class="iconFadeSwitch" title="Eases the bottom of the picture out, up from the lower line"><input type="checkbox" data-k="on" /> Bottom</label>
+          <div class="ui-prop" title="How many rows (of 512) the fade takes, up from the lower line"><span class="ui-key">Height</span><div class="ui-val"><input type="range" class="ui-range" data-k="height" min="0" max="200" step="1" /><input type="number" class="ui-num" data-k="height" min="0" max="329" step="1" /></div></div>
+          <div class="ui-prop" title="1 is a straight ramp; more keeps the picture solid longer and drops faster at the end, less drops early"><span class="ui-key">Curve</span><div class="ui-val"><input type="range" class="ui-range" data-k="curve" min="0.3" max="4" step="0.1" /><input type="number" class="ui-num" data-k="curve" min="0.1" max="8" step="0.1" /></div></div>
+        </div>
+        <h3 title="Which parts of the character are drawn in the icon">Merc parts <span class="bgBtns"><button id="iconPartsAuto" title="The parts the item's equip region shows (as when the studio opened)">Auto</button><button id="iconPartsAll" title="Show every part">All</button><button id="iconPartsNone" title="Hide every part: the item alone">None</button></span></h3>
+        <div id="iconParts" class="iconParts"></div>
+        <h3 title="Hide triangles of the item or of the merc by drawing over the view">Hide by hand <span class="bgBtns"><button id="iconHideReset" title="Bring back everything hidden by hand on the target">Reset</button></span></h3>
+        <div class="ui-prop" title="What the tools hide: the item being compiled, or the merc"><span class="ui-key">Target</span><div class="ui-val single"><div class="iconSeg" id="iconHideTarget"><button data-t="items" class="on">Item</button><button data-t="body">Merc</button></div></div></div>
+        <div class="ui-prop"><span class="ui-key">Tool</span><div class="ui-val single"><div class="iconSeg" id="iconHideTools"><button data-tool="box" title="Box: drag a rectangle over the view; what it covers is hidden">Box</button><button data-tool="lasso" title="Lasso: draw a free shape over the view; what it encloses is hidden">Lasso</button><button data-tool="brush" title="Brush: paint over the view; what you paint over is hidden at once">Brush</button></div></div></div>
+        <div class="ui-prop" id="iconBrushRow" hidden title="The brush's size on screen (pixels)"><span class="ui-key">Brush size</span><div class="ui-val"><input type="range" class="ui-range" id="iconBrush" min="6" max="120" step="1" value="24" /><input type="number" class="ui-num" id="iconBrushNumber" min="2" max="400" step="1" value="24" /></div></div>
+        <div class="iconHint dim">Shift brings back what was hidden. Alt + drag turns the camera; Esc puts the tool away.</div>
       </div>
       <div id="iconBar" hidden><span class="dim">Keep the item between the lines</span><button id="iconCreate">Create backpack icon</button><span id="iconStatus" class="dim"></span></div>
       <div id="viewHeader">
@@ -480,6 +496,7 @@ const viewTab = createViewTab({
 document.querySelectorAll<HTMLElement>("#lightPane .lightCol, #lightSetupsPane .lightCol").forEach((section) => accordify(section, "light"));
 accordify(document.querySelector<HTMLElement>(".animCol:last-child")!, "anim");
 for (const id of ["bodyBlock", "effectsBlock", "jiggleBlock"]) accordify(document.getElementById(id)!, "props");
+accordify(document.getElementById("iconPanel")!, "icon");
 
 // The panels (outliner, properties, the browsers, the animation and lighting tabs ...) sit in three docks that are always there; they can be
 // dragged from one dock to another, split off into groups and tabbed together, hidden and brought back from the Layout menu.

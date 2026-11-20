@@ -3023,9 +3023,19 @@ void main() {
   private skyRotation = 0;
   private skyBrightness = 1;
   /** Gives the view a vertical field of view of its own (degrees), whatever its shape; null: the horizontal one of the view setting. */
-  setFixedVerticalFov(degrees: number | null) {
+  setFixedVerticalFov(degrees: number | null, keepSize = false) {
+    const before = this.camera.fov;
     this.fixedVerticalFov = degrees;
     this.resize();
+    // keepSize: what is at the orbit's centre stays the same size on screen (a dolly zoom): the camera moves back as the field narrows
+    if (!keepSize || this.cameras.activeCamera || this.camera.isOrthographicCamera || this.camera.fov === before) return;
+    const offset = this.camera.position.clone().sub(this.controls.target);
+    const dist = offset.length() * (Math.tan((before * Math.PI) / 360) / Math.tan((this.camera.fov * Math.PI) / 360));
+    this.camera.position.copy(this.controls.target).addScaledVector(offset.normalize(), dist);
+    this.camera.near = Math.max(0.1, dist / 100);
+    this.camera.far = Math.max(this.camera.far, dist * 20);
+    this.camera.updateProjectionMatrix();
+    this.controls.update();
   }
 
   /** The colour of the scene behind everything when there is no sky ("#rrggbb"). */
@@ -3661,8 +3671,8 @@ void main() {
     return box;
   }
 
-  /** Starts a selection (box, lasso or brush) over a character's body, as the view looks now. */
-  beginSelect(actor: Actor): ViewSelection | null {
+  /** Starts a selection (box, lasso or brush) over a character's body, or over the items it wears, as the view looks now. */
+  beginSelect(actor: Actor, target: "body" | "items" = "body"): ViewSelection | null {
     const rect = this.renderer.domElement.getBoundingClientRect();
     this.camera.updateMatrixWorld();
     const ndc = new THREE.Vector3();
@@ -3672,7 +3682,7 @@ void main() {
       out.x = rect.left + (ndc.x * 0.5 + 0.5) * rect.width;
       out.y = rect.top + (0.5 - ndc.y * 0.5) * rect.height;
       return true;
-    });
+    }, target);
   }
 
   /** Camera on everything shown, from the front and a little to the side and above, as for looking over a single item. */
