@@ -59,6 +59,10 @@ pub struct Item {
     /// `visuals/player_bodygroups` and `additional_hidden_bodygroups`: class bodygroup -> model index
     /// (1 hides the class's own geometry, e.g. the Soldier's helmet).
     pub bodygroups: BTreeMap<String, i32>,
+    /// The skin family of the item itself for RED / BLU when its style names none: `visuals_red` / `visuals_blu` `skin`, else
+    /// `visuals` `skin` (CEconItemView::GetSkin). The Rust, Blood, Carbonado and Diamond Botkillers are skins 4 to 11 of their weapon's model.
+    pub skin_red: Option<i32>,
+    pub skin_blu: Option<i32>,
     pub equip_regions: Vec<String>,
     pub paintable: bool,
     /// The item has the `player_skin_override` attribute (the Voodoo-Cursed souls): its wearer is drawn in the zombie skin of the
@@ -283,6 +287,12 @@ fn parse_styles(nodes: &[Node], names: &HashMap<String, String>) -> Vec<ItemStyl
         .collect()
 }
 
+/// An item's skin for a team (CEconItemView::GetSkin): its `visuals_red` / `visuals_blu` block's `skin`, else its `visuals` one.
+fn team_skin(nodes: &[Node], team_block: &str) -> Option<i32> {
+    let skin = |b: &str| get_block(nodes, b).and_then(|v| get_str(v, "skin")).and_then(|s| s.trim().parse::<i32>().ok());
+    skin(team_block).or_else(|| skin("visuals"))
+}
+
 /// `class -> value` of a block like `custom_taunt_prop_per_class`, values mapped by `f`.
 fn class_map(block: Option<&[Node]>, f: impl Fn(&str) -> String) -> BTreeMap<String, String> {
     block
@@ -371,6 +381,8 @@ fn build_item(id: u32, nodes: &[Node], names: &HashMap<String, String>) -> Item 
         per_class,
         image: get_str(nodes, "image_inventory").map(str::to_string),
         bodygroups,
+        skin_red: team_skin(nodes, "visuals_red"),
+        skin_blu: team_skin(nodes, "visuals_blu"),
         equip_regions,
         type_token: get_str(nodes, "item_type_name").unwrap_or("").trim_start_matches('#').to_ascii_lowercase(),
         prefabs: Vec::new(),
