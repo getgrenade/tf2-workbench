@@ -1124,3 +1124,47 @@ pub async fn eval_poses(
 pub fn player_gibs(state:State<'_,AppState>,path:String)->Result<serde_json::Value,String>{let vpk=state.vpk()?;gib_definitions(&vpk,&path)}
 #[tauri::command]
 pub fn model_physics(state:State<'_,AppState>,path:String)->Result<serde_json::Value,String>{ let vpk=state.vpk()?; workbench_core::game::model_physics(&vpk,&path) }
+
+/// Reads an image the user picked to put in place of a texture (.png, .jpg, .tga or .vtf, at most 64 MB). A .vtf is decoded here (its
+/// largest mip, the first frame): the reply is then `VTF0`, the width and height (u32 little endian) and the RGBA8 pixels, top row first;
+/// any other file comes back as it is, for the interface to decode.
+#[tauri::command]
+pub async fn read_texture_file(path: String) -> Result<tauri::ipc::Response, String> {
+    let bytes = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let p = PathBuf::from(&path);
+        let ext = p.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+        if !matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "tga" | "vtf") {
+            return Err(format!("refusing to read {path}: only .png, .jpg, .tga and .vtf images"));
+        }
+        let len = std::fs::metadata(&p).map_err(|e| format!("{path}: {e}"))?.len();
+        if len > 64 << 20 { return Err(format!("{path} is larger than 64 MB")); }
+        let data = std::fs::read(&p).map_err(|e| format!("{path}: {e}"))?;
+        if ext != "vtf" { return Ok(data); }
+        let image = source_formats::vtf::decode(&data, 0).map_err(|e| format!("{path}: {e}"))?;
+        let mut out = Vec::with_capacity(12 + image.rgba.len());
+        out.extend_from_slice(b"VTF0");
+        out.extend_from_slice(&image.width.to_le_bytes());
+        out.extend_from_slice(&image.height.to_le_bytes());
+        out.extend_from_slice(&image.rgba);
+        Ok(out)
+    }).await.map_err(|e| e.to_string())??;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// The text of a material's VMT as the game has it (for the VMT editor of the Textures panel).
+#[tauri::command]
+pub async fn read_material_text(state: State<'_, AppState>, path: String) -> Result<String, String> {
+    let vpk = state.vpk()?;
+    let bytes = vpk.read(&path.to_ascii_lowercase()).map_err(|e| format!("{path}: {e}"))?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// A material made from edited VMT text (decoded like `load_material`, not cached): what the VMT editor shows as it is typed.
+#[tauri::command]
+pub async fn material_from_text(state: State<'_, AppState>, path: String, text: String) -> Result<tauri::ipc::Response, String> {
+    let vpk = state.vpk()?;
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        source_formats::material::from_text(&vpk, &path, &text).map(|m| workbench_core::payload::encode_material(&m)).map_err(|e| e.to_string())
+    }).await.map_err(|e| e.to_string())??;
+    Ok(tauri::ipc::Response::new(bytes))
+}

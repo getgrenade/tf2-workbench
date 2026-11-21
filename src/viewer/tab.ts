@@ -20,6 +20,9 @@ import { FaceDriver, type FaceLine } from "./faceDriver";
 import type { FlexGlobals } from "./flex";
 import type { LipSync, PhonemeClasses, SceneData } from "./faceScene";
 import { loadVoice, setVoiceMuted, stopAll as stopVoices, voiceMuted } from "./voicePlayer";
+import { materialFromText, readMaterialText, readTextureFile } from "../api";
+import { VmtEdits } from "./vmtEdits";
+import { editsFor, loadMaterialEdits, saveMaterialEdits } from "./materialEditsStore";
 import { listSequences, loadMaterial, loadModel, loadSession, prepareWorkshopTaunt, readTextFile, saveSession, rewriteModelFile, writeAdjustedModel, writeBinaryFile, writeTextFile, type WorkshopTaunt } from "../api";
 import { loadItemDb, workshopItemsAsZipped } from "./itemCatalog";
 import { openItemStyles } from "./workshopStyles";
@@ -58,6 +61,7 @@ import { countOf, newPostId, POST_KINDS, statesOf, type PostItem, type PostKind 
 import { entityHidden, isInside, newGroupName, parseGroups, withDescendants, type HierarchyGroup } from "./hierarchyTree";
 import { createBodyPicker, createHideTools, type HideTool } from "./bodyPicker";
 import { createTexturePreview, type PreviewItem } from "./texturePreview";
+import { decodeReplacement, REPLACEMENT_EXTENSIONS, TextureOverrides } from "./textureOverrides";
 import { closePaintChart, openPaintChart, type ChartCell } from "./paintChart";
 import { openRandomLoadout, regionLabel, rollLoadout, type LoadoutRule, type RollSettings } from "./randomLoadout";
 import { choosePose, NOT_A_POSE, NOT_ROLLED_TAUNT, rollFace, type PoseChoice, type PoseSource } from "./randomPose";
@@ -942,7 +946,7 @@ export function createViewTab(els: Els) {
     const merged = { ...groups, ...Object.fromEntries(e.bodyManual) };
     // a Voodoo-Cursed soul puts the class model in its zombie skin: its materials load before the skin changes
     e.zombie = everything.some(({ item }) => item.skinOverride);
-    const classData = models.get(classPath(cls));
+    const classData = models.get(classPath(e.cls)); // (the model's name: the Demoman's is demo.mdl)
     if (classData) await ensureClassMaterials(e, classData);
     await ensureGroupMaterials(e, merged);
     if (token !== e.loadoutToken || !entities.includes(e)) return; // a newer loadout or class superseded this one
@@ -1186,7 +1190,8 @@ export function createViewTab(els: Els) {
         .filter((p) => !materials.has(p))
         .map(async (p) => {
           try {
-            materials.set(p, parseMaterial(await loadMaterial(p)));
+            // (with the edits made to it in the Textures panel in an earlier run)
+            materials.set(p, await restoreMaterialEdits(p, parseMaterial(await loadMaterial(p))));
           } catch (err) {
             materials.set(p, null);
             materialErrors.set(p, String(err));
@@ -1854,6 +1859,9 @@ export function createViewTab(els: Els) {
             renderEntities();
           }
           viewer?.flash(e.actor, hit?.item ?? null); // show which one was hit (a cosmetic on its own when that is what was clicked)
+          // the Textures panel shows what was clicked: the cosmetic, or the character itself
+          refreshTextures();
+          texPreview?.focus(hit?.item != null ? `item:${hit.item}` : "character");
           // a click on a cosmetic opens its paint chart there
           if (hit?.item != null) itemsUi.openPaint(hit.item, hit.x + 10, hit.y + 10);
         }
@@ -2403,9 +2411,120 @@ export function createViewTab(els: Els) {
       }, false)
     : null;
 
-  // --- the textures of the worn cosmetics (diffuse, normal, exponent mask) under the body groups ---
+  // --- the textures of the character and its worn cosmetics (every map of each material) under the body groups; any can be replaced ---
   const texHost = document.getElementById("texView");
-  const texPreview = texHost ? createTexturePreview(texHost) : null;
+  const textureOverrides = new TextureOverrides((path, slot, data) => viewer?.mats.replaceTexture(path, slot, data));
+  textureOverrides.onChange(() => { refreshTextures(); rememberMaterialEdits(); });
+  /** The edits of the session, kept for the next start (see materialEditsStore.ts). */
+  let savedEdits = loadMaterialEdits();
+  /** The materials whose saved edits were looked at this run (the others' saved edits are kept as they are until they are loaded). */
+  const restoredEdits = new Set<string>();
+  function rememberMaterialEdits() {
+    const untouched = (path: string) => !restoredEdits.has(path.toLowerCase());
+    savedEdits = {
+      textures: [
+        ...savedEdits.textures.filter((t) => untouched(t.path)),
+        ...textureOverrides.entries().map(([path, slot]) => ({ path, slot, file: textureOverrides.file(path, slot) ?? "" })).filter((t) => t.file),
+      ],
+      vmts: [...savedEdits.vmts.filter((v) => untouched(v.path)), ...vmtEdits.paths().map((path) => ({ path, text: vmtEdits.text(path) ?? "" }))],
+    };
+    saveMaterialEdits(savedEdits);
+  }
+  /**
+   * Puts a material's saved edits back as it is loaded: its edited VMT, then its replaced maps (each image read again from where it was
+   * picked). An edit that cannot be made any more (the file is gone, the text no longer parses) is left out and forgotten.
+   */
+  async function restoreMaterialEdits(path: string, data: MaterialData): Promise<MaterialData> {
+    const saved = editsFor(savedEdits, path);
+    if (!saved.vmt && !saved.textures.length) return data;
+    restoredEdits.add(path.toLowerCase());
+    let current = data;
+    if (saved.vmt !== null) {
+      try {
+        const edited = parseMaterial(await materialFromText(path, saved.vmt));
+        vmtEdits.set(path, saved.vmt, data, await gameVmtText(path));
+        current = edited;
+      } catch (error) { console.warn(`saved VMT of ${path} not used:`, error); }
+    }
+    for (const { slot, file } of saved.textures) {
+      if (!current.textures[slot]) continue;
+      try { textureOverrides.replace(current, slot, await decodeReplacement(await readTextureFile(file), file), file); }
+      catch (error) { console.warn(`saved ${slot} of ${path} not used:`, error); }
+    }
+    return current;
+  }
+  const vmtEdits = new VmtEdits();
+  const vmtTexts = new Map<string, Promise<string>>();
+  const texPreview = texHost ? createTexturePreview(texHost, {
+    async replace(path, slot) {
+      const material = materials.get(path);
+      if (!material?.textures[slot]) return false;
+      const picked = await open({ multiple: false, directory: false, filters: [{ name: "Image", extensions: REPLACEMENT_EXTENSIONS }] });
+      if (typeof picked !== "string") return false;
+      try {
+        const image = await decodeReplacement(await readTextureFile(picked), picked);
+        restoredEdits.add(path.toLowerCase());
+        textureOverrides.replace(material, slot, image, picked); // (the whole path: it is read again at the next start)
+        return true;
+      } catch (error) {
+        els.items.count.textContent = `Could not use ${picked}: ${error instanceof Error ? error.message : String(error)}`;
+        return false;
+      }
+    },
+    reset(path, slot) { restoredEdits.add(path.toLowerCase()); const material = materials.get(path); if (material) textureOverrides.reset(material, slot); },
+    resetAll() {
+      // (every saved replacement goes, also of the materials not loaded this run)
+      savedEdits = { ...savedEdits, textures: [] };
+      textureOverrides.resetAll((path) => materials.get(path));
+      rememberMaterialEdits();
+    },
+    file: (path, slot) => textureOverrides.file(path, slot)?.split(/[\\/]/).pop() ?? null,
+    count: () => textureOverrides.size,
+    vmt: {
+      async text(path) {
+        return vmtEdits.text(path) ?? await gameVmtText(path);
+      },
+      async apply(path, text) {
+        const current = materials.get(path);
+        if (!current) return "the material is not loaded";
+        let data: MaterialData;
+        try { data = parseMaterial(await materialFromText(path, text)); }
+        catch (error) { return error instanceof Error ? error.message : String(error); }
+        vmtEdits.set(path, text, current, await gameVmtText(path));
+        putMaterial(path, data);
+        restoredEdits.add(path.toLowerCase());
+        rememberMaterialEdits();
+        return data.errors.length ? data.errors.join("; ") : null;
+      },
+      async reset(path) {
+        const original = vmtEdits.take(path);
+        if (original) putMaterial(path, original);
+        restoredEdits.add(path.toLowerCase());
+        rememberMaterialEdits();
+        return gameVmtText(path);
+      },
+      edited: (path) => vmtEdits.edited(path),
+    },
+  }) : null;
+  /** The game's own text of a material's VMT (read once). */
+  function gameVmtText(path: string): Promise<string> {
+    let text = vmtTexts.get(path.toLowerCase());
+    if (!text) {
+      text = readMaterialText(path);
+      text.catch(() => vmtTexts.delete(path.toLowerCase()));
+      vmtTexts.set(path.toLowerCase(), text);
+    }
+    return text;
+  }
+  /** Draws a material with new data everywhere it is drawn (an edited VMT, or the game's back): every character's meshes made from it. */
+  function putMaterial(path: string, data: MaterialData) {
+    // (the textures a replacement put in the old data go with the new one, so a replaced map stays replaced)
+    for (const [p, slot] of textureOverrides.entries()) if (p.toLowerCase() === path.toLowerCase()) { const current = materials.get(path)?.textures[slot]; if (current && data.textures[slot]) data.textures[slot] = current; }
+    materials.set(path, data);
+    viewer?.mats.purge((p) => p.toLowerCase() === path.toLowerCase());
+    for (const e of entities) e.actor.replaceMaterial(path, data);
+    refreshTextures();
+  }
 
   function refreshTextures() {
     if (!texPreview) return;
@@ -2415,7 +2534,7 @@ export function createViewTab(els: Els) {
     if (e) {
       const cls = gameClassOf(e.cls);
       // one worn model: its counts, and its materials with their textures and UVs
-      const add = (label: string, data: ModelData, materialOf: (m: ModelData["bodyParts"][number]["models"][number]["meshes"][number]) => string, lookup: (path: string) => MaterialData | null | undefined) => {
+      const add = (label: string, data: ModelData, materialOf: (m: ModelData["bodyParts"][number]["models"][number]["meshes"][number]) => string, lookup: (path: string) => MaterialData | null | undefined, id?: string) => {
         let tris = 0, verts = 0;
         for (const bp of data.bodyParts) for (const m of bp.models[0]?.meshes ?? []) {
           tris += m.indices.length / 3;
@@ -2433,20 +2552,27 @@ export function createViewTab(els: Els) {
             let entry = seen.has(p) ? list.find((x) => x.path === p) : undefined;
             if (!entry) {
               seen.add(p);
-              entry = { path: p, textures: { base: mat.textures.base, bump: mat.textures.bump, exponent: mat.textures.exponent }, meshes: [] };
+              entry = { path: p, textures: { ...mat.textures }, meshes: [] };
               list.push(entry);
             }
             entry.meshes.push({ uvs: m.uvs, indices: m.indices });
           }
         }
-        if (list.length) items.push({ label, materials: list });
+        if (list.length) items.push({ label, materials: list, id });
       };
+      // the character itself (its skin of the team it is on, or its zombie skin)
+      // (by the character's own class name: the Demoman's model is demo.mdl, not the game class's demoman.mdl)
+      const classData = models.get(classPath(e.cls));
+      if (classData) {
+        const skin = e.zombie ? zombieFamily(classData.skinCount, e.team) ?? e.team : e.team;
+        add(`${e.name ?? cls[0].toUpperCase() + cls.slice(1)} (character)`, classData, (m) => m.materials[skin] ?? m.material, (p) => materials.get(p), "character");
+      }
       for (const { item, style } of e.applied) {
         const path = itemModelFor(item, cls, style);
         const data = path ? models.get(path) : undefined;
         if (!data) continue;
         const skin = itemSkinFor(item, e.team, style) ?? e.team;
-        add(item.displayName, data, (m) => itemMaterialOverride(item) ?? m.materials[skin] ?? m.material, (p) => materials.get(p));
+        add(item.displayName, data, (m) => itemMaterialOverride(item) ?? m.materials[skin] ?? m.material, (p) => materials.get(p), `item:${item.id}`);
       }
       // the item being built in the compiler, while this character wears it (its materials are its own, not the game's)
       const preview = compilerPreview;

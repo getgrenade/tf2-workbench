@@ -525,7 +525,12 @@ td.n { text-align: right; font-variant-numeric: tabular-nums; }
 .texPick { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
 .texPick select[hidden] { display: none; }
 .texTabs, .texChans { display: flex; gap: var(--ui-2); }
+.texTabs { flex-wrap: wrap; }
 .texTabs button, .texChans button { flex: 1; padding: 2px 4px; font-size: var(--ui-fs-small); }
+.texTabs button { flex: 1 0 auto; }
+.texTabs button.edited { color: var(--ui-warn); }
+.texEdit { margin-top: 6px; gap: var(--ui-2); }
+.texEdit button { flex: 1; }
 .texTabs button.on, .texChans button.on { border-color: var(--accent); color: var(--accent); }
 .texChans { margin-top: 4px; }
 .texStage { margin-top: 6px; display: grid; place-items: center; min-height: 80px; background: repeating-conic-gradient(var(--ui-input) 0% 25%, var(--ui-panel) 0% 50%) 0 0 / 14px 14px; border: 1px solid var(--line); border-radius: var(--ui-radius); overflow: hidden; }
@@ -1528,3 +1533,10 @@ body.dndActive.dndRefused * { cursor: no-drop !important; }
 .cmpVisDevSeg { flex-wrap: wrap; margin: 2px 0 4px; }
 .cmpVisDevSeg button { flex: 1; }
 .cmpVisDevStops { display: flex; flex-direction: column; gap: 4px; margin: 4px 0; }
+/* the VMT editor of the Textures panel */
+.texVmt { margin-top: 8px; }
+.texVmtHead { display: flex; align-items: center; gap: var(--ui-3); margin-bottom: 4px; font-size: var(--ui-fs-small); font-weight: 600; }
+.texVmtHead .texVmtState { flex: 1; color: var(--ui-warn); font-weight: 400; }
+.texVmtText { width: 100%; box-sizing: border-box; min-height: 160px; resize: vertical; font-family: var(--ui-mono); font-size: var(--ui-fs-small); line-height: 1.45; tab-size: 4;
+  white-space: pre; background: var(--ui-input); color: var(--fg); border: 1px solid var(--line); border-radius: var(--ui-radius-s); padding: 4px 6px; }
+.texVmtError { color: var(--ui-red); min-height: 0; }

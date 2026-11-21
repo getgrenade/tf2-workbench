@@ -294,3 +294,10 @@ export const modelPhysics=(path:string)=>invoke<ModelPhysics>("model_physics",{p
 export const findBlender = () => invoke<string[]>("find_blender");
 /** The rig of a .blend file as JSON, read with Blender in the background (`blender`: the executable, empty for the newest found). */
 export const exportBlendRig = (blend: string, blender: string) => invoke<string>("export_blend_rig", { blend, blender });
+
+/** An image picked to replace a texture: a .vtf comes decoded (`VTF0`, width, height, RGBA8), any other file as it is. */
+export const readTextureFile = (path: string) => invoke<ArrayBuffer>("read_texture_file", { path });
+/** The text of a material's VMT as the game has it. */
+export const readMaterialText = (path: string) => invoke<string>("read_material_text", { path });
+/** A material made from edited VMT text (decode with `parseMaterial`); fails with the parse error. */
+export const materialFromText = (path: string, text: string) => invoke<ArrayBuffer>("material_from_text", { path, text });
