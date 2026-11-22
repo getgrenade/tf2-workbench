@@ -1033,8 +1033,8 @@ export class Actor {
   }
 
   /** The sheen of the held weapon's killstreak (null: none): its colour, whether it is an Australium's, and the wait between sweeps. */
-  private sheen: { tint: Rgb; index: number; wait: number } | null = null;
-  setSheen(sheen: { tint: Rgb; index: number; wait: number } | null) {
+  private sheen: { tint: Rgb; index: number; wait: number; speed?: number } | null = null;
+  setSheen(sheen: { tint: Rgb; index: number; wait: number; speed?: number } | null) {
     if (JSON.stringify(sheen) === JSON.stringify(this.sheen)) return;
     this.sheen = sheen;
     this.applySheen();

@@ -2664,6 +2664,8 @@ export function createViewTab(els: Els) {
   const ksSheen = document.getElementById("ksSheen") as HTMLSelectElement | null;
   const ksEffect = document.getElementById("ksEffect") as HTMLSelectElement | null;
   const ksHigh = document.getElementById("ksHigh") as HTMLInputElement | null;
+  const ksSpeed = document.getElementById("ksSpeed") as HTMLInputElement | null;
+  const ksSpeedValue = document.getElementById("ksSpeedValue");
   if (ksSheen && ksEffect) {
     ksSheen.append(new Option("None", "0"), ...SHEENS.map((s) => new Option(s.name, String(s.id))));
     ksEffect.append(new Option("None", "0"), ...KILLSTREAKERS.map((k) => new Option(k.name, String(k.id))));
@@ -2672,7 +2674,7 @@ export function createViewTab(els: Els) {
   function syncSheen(e: Entity, weapon: ItemInfo | null) {
     const k = weapon ? e.killstreaks?.get(weapon.id) : undefined;
     const tint = k ? sheenTint(k.sheen, e.team) : null;
-    e.actor.setSheen(tint && k ? { tint, index: /australium/i.test(weapon!.name) ? 1 : 0, wait: sheenWait(k) } : null);
+    e.actor.setSheen(tint && k ? { tint, index: /australium/i.test(weapon!.name) ? 1 : 0, wait: sheenWait(k), ...(k.speed ? { speed: k.speed } : {}) } : null);
   }
   /** Whether a weapon can have a killstreak: a weapon of a slot that fires or swings (not a taunt, a PDA, a watch or a building). */
   const canKillstreak = (w: ItemInfo | null | undefined) => !!w && ["primary", "secondary", "melee"].includes(w.slot);
@@ -2687,12 +2689,18 @@ export function createViewTab(els: Els) {
     ksEffect.disabled = !k.sheen; // (a Professional Killstreak has a sheen too)
     ksHigh.checked = k.high;
     ksHigh.disabled = !k.sheen;
+    if (ksSpeed && ksSpeedValue) {
+      ksSpeed.value = String(Math.round((k.speed ?? 1) * 100));
+      ksSpeedValue.textContent = `${ksSpeed.value}%`;
+      ksSpeed.disabled = !k.sheen;
+    }
   }
   const changeKillstreak = () => {
     const e = selected, weapon = e?.held;
     if (!e || !weapon || !ksSheen || !ksEffect || !ksHigh) return;
     const sheen = Number(ksSheen.value);
-    const next: Killstreak = { sheen, effect: sheen ? Number(ksEffect.value) : 0, high: !!sheen && ksHigh.checked };
+    const speed = ksSpeed ? Number(ksSpeed.value) / 100 : 1;
+    const next: Killstreak = { sheen, effect: sheen ? Number(ksEffect.value) : 0, high: !!sheen && ksHigh.checked, ...(sheen && speed !== 1 ? { speed } : {}) };
     // every selected character holding that weapon, as the other weapon edits go
     for (const t of entities.filter((x) => x === e || (multi.has(x.id) && x.held?.id === weapon.id))) {
       t.killstreaks ??= new Map();
@@ -2703,6 +2711,21 @@ export function createViewTab(els: Els) {
     refreshKillstreak();
   };
   if (ksSheen && ksEffect && ksHigh) ksSheen.onchange = ksEffect.onchange = ksHigh.onchange = changeKillstreak;
+  // (the speed changes the sheen as it is dragged; the eye effect does not need to start again for it)
+  if (ksSpeed) ksSpeed.oninput = () => {
+    const e = selected, weapon = e?.held;
+    if (!e || !weapon) return;
+    if (ksSpeedValue) ksSpeedValue.textContent = `${ksSpeed.value}%`;
+    const speed = Number(ksSpeed.value) / 100;
+    for (const t of entities.filter((x) => x === e || (multi.has(x.id) && x.held?.id === weapon.id))) {
+      const k = t.killstreaks?.get(weapon.id);
+      if (!k) continue;
+      const next = { ...k };
+      if (speed === 1) delete next.speed; else next.speed = speed;
+      t.killstreaks!.set(weapon.id, next);
+      syncSheen(t, weapon);
+    }
+  };
 
   function selectEntity(e: Entity, keepMulti = false) {
     nothingSelected = false;

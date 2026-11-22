@@ -11,7 +11,12 @@ export interface Killstreak {
   sheen: number;
   effect: number;
   high: boolean;
+  /** How fast the sheen sweeps, against the game's 25 frames a second (1, absent: as in game). */
+  speed?: number;
 }
+
+/** The range of the sheen's speed. */
+export const SHEEN_SPEED = { min: 0.25, max: 4 };
 
 interface SheenColors { sheen: Rgb; eye1: Rgb; eye2: Rgb }
 const c = (r: number, g: number, b: number): Rgb => [r / 255, g / 255, b / 255];
@@ -47,7 +52,8 @@ export function parseKillstreak(raw: unknown): Killstreak | null {
   const r = raw as Record<string, unknown>;
   const sheen = SHEENS.some((s) => s.id === r.sheen) ? (r.sheen as number) : 0;
   const effect = sheen && KILLSTREAKERS.some((k) => k.id === r.effect) ? (r.effect as number) : 0;
-  return sheen ? { sheen, effect, high: r.high === true } : null;
+  const speed = typeof r.speed === "number" && Number.isFinite(r.speed) && r.speed !== 1 ? Math.min(SHEEN_SPEED.max, Math.max(SHEEN_SPEED.min, r.speed)) : undefined;
+  return sheen ? { sheen, effect, high: r.high === true, ...(speed !== undefined ? { speed } : {}) } : null;
 }
 
 function colorsOf(sheen: number, team: number): SheenColors | null {

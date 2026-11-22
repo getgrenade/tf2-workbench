@@ -35,7 +35,7 @@ export interface MaterialEffects {
    * A killstreak weapon's sheen (the weapon sheen pass): its colour, the shader index (1 for an Australium, which shines brighter), where its
    * mask lies on the weapon (see sheenFrame in killstreak.ts), and how long it waits between sweeps.
    */
-  sheen?: { tint: Rgb; index: number; dir: number; scale: [number, number]; offset: [number, number]; wait: number };
+  sheen?: { tint: Rgb; index: number; dir: number; scale: [number, number]; offset: [number, number]; wait: number; speed?: number };
   /** Plain grey (RGB 115) instead of the material's own look (no specular, no environment, no glow): for icons made in the grey clay style. */
   gray?: boolean;
 }

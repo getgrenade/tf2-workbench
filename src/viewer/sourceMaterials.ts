@@ -57,7 +57,7 @@ export class SourceMaterials {
   private sheenAssets: { cube: THREE.CubeTexture | null; mask: THREE.Texture[] } | null = null;
   private sheenLoading: Promise<void> | null = null;
   /** The materials drawing a sheen, whose mask frame follows the clock. */
-  private sheened: { material: THREE.ShaderMaterial; wait: number }[] = [];
+  private sheened: { material: THREE.ShaderMaterial; wait: number; speed: number }[] = [];
   /** Materials shared by every mesh that uses the same VMT and paint (they hold no per-entity state). */
   private cache = new Map<string, THREE.ShaderMaterial>();
 
@@ -187,7 +187,9 @@ export class SourceMaterials {
     const p = m?.params ?? {};
     if (!m || Math.trunc(Number(p["$sheenpassenabled"] ?? 0)) === 0) return null;
     this.loadSheen(p["$sheenmap"] ?? "cubemaps/cubemap_sheen001", p["$sheenmapmask"] ?? "effects/animatedsheen/animatedsheen0");
-    const key = `sheen|${JSON.stringify(sheen)}`;
+    // (one material per colour and place on the weapon: its timing is set on it, so a speed being dragged does not make new ones)
+    const { wait, speed, ...look } = sheen;
+    const key = `sheen|${JSON.stringify(look)}`;
     let material = this.cache.get(key);
     if (!material) {
       material = new THREE.ShaderMaterial({
@@ -209,8 +211,10 @@ export class SourceMaterials {
         },
       });
       this.cache.set(key, material);
-      this.sheened.push({ material, wait: sheen.wait });
+      this.sheened.push({ material, wait, speed: speed ?? 1 });
     }
+    const timing = this.sheened.find((d) => d.material === material);
+    if (timing) { timing.wait = wait; timing.speed = speed ?? 1; }
     return material;
   }
 
@@ -458,9 +462,11 @@ export class SourceMaterials {
     this.sheened = this.sheened.filter((d) => !d.material.userData.disposed);
     const sheen = this.sheenAssets;
     if (sheen?.cube && sheen.mask.length) {
-      for (const { material, wait } of this.sheened) {
-        const length = sheen.mask.length / 25;
-        const frame = Math.floor(((time % (length + wait)) + (length + wait)) % (length + wait) * 25);
+      for (const { material, wait, speed } of this.sheened) {
+        // (the speed scales the sweep and the wait after it alike)
+        const rate = 25 * speed;
+        const cycle = sheen.mask.length / rate + wait / speed;
+        const frame = Math.floor((((time % cycle) + cycle) % cycle) * rate);
         const u = material.uniforms;
         u.uSheen.value = frame < sheen.mask.length ? 1 : 0;
         u.tSheenCube.value = sheen.cube;

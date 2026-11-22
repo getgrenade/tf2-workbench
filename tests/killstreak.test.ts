@@ -22,6 +22,9 @@ test("killstreaks are read back strictly, the sheen waits five seconds below a h
   assert.deepEqual(parseKillstreak({ sheen: 3, effect: 2005, high: true }), { sheen: 3, effect: 2005, high: true });
   assert.deepEqual(parseKillstreak({ sheen: 0, effect: 2005 }), null);
   assert.deepEqual(parseKillstreak({ sheen: 3, effect: 9999 }), { sheen: 3, effect: 0, high: false });
+  assert.deepEqual(parseKillstreak({ sheen: 3, effect: 0, speed: 2 }), { sheen: 3, effect: 0, high: false, speed: 2 });
+  assert.deepEqual(parseKillstreak({ sheen: 3, effect: 0, speed: 1 }), { sheen: 3, effect: 0, high: false });
+  assert.equal(parseKillstreak({ sheen: 3, effect: 0, speed: 99 })!.speed, 4);
   assert.equal(sheenWait({ sheen: 1, effect: 0, high: false }), 5);
   assert.equal(sheenWait({ sheen: 1, effect: 0, high: true }), 0);
   const data = { bodyParts: [{ models: [{ meshes: [{ positions: new Float32Array([0, -2, 1, 4, 30, 3]) }] }] }] } as unknown as ModelData;
