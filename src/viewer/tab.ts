@@ -1,5 +1,5 @@
 import { icon as svgIcon, ICONS as LUCIDE, type IconName } from "../icons";
-import { shadowApart, shadowLayer, shadowOf, solidOf, type ShotEffects } from "./promo";
+import { shadowApart, shadowLayer, shadowOf, solidOf, type ShotEffects, type ShotEnv } from "./promo";
 import { partsOf } from "./promoMask";
 import { picturePsd } from "./promoPsd";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -42,7 +42,7 @@ import { gizmoKey } from "./gizmos";
 import { createHierarchy, type HierarchyHooks, type OutlinerNode, type Pick } from "./hierarchy";
 import { editHistory } from "./editHistory";
 import type { PlacementHistory } from "./placementHistory";
-import { cameraSize, nearestRatio, type SceneCamera } from "./cameraData";
+import { cameraSize, horizontalFov, nearestRatio, verticalFov, type SceneCamera } from "./cameraData";
 import { combine, createBoxSelect, type BoxHits, type BoxMode } from "./boxSelect";
 import { createTransformFields } from "./transformFields";
 import { openMenu, type MenuItem } from "./popMenu";
@@ -5224,7 +5224,7 @@ export function createViewTab(els: Els) {
     [x - w * PROMO_MARGIN.x, y - h * PROMO_MARGIN.y, w * (1 + 2 * PROMO_MARGIN.x), h * (1 + 2 * PROMO_MARGIN.y)];
 
   /** Dresses a character of the promo scene and poses it: a weapon's idle (holding it), or the reference pose. */
-  async function promoDress(e: Entity, loadout: Equipped[], weapon: ItemInfo | null, regions: string[] | null, team = 0) {
+  async function promoDress(e: Entity, loadout: Equipped[], weapon: ItemInfo | null, regions: string[] | null, team = 0, hidden?: string[]) {
     const game = gameClassOf(e.cls);
     if (e.team !== team) {
       // the team: the class's own skin now, the cosmetics' with the loadout below
@@ -5239,7 +5239,9 @@ export function createViewTab(els: Els) {
     e.actor.setInspectOnly(regions !== null);
     // a whole character shows every part of its body (the parts by name: a "show all" would leave the head's own materials out)
     const all = e.actor.bodyGroups.map((g) => g.id);
-    e.actor.setVisibleRegions(regions ?? (all.length ? all : ["*"]));
+    const shown = regions ?? (all.length ? all : ["*"]);
+    // (less the parts hidden by hand)
+    e.actor.setVisibleRegions(hidden?.length ? (shown.includes("*") ? all : shown).filter((id) => !hidden.includes(id)) : shown);
     if (e === selected && !promoQuiet) { itemsUi.load(e.items); weapons.load(e.held); }
     else if (e === selected) uiStale = true;
     // a Spy smokes in a promo unless what he wears covers his head (the smoke would float out of the mask); the loadout plays it
@@ -5416,6 +5418,7 @@ export function createViewTab(els: Els) {
       });
       tab = activeTab ?? undefined;
       if (!tab || tab === before) throw new Error("could not open the character's scene (the view is busy)");
+      baseEnv.set(tab, currentEnv());
       promo().roles.set(role, tab);
       promo().dressed.delete(role);
       promo().laidOut.delete(role);
@@ -5564,7 +5567,7 @@ export function createViewTab(els: Els) {
     if (promo().dressed.get(spec.role) !== dress) {
       // the bodygroups set by hand in this shot, over what its cosmetics set (as the Bodygroups of the character's properties)
       e.bodyManual = new Map(Object.entries(spec.bodygroups ?? {}));
-      await promoDress(e, loadout, spec.weapon !== null ? byId.get(spec.weapon) ?? null : null, spec.regions, teamOf(spec));
+      await promoDress(e, loadout, spec.weapon !== null ? byId.get(spec.weapon) ?? null : null, spec.regions, teamOf(spec), spec.hiddenRegions);
       // the pose it holds, when it is not the weapon's idle
       if (spec.pose) {
         e.actor.usePose({ pos: Float32Array.from(spec.pose.pos), quat: Float32Array.from(spec.pose.quat), scale: spec.pose.scale ? Float32Array.from(spec.pose.scale) : undefined });
@@ -5647,7 +5650,7 @@ export function createViewTab(els: Els) {
   const teamOf = (spec: ShotSpec) => spec.team ?? (spec.role === 1 ? 1 : 0);
   /** What a shot's character wears, holds, its team and how it stands, as a key (the character is dressed again only when it changes). */
   const dressKey = (spec: ShotSpec) =>
-    JSON.stringify([spec.cls ?? null, spec.loadout.map((x) => [x.item, x.paint, x.style]), spec.weapon, spec.regions, spec.bodygroups ?? null, teamOf(spec), spec.pose ? spec.pose.quat.slice(0, 64).map((q) => Math.round(q * 1e4)) : null, spec.flex ?? null]);
+    JSON.stringify([spec.cls ?? null, spec.loadout.map((x) => [x.item, x.paint, x.style]), spec.weapon, spec.regions, spec.hiddenRegions ?? null, spec.bodygroups ?? null, teamOf(spec), spec.pose ? spec.pose.quat.slice(0, 64).map((q) => Math.round(q * 1e4)) : null, spec.flex ?? null]);
 
   /**
    * Gives a shot a random pose, as the random loadouts do: a taunt (held) or an animation, half the time each, stopped on a frame where
@@ -5873,7 +5876,7 @@ export function createViewTab(els: Els) {
     if (id.startsWith("t")) {
       const taunt = db.taunts.find((t) => String(t.id) === id.slice(1));
       if (!taunt) return false;
-      if (e.held?.id !== taunt.id) await promoDress(e, e.items.loadout, taunt, spec.regions, teamOf(spec));
+      if (e.held?.id !== taunt.id) await promoDress(e, e.items.loadout, taunt, spec.regions, teamOf(spec), spec.hiddenRegions);
       playWeaponAnimation(e, taunt);
       spec.weapon = taunt.id;
     } else {
@@ -5886,7 +5889,7 @@ export function createViewTab(els: Els) {
       const slot = /primary|secondary|melee|pda|building/i.exec(seq.name)?.[0].toLowerCase();
       const held = choice?.kind === "anim" ? choice.weapon
         : (again !== null ? db.weapons.find((w) => w.id === again) : null) ?? (slot ? db.weapons.find((w) => w.baseItem && itemUsableBy(w, game) && slotForClass(w, game) === slot) ?? null : null);
-      if ((held?.id ?? null) !== (e.held?.id ?? null)) await promoDress(e, e.items.loadout, held, spec.regions, teamOf(spec));
+      if ((held?.id ?? null) !== (e.held?.id ?? null)) await promoDress(e, e.items.loadout, held, spec.regions, teamOf(spec), spec.hiddenRegions);
       spec.weapon = held?.id ?? null;
       const params = choice?.kind === "anim" ? choice.params : !choice && spec.poseOf?.id === id ? spec.poseOf.params : undefined;
       if (params) {
@@ -5935,7 +5938,7 @@ export function createViewTab(els: Els) {
     if (of.id.startsWith("t")) {
       const taunt = db.taunts.find((t) => String(t.id) === of.id.slice(1));
       if (!taunt) return;
-      if (e.held?.id !== taunt.id) await promoDress(e, e.items.loadout, taunt, part.regions, teamOf(part));
+      if (e.held?.id !== taunt.id) await promoDress(e, e.items.loadout, taunt, part.regions, teamOf(part), part.hiddenRegions);
       playWeaponAnimation(e, taunt);
     } else {
       const seq = e.anim.info?.sequences.find((q) => q.name === of.id.slice(1));
@@ -5966,6 +5969,7 @@ export function createViewTab(els: Els) {
   /** The promo shot being edited in the 3D view, and what to do when the board is shown again. */
   let promoEditing: { spec: ShotSpec; /** the characters edited: the shot's one, or a composition's all */ ents: Entity[]; done: (set: boolean) => void; bar: HTMLElement; locked: number[];
     /** a thumbnail's studio light shows in the view while it is edited: the view's own light and occlusion, to put back */ lightWas?: { light: LightState; ao: AoState };
+    /** the scene's lights and effects as the edit began: changed by the edit, they become the shot's own */ envWas?: string;
     /** a line-up's camera, there while it is edited (and how it was, to tell whether it was moved) */ shotCamera?: { id: string; was: string } } | null = null;
 
   /**
@@ -6058,6 +6062,7 @@ export function createViewTab(els: Els) {
         if (out) out.textContent = String(gap);
         ensureViewer().setSpacing(gap);
       }
+      useEnv(envFor(spec)); // its own lights and effects, to change
       if (activeTab) showPromoTab(activeTab); // its scene is in the strip while it is edited
       syncStaleUi(); // the panels show this character before anything reads them back
       const v = ensureViewer();
@@ -6081,7 +6086,7 @@ export function createViewTab(els: Els) {
         v.setLight(studioLightState(studio));
         v.setAo(studioAo(studio));
       }
-      promoEditing = { spec, ents, done: resolve, bar, locked, lightWas };
+      promoEditing = { spec, ents, done: resolve, bar, locked, lightWas, envWas: JSON.stringify(currentEnv()) };
       const ed = promoEditing;
       (bar.querySelector(".promoEditDone") as HTMLButtonElement).onclick = () => finishShotEdit(true);
       (bar.querySelector(".promoEditCancel") as HTMLButtonElement).onclick = () => finishShotEdit(false);
@@ -6110,6 +6115,15 @@ export function createViewTab(els: Els) {
     const camMoved = !!shotCam && JSON.stringify([shotCam.position, shotCam.quaternion, shotCam.fov]) !== ed.shotCamera!.was;
     const shotCamData = shotCam ? structuredClone(shotCam) : null;
     if (ed.shotCamera) rig?.remove(ed.shotCamera.id);
+    // the lights and effects changed while it was edited: this shot's own from now on (no other shot of the scene gets them); a thumbnail
+    // in its studio light keeps only the effects (the light in the view is the studio's)
+    if (set && ed.envWas !== undefined) {
+      const now = currentEnv();
+      if (JSON.stringify(now) !== ed.envWas) {
+        const was = JSON.parse(ed.envWas) as ShotEnv;
+        ed.spec.env = ed.lightWas ? { ...was, light: structuredClone(ed.lightWas.light), post: now.post } : now;
+      }
+    }
     if (ed.lightWas) { ensureViewer().setLight(ed.lightWas.light); ensureViewer().setAo(ed.lightWas.ao); }
     viewer?.setFov(+els.fov.value); // the view's own lens again
     hidePromoTab(promo().roles.get(ed.spec.role));
@@ -6165,6 +6179,11 @@ export function createViewTab(els: Els) {
     part.team = e.team;
     part.cls = e.cls === promo().cls ? undefined : e.cls; // a class picked in 3D
     part.bodygroups = e.bodyManual.size ? Object.fromEntries(e.bodyManual) : undefined;
+    // the parts of the body hidden by hand: those it would show (its regions, or all of it) that are not shown now
+    const all = e.actor.bodyGroups.map((g) => g.id), now = e.actor.visibleRegions;
+    const would = part.regions ?? all;
+    const hidden = now.has("*") ? [] : would.filter((id) => id !== "*" && all.includes(id) && !now.has(id));
+    part.hiddenRegions = hidden.length ? hidden : undefined;
     // the pose it shows now: a custom one, or the frame of what it plays (and that, as its source: the board's Pose list and timeline)
     part.poseOf = poseSourceAfterEdit(part, e);
     if (e.actor.isPosing) e.actor.endPose(true);
@@ -6240,18 +6259,37 @@ export function createViewTab(els: Els) {
     const res = (spec.resolution ?? 1) * (live ? 0.5 : 1);
     // (an item shown alone casts no shadow: it would float over one)
     spec.effects ??= structuredClone(boardShotEffects());
-    // the look it was given (the effects of the view when the board's look was turned on), whatever its scene has meanwhile
-    if (spec.effects?.look && spec.effects.post) usePost(spec.effects.post);
+    // its scene's lights and effects: its own (changed when it was edited), else the scene's as it was made with the board's look
+    useEnv(envFor(spec));
     // (nor does a shot whose own shadow is off: one that fades out, say)
     const effects = spec.effects && (spec.regions || spec.noShadow) ? { ...spec.effects, shadow: { ...spec.effects.shadow, on: false } } : spec.effects;
     // (a drag's step keeps the framing the shot last had, as the camera window does: not fitted again, nor measured)
     return promoShot(e, shotDirection(spec), Math.round(spec.w * res), Math.round(spec.h * res), spec.fill, spec.scaleDistance, spec, true, effects, Array.isArray(e) || live ? undefined : focusBounds(e, spec), live, live);
   }
 
-  /** The open scene's effects are these (a promo scene's, for a shot: changed only when they differ). */
-  function usePost(post: Record<string, unknown>) {
-    if (JSON.stringify(capturePost()) === JSON.stringify({ ...capturePost(), ...post })) return;
-    setPostItems(postItemsOf(post as PostSource));
+  /** The open scene's lights and effects, as a shot keeps them. */
+  function currentEnv(): ShotEnv {
+    const v = ensureViewer();
+    return structuredClone({ light: v.getLight(), pointLight: v.getPointLight(), post: capturePost() as Record<string, unknown> });
+  }
+  /** Each promo scene's lights and effects as it was made (what a shot without its own has). */
+  const baseEnv = new WeakMap<SceneTab, ShotEnv>();
+  /** The lights and effects a shot is taken in (its scene is the open one): its own, else its scene's first ones, with the board's look. */
+  function envFor(spec: ShotSpec): ShotEnv | null {
+    if (spec.env) return spec.env;
+    const base = activeTab ? baseEnv.get(activeTab) : undefined;
+    const look = spec.effects?.look ? spec.effects.post : undefined;
+    if (!base) return look ? { ...currentEnv(), post: look } : null;
+    return look ? { ...base, post: look } : base;
+  }
+  /** The open scene has these lights and effects (changed only where they differ: a shot after another of the same scene costs nothing). */
+  function useEnv(env: ShotEnv | null) {
+    if (!env) return;
+    const now = currentEnv();
+    if (JSON.stringify(now.light) !== JSON.stringify(env.light) || JSON.stringify(now.pointLight) !== JSON.stringify(env.pointLight)) {
+      applyLights(structuredClone(env.light) as LightState, structuredClone(env.pointLight) as PointLightState);
+    }
+    if (JSON.stringify(now.post) !== JSON.stringify({ ...now.post, ...env.post })) setPostItems(postItemsOf(structuredClone(env.post) as PostSource));
   }
 
   /** The effects of the scene you look at in the 3D view (while a shot is taken, the scene you came from). */
@@ -6849,6 +6887,12 @@ export function createViewTab(els: Els) {
    * Sends a cosmetic to a board (a new one with `target` null) as a picture of it alone, as the promo's Item alone shots are: worn by the
    * selected character's class when it can be (with the paint and style it has on it), else by the first class that can wear it.
    */
+  /** The 3D view's field of view (the horizontal angle seen, through a camera or not) as a shot of this aspect's vertical one. */
+  function viewFovFor(aspect: number): number {
+    const cam = ensureViewer().camera;
+    return Math.round(verticalFov(horizontalFov(cam.fov, cam.aspect), aspect) * 100) / 100;
+  }
+
   async function sendItemToBoard(item: ItemInfo, target: PromoSession | null) {
     const e = selected && !isBuildingCls(selected.cls) && itemUsableBy(item, gameClassOf(selected.cls)) ? selected : null;
     const cls = e?.cls ?? CLASSES.find(([, m]) => !isBuildingCls(m) && itemUsableBy(item, gameClassOf(m)))?.[1];
@@ -6866,7 +6910,9 @@ export function createViewTab(els: Els) {
       const spec: ShotSpec = {
         role: 2, cls: cls === promo().cls ? undefined : cls, team,
         loadout: [{ item: item.id, name: item.displayName, paintable: item.paintable, paint: on?.paint?.id ?? null, style: on?.style ?? 0 }],
-        weapon: null, regions: defaultBodyGroupsFor(cls, item.equipRegions), yaw: 24, pitch: 13, fov: 20, fill: 1, w, h,
+        weapon: null, regions: defaultBodyGroupsFor(cls, item.equipRegions), yaw: 24, pitch: 13, fill: 1, w, h,
+        // the lens of the 3D view as you see it (its horizontal angle, which the board's slider shows, the same over the shot's width)
+        fov: viewFovFor(w / h),
       };
       return inPromoScene(async () => {
         // (centred on what is seen of it, as the promo's own Item alone pictures are)

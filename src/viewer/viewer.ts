@@ -160,6 +160,13 @@ export interface PickHit {
   y: number;
 }
 
+/** The Halton sequence's `i`th number in `base` (0 to 1): evenly spread points, for the sub-pixel moves of a smoothed picture. */
+function halton(i: number, base: number): number {
+  let f = 1, x = 0;
+  for (let n = i; n > 0; n = Math.floor(n / base)) { f /= base; x += f * (n % base); }
+  return x;
+}
+
 export class Viewer {
   readonly cameras: CameraRig;
   readonly cameraOverlay: CameraOverlay;
@@ -3774,7 +3781,11 @@ void main() {
     h = Math.max(1, Math.floor(h * k));
     if (opts?.even) { w = Math.max(2, w & ~1); h = Math.max(2, h & ~1); }
     const pixels = w * h;
-    const sceneRT = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, samples: pixels <= 6e6 ? 4 : pixels <= 12e6 ? 2 : 0, depthTexture: new THREE.DepthTexture(w, h) });
+    // multisampling as far as the memory goes; a larger picture is smoothed by drawing it a few times, each moved by part of a pixel, and
+    // averaging them (as many as make up the samples it lacks)
+    const samples = pixels <= 6e6 ? 4 : pixels <= 12e6 ? 2 : 0;
+    const jitters = cam instanceof THREE.PerspectiveCamera && !cam.view?.enabled ? (samples >= 4 ? 1 : samples === 2 ? 4 : 8) : 1;
+    const sceneRT = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, samples, depthTexture: new THREE.DepthTexture(w, h) });
     const outRT = new THREE.WebGLRenderTarget(w, h, { type: THREE.UnsignedByteType, colorSpace: THREE.SRGBColorSpace });
     // characters that stay clear of the fog are marked in a target of their own, as seen from the capture camera
     const onlyList = opts?.only ? (Array.isArray(opts.only) ? opts.only : [opts.only]) : null;
@@ -3885,9 +3896,18 @@ void main() {
         let tex: THREE.Texture = sceneRT.texture;
         // The shadows' filter is turned differently in each picture that is drawn and the pictures are averaged, as Source Filmmaker does for its
         // final renders (its shadow jitter): the grain of the soft edges goes. With motion blur each of its moments gets a turn of its own.
-        const turns = this.lightingRenderer.casting ? (this.offline ? 4 : 8) : 1;
+        const shadowTurns = this.lightingRenderer.casting ? (this.offline ? 4 : 8) : 1;
+        const turns = Math.max(shadowTurns, jitters);
         let turn = 0;
-        const renderTurned = () => { this.lightingRenderer.jitter(turn++ / Math.max(turns, 1)); r.setRenderTarget(sceneRT); this.renderScene(r, cam); };
+        const renderTurned = () => {
+          const i = turn++;
+          this.lightingRenderer.jitter(i / Math.max(turns, 1));
+          // (the camera moved by part of a pixel: a Halton (2, 3) point about the pixel's middle)
+          if (jitters > 1) (cam as THREE.PerspectiveCamera).setViewOffset(w, h, halton(i + 1, 2) - 0.5, halton(i + 1, 3) - 0.5, w, h);
+          r.setRenderTarget(sceneRT);
+          this.renderScene(r, cam);
+          if (jitters > 1) (cam as THREE.PerspectiveCamera).clearViewOffset();
+        };
         if (withLook && mb?.enabled && mb.shutter > 0 && mb.samples > 1) {
           captureMotion ??= new MotionAccumulator();
           tex = this.renderSubframes(renderTurned, sceneRT.texture, mb.samples, mb.shutter, w, h, captureMotion);

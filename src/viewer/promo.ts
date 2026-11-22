@@ -199,6 +199,11 @@ export interface ShotSpec extends ShotAim {
   /** The 3D view's effects in the shot (the board's, kept on each shot so that it is taken again with them). */
   effects?: ShotEffects;
   /**
+   * The lights and effects of its scene this shot has (set when they were changed while it was edited in 3D): taken again, its scene has
+   * them, whatever another shot of that scene did to it. Absent: its scene as it was made, with the board's look.
+   */
+  env?: ShotEnv;
+  /**
    * A thumbnail on the character: the whole character is in the picture, framed on this worn item (and, for one worn on the head, the
    * head), in a pose that shows it. Absent: the shot frames the character (or the item alone, with `regions`).
    */
@@ -232,6 +237,8 @@ export interface ShotSpec extends ShotAim {
   flex?: Record<string, number>;
   /** The class's bodygroups set by hand in this shot (name -> model; 1 hides a part that has two), over what the cosmetics set. */
   bodygroups?: Record<string, number>;
+  /** The parts of the body hidden by hand in this shot (unticked in 3D, the Bodygroups panel's right column), of those it would show. */
+  hiddenRegions?: string[];
   /**
    * Shots with the same value show their characters at the same size (RED and BLU, the styles, the line-up start out so): the camera
    * stands this far over `fill` away, not as near as the frame allows. Each is its own after that: its zoom and turn change it alone.
@@ -517,6 +524,13 @@ export interface BoardLook {
   effects?: ShotEffects;
   /** The studio light every thumbnail has (each but one unlinked from it: see `ShotSpec.studioOwn`). */
   studio?: StudioLight;
+}
+
+/** A scene's lights (as a scene file has them) and its effects (rim lights, fog, the look…; see ShotEffects.post). */
+export interface ShotEnv {
+  light: unknown;
+  pointLight: unknown;
+  post: Record<string, unknown>;
 }
 
 /** The 3D view's effects in a shot: the character's ground shadow, and the view's look (its post-processing). */

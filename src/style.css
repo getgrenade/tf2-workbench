@@ -1076,6 +1076,11 @@ nav button:hover, .sceneTab:hover { background: color-mix(in srgb, var(--panel) 
 nav button.on, .sceneTab.on { background: var(--panel); color: var(--fg); box-shadow: inset 0 2px 0 var(--accent); }
 #sceneTabs { gap: 0; }
 #sceneBar { gap: 0; }
+/* the scene tabs come first: the status and the stats beside them give way (cut short) before a tab is hidden */
+#sceneBar { flex: 0 1 auto; }
+header .headerInfo { flex: 0 1000 auto; }
+header .headerInfo > .stat { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+header #viewerStats { flex: none; }
 #sceneBar > .barBtn, #sceneBar > #shotStatus { margin: 0 4px; }
 #barSep { margin: 0 8px; }
 
