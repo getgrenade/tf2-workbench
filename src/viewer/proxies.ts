@@ -31,6 +31,9 @@ export interface MaterialEffects {
   glow?: Rgb;
   burn?: number;
   invuln?: number;
+  /** A cloaking Spy: how far (0..1, the material's $cloakfactor) and the team's tint of what shows through him. */
+  cloak?: number;
+  cloakTint?: Rgb;
   /** Plain grey (RGB 115) instead of the material's own look (no specular, no environment, no glow): for icons made in the grey clay style. */
   gray?: boolean;
 }

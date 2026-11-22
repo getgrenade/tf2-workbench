@@ -15,7 +15,7 @@ import { bodyClass, bodyGroups, hiddenBodyBits, legacyBodyGroups, materialBodyGr
 import { bodyMaskTexture } from "./bodyMasks";
 import { PoseHistory, clonePose, poseToClip, sampleClip, type PoseData } from "./poseRig";
 import type { Rgb } from "./proxies";
-import { NO_CONDITIONS, anyCondition, materialEffects, type Conditions } from "./conditions";
+import { DEFAULT_CLOAK, NO_CONDITIONS, anyCondition, materialEffects, type Conditions } from "./conditions";
 import type { SourceMaterials } from "./sourceMaterials";
 
 /** A mesh whose vertices follow the flex weights of the model it belongs to. */
@@ -185,6 +185,14 @@ export class Actor {
   private lodClass: ModelData | null = null;
   /** Player conditions that change the look (Jarate, Ubercharge, crit glow, fire); see conditions.ts. */
   conditions: Conditions = { ...NO_CONDITIONS };
+  /** How far the Cloak effect has him gone (0..1), while it is on. */
+  cloakAmount = DEFAULT_CLOAK;
+  setCloakAmount(amount: number) {
+    const next = Math.max(0, Math.min(1, amount));
+    if (next === this.cloakAmount) return;
+    this.cloakAmount = next;
+    if (this.conditions.cloak) this.applyConditions();
+  }
   /** The invulnerability material of each team (RED, BLU), which replaces every material while the character is uber. */
   private uberData: [MaterialData | null, MaterialData | null] = [null, null];
   /** Team skin family: 0 RED, 1 BLU. Models without that family fall back to family 0. */
@@ -798,6 +806,7 @@ export class Actor {
         mesh.userData.maskKey = `${bp.name}/${modelIndex}/${meshIndex}`;
         // (what the grey is made from: the body's own material data; an eye is plain grey)
         mesh.userData.grayData = { data: eye ? null : this.materials.get(path) ?? null };
+        if (eye) mesh.userData.eye = true;
         this.maskMesh(mesh);
         this.classGroup.add(mesh);
       }
@@ -886,14 +895,26 @@ export class Actor {
   }
 
   private applyConditions() {
-    const fx = materialEffects(this.conditions, this.skin);
+    const fx = materialEffects(this.conditions, this.skin, this.cloakAmount);
     const uberData = this.conditions.uber ? this.uberData[this.skin === 1 ? 1 : 0] : null;
     const uber = uberData ? this.ctx.mats.material(uberData, undefined, null, { invuln: 1 }) : null;
     for (const group of [this.classGroup, this.cosmeticGroup]) {
       group?.traverse((o) => {
         if (!(o instanceof THREE.SkinnedMesh)) return;
         const source = o.userData.source as { data: MaterialData | null; paint: Rgb | null } | undefined;
-        if (!source) return;
+        if (!source) {
+          // the eyes and the parts of the body under a mask keep materials of their own: a cloak takes them too (the eyes go with his face)
+          if (o.userData.eye) o.visible = !(fx?.cloak && fx.cloak >= 0.4);
+          else if (o.userData.bodyMask && (o.material as THREE.ShaderMaterial).uniforms?.uCloak) {
+            const mat = o.material as THREE.ShaderMaterial;
+            mat.uniforms.uCloak = { value: fx?.cloak ?? 0 };
+            mat.uniforms.uCloakTint = { value: new THREE.Vector3(...(fx?.cloakTint ?? [1, 1, 1])) };
+            mat.userData.baseTransparent ??= mat.transparent;
+            mat.transparent = mat.userData.baseTransparent || !!fx?.cloak;
+            mat.needsUpdate = true;
+          }
+          return;
+        }
         const next = uber ?? this.ctx.mats.material(source.data, undefined, source.paint, fx);
         // a body in grey stays grey: what the conditions make of it shows when the grey is taken off
         if (this.gray && o.userData.ownMaterial) { o.userData.ownMaterial = next; return; }

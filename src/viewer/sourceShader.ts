@@ -68,6 +68,8 @@ uniform sampler2D tDetail;      // $detail, blend mode 6: the fire layer of a bu
 uniform bool uHasDetail;
 uniform float uDetailScale;
 uniform float uDetailBlend;
+uniform float uCloak;                   // $cloakfactor of a cloaking Spy (0: not cloaked)
+uniform vec3 uCloakTint;                // the team's tint of what is seen through him
 uniform float uGray;                    // plain grey (RGB 115) instead of the texture (the alpha of the texture still cuts the shape out)
 uniform sampler2D tDetailMat;    // $detail of blend mode 0 / 1 / 8, mixed into the base colour
 uniform int uDetailMode;         // -1: none
@@ -367,6 +369,14 @@ ${bodyMaskDiscard}
   else if (uViewMode > 1.5) result = vec3(dot(result, vec3(0.2126, 0.7152, 0.0722)));
   if (!uUnlit) result += studioRimLight(Nv, vWorldPos);
   if (uDecalModulate) { result = mix(vec3(0.5), pow(albedo, vec3(1.0 / 2.2)), baseTex.a); alpha = 1.0; }
+  if (uCloak > 0.0) {
+    // cloak_blended_pass_ps2x.fxc: the model gives way to what is behind it, from the middle out (the outline goes last):
+    // lerp(1, fresnel - 1.35, $cloakfactor). What shows through is not bent here, only tinted a little by the team's colour.
+    float fresnel = 1.0 - clamp(ndv, 0.0, 1.0);
+    float keep = clamp(mix(1.0, fresnel - 1.35, uCloak), 0.0, 1.0);
+    result = mix(result * uCloakTint, result, keep);
+    alpha *= keep;
+  }
 
   gl_FragColor = vec4(result, alpha);
   #include <colorspace_fragment>
