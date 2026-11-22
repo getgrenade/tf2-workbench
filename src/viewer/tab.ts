@@ -68,7 +68,7 @@ import { choosePose, NOT_A_POSE, NOT_ROLLED_TAUNT, rollFace, type PoseChoice, ty
 import { layoutChart } from "./chartLayout";
 import { bodyMasksLoaded } from "./bodyMasks";
 import { DEFAULT_CHART, DEFAULT_TEXT, LINEUP_SPACING, PROMO_FOV, aimDirection, layer, measureContent, openPromo, textLayer, type ChartCellRect, pictureBlob, type ChartSpec, type PromoLayer, type PromoPicture, type PromoText, type ShotSpec } from "./promo";
-import { boardShotEffects, showBoard, type BoardHost } from "./promoBoard";
+import { boardShotEffects, showBoard, type BoardHost, type ShownBoard } from "./promoBoard";
 import { forgetBoard, loadBoards, saveBoard, type Written } from "./promoStore";
 import type { PaintChartOpts } from "./viewer";
 import { isJunkSequence } from "./sequenceFilter";
@@ -5320,8 +5320,8 @@ export function createViewTab(els: Els) {
     root.hidden = !show;
     page.appendChild(root);
     mine.pictures = pictures;
-    const dispose = showBoard(root, mine.title, pictures, hostFor(mine));
-    const tab: SceneTab = { id: nextTabId++, name, scene: null, base: "", dirty: false, board: { root, session: mine, dispose } };
+    const { dispose, receive } = showBoard(root, mine.title, pictures, hostFor(mine));
+    const tab: SceneTab = { id: nextTabId++, name, scene: null, base: "", dirty: false, board: { root, session: mine, dispose, receive } };
     mine.board = tab;
     tabs.push(tab);
     if (show) showBoardTab(tab);
@@ -6480,13 +6480,103 @@ export function createViewTab(els: Els) {
   }
 
   /** A board of one blank page (the board's backdrop and border, nothing on it), for the selected character's class, to fill by hand. */
-  function newBlankBoard(show = true) {
+  function newBlankBoard(show = true): PromoSession | null {
     const cls = selected && !isBuildingCls(selected.cls) ? selected.cls : CLASSES[0][1];
     const mine = newSession("Custom board", [], cls);
     sessions.add(mine);
     const pictures: PromoPicture[] = [{ name: "Page_1", kind: "Page 1", w: 1920, h: 1080, layers: [], texts: [], backdrop: null }];
-    if (!openBoard(mine, "Promo: Custom board", pictures, show)) { sessions.delete(mine); return; }
+    if (!openBoard(mine, "Promo: Custom board", pictures, show)) { sessions.delete(mine); return null; }
     scheduleSave(mine);
+    return mine;
+  }
+
+  // --- sending what the 3D view shows to a board ----------------------------------------------------------------------------------------
+
+  /** The characters a send to a board takes: the selected ones (not the buildings and props, which a shot cannot hold; nor the hidden). */
+  function sendTargets(): Entity[] {
+    if (nothingSelected) return [];
+    const chosen = entities.filter((e) => multi.has(e.id));
+    return (chosen.length ? chosen : selected ? [selected] : []).filter((e) => !isBuildingCls(e.cls) && !e.hidden);
+  }
+
+  /**
+   * Characters of the 3D view as a shot of a board, a copy of them as they are now: each one's class, team, cosmetics (paints, styles),
+   * weapon, bodygroups, pose (the frame it shows: its animation and the moment of it are kept as the pose's source), face and eyes; two
+   * or more in one scene, each standing where it stands, seen from the view's angle through its lens.
+   */
+  function shotOfView(ents: Entity[]): ShotSpec {
+    if (selected) saveUi(selected);
+    const v = ensureViewer();
+    const cam = v.getCamera();
+    const d = new THREE.Vector3(...cam.position).sub(new THREE.Vector3(...cam.target)).normalize();
+    const turn = (deg: number) => Math.round(((((deg + 180) % 360) + 360) % 360) - 180);
+    const viewYaw = (Math.atan2(d.x, d.z) * 180) / Math.PI;
+    const pitch = Math.round((Math.asin(Math.max(-1, Math.min(1, d.y))) * 180) / Math.PI);
+    const fov = Math.round(Math.max(10, Math.min(90, v.camera.fov)));
+    const part = (e: Entity): ShotSpec => {
+      const game = gameClassOf(e.cls);
+      const p: ShotSpec = {
+        role: 0, cls: e.cls, team: e.team, weapon: e.held?.id ?? null, regions: null, yaw: 0, pitch: 0, fill: 1, w: 1, h: 1,
+        loadout: e.items.loadout.filter((x) => !x.hidden && itemUsableBy(x.item, game)).map((x) => ({ item: x.item.id, name: x.item.displayName, paintable: x.item.paintable, paint: x.paint?.id ?? null, style: x.style })),
+      };
+      if (e.bodyManual.size) p.bodygroups = Object.fromEntries(e.bodyManual);
+      p.poseOf = poseSourceAfterEdit(p, e);
+      const pose = e.actor.snapshotCustomPose() ?? e.actor.snapshotPose();
+      if (pose) p.pose = { pos: Array.from(pose.pos), quat: Array.from(pose.quat), scale: pose.scale ? Array.from(pose.scale) : undefined };
+      p.flex = currentFace(e);
+      p.eyesFollow = e.actor.followsCamera;
+      return p;
+    };
+    if (ents.length === 1) {
+      // one alone: its camera at the front, the character turned by the angle the view sees it from
+      const e = ents[0], p = part(e);
+      return { ...p, role: teamOf(p), yaw: turn(viewYaw - (e.actor.yaw * 180) / Math.PI), pitch, fov, fill: 0.95 };
+    }
+    const group = ents.map((e, i): ShotSpec => ({ ...part(e), role: GROUP_FIRST_ROLE + i, turn: 0, place: { x: e.actor.offset.x, y: e.actor.offset.y, z: e.actor.offset.z, yaw: e.actor.yaw } }));
+    return { role: GROUP_ROLE, loadout: [], weapon: null, regions: null, yaw: turn(viewYaw), pitch, fov, fill: 1, w: 1, h: 1, group };
+  }
+
+  /** Sends the selected characters to a board (a new one with `target` null) as a new shot on the picture it shows, and shows the board. */
+  async function sendToBoard(target: PromoSession | null) {
+    const ents = sendTargets();
+    if (!ents.length) return;
+    const spec = shotOfView(ents);
+    const aspect = Math.max(0.3, ensureViewer().camera.aspect);
+    const mine = target ?? newBlankBoard(false);
+    const tab = mine?.board;
+    if (!mine || !tab?.board) return;
+    showBoardTab(tab);
+    await tab.board.receive((p) => {
+      // its slot: as tall as the picture; a group as wide as the view shows it, one alone as a character's
+      const h = Math.round(p.h * 0.98);
+      const w = Math.round(Math.min(p.w - 20, spec.group ? h * aspect : h * 0.66));
+      spec.w = w;
+      spec.h = h;
+      session = mine;
+      return inPromoScene(async () => ({ ...layer(shotName(spec), await takeShot(spec), ...marginBox((p.w - w) / 2, (p.h - h) / 2, w, h)), shot: spec }));
+    }, ents.length > 1 ? "the characters" : "the character");
+  }
+
+  /** The view's right-click menu. */
+  function viewMenu(x: number, y: number) {
+    const ents = sendTargets();
+    const boards = tabs.filter((t) => t.board && sessions.has(t.board.session));
+    openMenu({ x, y }, [
+      {
+        label: ents.length > 1 ? `Send ${ents.length} characters to promo board` : "Send to promo board",
+        icon: "send",
+        hint: ents.length ? undefined : "select characters first",
+        disabled: !ents.length,
+        children: ents.length ? [
+          // (boards of the same name are told apart by their place in the strip)
+          ...boards.map((t) => {
+            const same = boards.filter((x) => x.name === t.name);
+            return { label: same.length > 1 ? `${t.name} (${same.indexOf(t) + 1})` : t.name, run: () => void sendToBoard(t.board!.session) };
+          }),
+          { label: "New board", icon: "plus" as const, separator: boards.length > 0, run: () => void sendToBoard(null) },
+        ] : undefined,
+      },
+    ]);
   }
 
   /** The pictures of a promo set, taken in the promo scene that is open (its characters by role: RED, BLU, the item alone, the line-up). */
@@ -6875,7 +6965,7 @@ export function createViewTab(els: Els) {
      */
     parked?: { entities: Entity[]; groups: HierarchyGroup[]; selected: Entity | null };
     /** A promo board (a set's pictures) in place of a scene: shown in the view's place while it is the tab in front. */
-    board?: { root: HTMLElement; session: PromoSession; dispose: () => void };
+    board?: { root: HTMLElement; session: PromoSession; dispose: () => void; receive: ShownBoard["receive"] };
   }
   const tabs: SceneTab[] = [];
   let activeTab: SceneTab | null = null;
@@ -7798,6 +7888,19 @@ export function createViewTab(els: Els) {
   } as const satisfies Record<string, IconName>;
   const propsRoot = document.getElementById("propsPane");
   if (propsRoot) createPropPanel(propsRoot, { add: (path, at) => void addProp(path, at) });
+  // the view's right-click menu: on a right click (a right-drag that moves the camera opens nothing), in a scene of the user's own (not
+  // a promo's scene, nor a shot being edited in 3D)
+  let rightDown: { x: number; y: number } | null = null;
+  els.wrap.addEventListener("pointerdown", (e) => { if (e.button === 2) rightDown = { x: e.clientX, y: e.clientY }; }, true);
+  els.wrap.addEventListener("contextmenu", (e) => {
+    const at = rightDown;
+    rightDown = null;
+    if (!viewer || e.target !== viewer.renderer.domElement) return;
+    if (!at || Math.hypot(e.clientX - at.x, e.clientY - at.y) > 4) return;
+    if (promoEditing || isPromoTab(activeTab) || activeBoard) return;
+    e.preventDefault();
+    viewMenu(e.clientX, e.clientY);
+  });
   els.entities.add.onclick = () => {
     openMenu(els.entities.add, [
       { label: "Character", icon: ICON.character, hint: "Ctrl: copy of the selected", run: ({ ctrl }) => void addEntity(ctrl) },

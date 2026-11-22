@@ -115,7 +115,15 @@ export const boardShotEffects = () => shotEffectsOf(look.effects ?? DEFAULT_SHOT
 const keepLook = () => { try { localStorage.setItem(LOOK_KEY, JSON.stringify(look)); } catch { /* not kept */ } };
 
 /** Shows a set's pictures as a board in `root`; what comes back lets go of what the board holds outside its root (when it is closed). */
-export function showBoard(root: HTMLElement, title: string, pictures: PromoPicture[], host: BoardHost): () => void {
+/** A board shown: `dispose` lets go of what it holds outside its root; `receive` puts a layer made elsewhere on the picture shown. */
+export interface ShownBoard {
+  dispose: () => void;
+  /** A layer made for the picture shown (a shot sent from the 3D view), added on top of it as one step of undo and selected. */
+  receive: (make: (p: PromoPicture) => Promise<PromoLayer>, what: string) => Promise<void>;
+}
+
+/** Shows a set's pictures as a board in `root`. */
+export function showBoard(root: HTMLElement, title: string, pictures: PromoPicture[], host: BoardHost): ShownBoard {
   root.innerHTML = `<div class="promoBoard">
     <aside class="promoSide">
       <h2 class="promoTitle"></h2>
@@ -3038,5 +3046,15 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
   else showInspector();
   // the stage has its size only once the board shows
   requestAnimationFrame(() => drawPreview());
-  return dispose;
+  const receive = (make: (p: PromoPicture) => Promise<PromoLayer>, what: string) => {
+    const p = picked ?? pictures[0];
+    if (!p) return Promise.resolve();
+    status.textContent = `Taking ${what} sent from the 3D view…`;
+    return addLayer(p, async () => {
+      const l = await make(p);
+      status.textContent = "Added from the 3D view. Edit in 3D (or right-click it) to change it.";
+      return l;
+    });
+  };
+  return { dispose, receive };
 }
