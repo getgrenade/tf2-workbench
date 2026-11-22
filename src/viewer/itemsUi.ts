@@ -124,9 +124,12 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
   let scope = "solo";
   /** Pick mode (the Styles panel): the list shows the workshop items, and a click on one that `accept` allows calls `pick` instead of putting it on. */
   let picking: { accept: (item: ItemInfo) => boolean; pick: (item: ItemInfo) => void } | null = null;
-  /** The characters the picks go to are of different classes: only items all of them can wear are listed (the scope is All-class meanwhile). */
+  /**
+   * The characters the picks go to are of different classes: only items all of them can wear are listed (the Class scope is All-class
+   * meanwhile; the Workshop one stays, listing the workshop items all of them can wear).
+   */
   const mixedClasses = () => (hooks.classes?.() ?? []).length > 1;
-  const activeScope = () => (mixedClasses() ? "shared" : scope);
+  const activeScope = () => (mixedClasses() && scope === "solo" ? "shared" : scope);
   let region = "";
   let showMedals = false;
   createBrowserView(els.foot, els.list, "cosmetics");
@@ -440,9 +443,9 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
     els.list.classList.toggle("picking", picking !== null);
     scopeButtons.forEach((b) => {
       b.classList.toggle("on", (b.dataset.scope ?? "solo") === shownScope);
-      b.disabled = (mixed && b.dataset.scope !== "shared") || picking !== null;
+      b.disabled = (mixed && (b.dataset.scope ?? "solo") === "solo") || picking !== null;
       b.dataset.tip ??= b.title;
-      b.title = mixed && b.dataset.scope !== "shared" ? "Characters of different classes are selected: only items all of them can wear" : b.dataset.tip;
+      b.title = mixed && (b.dataset.scope ?? "solo") === "solo" ? "Characters of different classes are selected: only items all of them can wear" : b.dataset.tip;
     });
     const q = els.search.value.trim().toLowerCase();
     const base = db.items.filter((i) => all.every((c) => itemUsableBy(i, c)) && (showMedals || !i.medal) && (shownScope === "workshop" ? i.workshop : !i.workshop && (shownScope === "solo" ? isSolo(i) : !isSolo(i))));
@@ -546,7 +549,8 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
   els.search.oninput = renderList;
   for (const b of scopeButtons) {
     b.onclick = () => {
-      if (mixedClasses()) return;
+      // (with characters of different classes, All-class and Workshop can be switched between; Class is off)
+      if (mixedClasses() && (b.dataset.scope ?? "solo") === "solo") return;
       scope = b.dataset.scope ?? "solo";
       renderList();
     };

@@ -111,6 +111,24 @@ import { LOOK_KINDS, defaultLook, parseLook, type LookKind, type LookStates } fr
 import { createLookEditors } from "./lookUi";
 import { DEFAULT_RIM_LIGHT, parseRimLight, type RimLightState } from "./rimLight";
 
+/** What the characters of Add > All classes start in, with its label in the menu. */
+type ClassesStart = "ref" | "winner" | "loser" | "menu" | "primary" | "secondary" | "melee";
+const ALL_CLASSES_STARTS: [ClassesStart, string][] = [
+  ["ref", "Reference pose"], ["winner", "Competitive winner"], ["loser", "Competitive loser"], ["menu", "Selection menu idle"],
+  ["primary", "Primary"], ["secondary", "Secondary"], ["melee", "Melee"],
+];
+/** The classes of Add > All classes, left to right (as they stand in the game's group pictures). */
+/**
+ * The slot of the stock weapon each class's competitive win and loss idles are made for: the primary (the Engineer's shotgun, the
+ * Demoman's grenade launcher, the Medic's syringe gun, ...), but the Spy's knife.
+ */
+const COMPETITIVE_SLOT: Record<string, string> = { spy: "melee" };
+/** The same for the class selection menu's idle: the primary, but the Engineer's wrench, the Spy's knife and the Medic's medigun. */
+const MENU_SLOT: Record<string, string> = { engineer: "melee", spy: "melee", medic: "secondary" };
+/** How far behind the characters already in the scene the row of Add > All classes stands (Source units). */
+const ROW_BEHIND = 90;
+const ALL_CLASSES_ORDER = ["pyro", "engineer", "spy", "heavy", "sniper", "scout", "soldier", "demo", "medic"];
+
 /** Label, model file name under models/player, and the class name items_game.txt uses. */
 const CLASSES: [label: string, mdl: string, gameClass: string][] = [
   ["Soldier", "soldier", "soldier"],
@@ -635,6 +653,8 @@ export function createViewTab(els: Els) {
   function newEntity(actor: Actor, cls: string, team: number, id?: number): Entity {
     // a model of a path that is not a building is a prop: its geometry is in Source's frame
     actor.sourceBind = isBuildingCls(cls) && !buildingOf(cls);
+    // a new character's eyes follow the camera (a restored scene's then say what they did when it was saved)
+    if (!isBuildingCls(cls)) actor.setEyesFollowCamera(true);
     const e: Entity = {
       id: id ?? nextEntity++,
       hidden: false,
@@ -3459,7 +3479,7 @@ export function createViewTab(els: Els) {
         group: e.group,
         selected: multi.has(e.id),
         off: e.hidden,
-        removable: entities.length > 1,
+        removable: true,
         // a prop is on no team: it wears a skin, and says so only when it has more than one
         ...(skinsOf(e) === 0 ? { team: e.team } : skinsOf(e) > 1 ? { skin: e.team } : {}),
         icon: buttons.get(e.cls)?.querySelector("img")?.src ?? "",
@@ -3495,6 +3515,7 @@ export function createViewTab(els: Els) {
     const e = newEntity(v.addActor(), base?.cls ?? CLASSES[0][1], base?.team ?? 0);
     e.group = hierarchy().activeGroup() ?? (copy ? base?.group : undefined);
     if (copy && base) e.actor.setScale(base.actor.scale);
+    if (copy && base) e.actor.setEyesFollowCamera(base.actor.followsCamera);
     if (copy && base && inPlace) v.copyPlacement(base.actor, e.actor);
     // Ctrl + Add: a copy with the same cosmetics, paints, styles, weapon, expression and animation
     const source = copy && base ? base : undefined;
@@ -3516,8 +3537,50 @@ export function createViewTab(els: Els) {
     v.charactersChanged(); // the camera stays where it is
   }
 
+  /**
+   * Adds the nine classes in a row, left to right as in the game's group pictures (Pyro, Engineer, Spy, Heavy, Sniper, Scout, Soldier,
+   * Demoman, Medic), in the team of the selected character, each starting in the same sequence: the reference pose, a competitive
+   * win or loss idle (with the stock weapon it is made for in hand), or holding its stock primary, secondary or melee weapon in its idle.
+   */
+  async function addAllClasses(start: ClassesStart) {
+    const v = ensureViewer();
+    if (selected) saveUi(selected);
+    // (the competitive win and loss idles are made for a weapon of each class: see COMPETITIVE_SLOT)
+    const slot = (mdl: string) => (start === "ref" ? null : start === "menu" ? MENU_SLOT[mdl] ?? "primary" : start === "winner" || start === "loser" ? COMPETITIVE_SLOT[mdl] ?? "primary" : start);
+    const db = start !== "ref" ? await loadItemDb().catch(() => null) : null;
+    const team = selected && !isBuildingCls(selected.cls) ? selected.team : 0;
+    const folder = hierarchy().activeGroup();
+    const made: Entity[] = [];
+    for (const mdl of ALL_CLASSES_ORDER) {
+      const e = newEntity(v.addActor(), mdl, team);
+      if (folder) e.group = folder;
+      const game = gameClassOf(mdl);
+      const want = slot(mdl);
+      if (db && want) e.held = db.weapons.find((w) => w.baseItem && itemUsableBy(w, game) && slotForClass(w, game) === want) ?? null;
+      entities.push(e);
+      made.push(e);
+    }
+    // in a row through the middle of the floor, the first on the left as the view looks at it; behind the characters already there
+    const gap = v.getSpacing();
+    const others = entities.filter((e) => !made.includes(e));
+    // (the view's frame: x across, y up, z toward the camera)
+    const depth = others.length ? Math.min(0, ...others.map((e) => e.actor.offset.z)) - ROW_BEHIND : 0;
+    made.forEach((e, i) => v.placeActor(e.actor, (i - (made.length - 1) / 2) * gap, 0, depth, 0));
+    markTeams();
+    renderEntities();
+    recordAdd("Add all classes", made.map((e) => ({ kind: "character" as const, id: String(e.id) })));
+    const seqName = start === "ref" ? "ref" : start === "winner" ? "competitive_winnerstate_idle" : start === "loser" ? "competitive_loserstate_idle" : start === "menu" ? "SelectionMenu_Idle" : undefined;
+    // (one class at a time: each loads its model and materials)
+    for (const e of made) await show(e, e.cls, seqName ? { seqName } : undefined);
+    // (into an empty scene: the first of them is the one the panels work on)
+    if (!selected && made[0] && entities.includes(made[0])) selectEntity(made[0]);
+    // the camera on all of them (not when the view looks through a camera of the scene)
+    if (!v.cameras.active) v.focusAll(true);
+    else v.charactersChanged();
+  }
+
   function removeEntity(e: Entity) {
-    if (entities.length <= 1) return;
+    if (!entities.includes(e)) return;
     clearFace(e);
     const i = entities.indexOf(e);
     entities.splice(i, 1);
@@ -3525,10 +3588,18 @@ export function createViewTab(els: Els) {
       gizmoEntity = null;
     }
     viewer?.removeActor(e.actor);
+    multi.delete(e.id);
     if (selected === e) {
-      selected = entities[Math.min(i, entities.length - 1)];
-      viewer?.select(selected.actor);
-      restoreUi(selected);
+      // the next character takes its place; the last one gone leaves the scene without any (Add brings one back)
+      selected = entities[Math.min(i, entities.length - 1)] ?? null;
+      if (selected) {
+        viewer?.select(selected.actor);
+        restoreUi(selected);
+      } else {
+        viewer?.select(null);
+        nothingSelected = true;
+        multi = new Set();
+      }
     }
     renderEntities();
     viewer?.charactersChanged();
@@ -6759,9 +6830,10 @@ export function createViewTab(els: Els) {
     v.setJiggle(scene.jiggle);
 
     for (const s of scene.entities) entities.push(buildEntity(s, byId, paints));
-    selected = entities[scene.selected] ?? entities[0];
-    v.select(selected.actor);
-    restoreUi(selected);
+    // (a scene saved without characters has none)
+    selected = entities[scene.selected] ?? entities[0] ?? null;
+    v.select(selected?.actor ?? null);
+    if (selected) restoreUi(selected);
     uiStale = false;
     renderEntities();
     v.restoreCamera(scene.camera.position, scene.camera.target);
@@ -7722,13 +7794,18 @@ export function createViewTab(els: Els) {
   // The Add menu of the outliner: a character, a buildable, a light or a camera
   const ICON = {
     character: "userRound", buildable: "wrench", prop: "box", light: "lightbulb", camera: "video", sun: "sun", point: "circleDot", spot: "flashlight",
-    area: "rectangleHorizontal", folder: "folder",
+    area: "rectangleHorizontal", folder: "folder", classes: "users",
   } as const satisfies Record<string, IconName>;
   const propsRoot = document.getElementById("propsPane");
   if (propsRoot) createPropPanel(propsRoot, { add: (path, at) => void addProp(path, at) });
   els.entities.add.onclick = () => {
     openMenu(els.entities.add, [
       { label: "Character", icon: ICON.character, hint: "Ctrl: copy of the selected", run: ({ ctrl }) => void addEntity(ctrl) },
+      {
+        label: "All classes",
+        icon: ICON.classes,
+        children: ALL_CLASSES_STARTS.map(([start, label], i) => ({ label, separator: i === 4, run: () => void addAllClasses(start) })),
+      },
       {
         label: "Buildable",
         icon: ICON.buildable,
