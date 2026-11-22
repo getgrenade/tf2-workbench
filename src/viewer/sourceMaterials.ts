@@ -3,7 +3,7 @@ import { particleBlending } from "./particles/blending";
 import { eyeFragmentShader, eyeVertexShader } from "./eyeShader";
 import { parseColor, parseVec, resolvePhongTint, type EyeballData, type MaterialData, type TextureData } from "./payload";
 import { animationFrame, baseTextureAnimation, evaluateMaterialVars, hasTimeProxies, type FrameAnimation, type MaterialEffects, modulationColor, textureTransform, type Rgb } from "./proxies";
-import { fragmentShader, vertexShader } from "./sourceShader";
+import { fragmentShader, sheenFragmentShader, sheenVertexShader, vertexShader } from "./sourceShader";
 import { loadMaterial, loadTextureFrames } from "../api";
 import { parseMaterial } from "./payload";
 import { CUBEMAP_MATERIAL } from "./reflection";
@@ -177,6 +177,41 @@ export class SourceMaterials {
       });
       this.sheenAssets = { cube: this.cubemap(cubeData), mask };
     })().catch((error) => console.error("Weapon sheen unavailable", error));
+  }
+
+  /**
+   * The sheen pass of a killstreak weapon's material (one whose VMT has $sheenpassenabled; null for any other): drawn over the weapon's
+   * mesh by a mesh of its own, sharing its geometry and skeleton. One per sheen (its colour, and where its mask lies on that weapon).
+   */
+  sheenMaterial(m: MaterialData | null, sheen: NonNullable<MaterialEffects["sheen"]>): THREE.ShaderMaterial | null {
+    const p = m?.params ?? {};
+    if (!m || Math.trunc(Number(p["$sheenpassenabled"] ?? 0)) === 0) return null;
+    this.loadSheen(p["$sheenmap"] ?? "cubemaps/cubemap_sheen001", p["$sheenmapmask"] ?? "effects/animatedsheen/animatedsheen0");
+    const key = `sheen|${JSON.stringify(sheen)}`;
+    let material = this.cache.get(key);
+    if (!material) {
+      material = new THREE.ShaderMaterial({
+        vertexShader: sheenVertexShader,
+        fragmentShader: sheenFragmentShader,
+        userData: { noShadow: true, shared: true },
+        transparent: true,
+        depthWrite: false,
+        depthFunc: THREE.LessEqualDepth,
+        uniforms: {
+          uSheen: { value: 0 },
+          uSheenTint: { value: new THREE.Vector3(...sheen.tint) },
+          uSheenIndex: { value: sheen.index },
+          uSheenDir: { value: sheen.dir },
+          uSheenScale: { value: new THREE.Vector2(...sheen.scale) },
+          uSheenOffset: { value: new THREE.Vector2(...sheen.offset) },
+          tSheenCube: { value: this.emptyCube },
+          tSheenMask: { value: this.white },
+        },
+      });
+      this.cache.set(key, material);
+      this.sheened.push({ material, wait: sheen.wait });
+    }
+    return material;
   }
 
   /** Starts loading the frames of a detail texture (once); materials that use it pick them up on their next update. */
@@ -358,14 +393,6 @@ export class SourceMaterials {
         uModulation: { value: new THREE.Vector3(modulation[0], modulation[1], modulation[2]) },
         uUvXf: { value: new THREE.Matrix3().set(xf?.[0] ?? 1, xf?.[1] ?? 0, xf?.[2] ?? 0, xf?.[3] ?? 0, xf?.[4] ?? 1, xf?.[5] ?? 0, 0, 0, 1) },
         uGray: { value: fx?.gray ? 1 : 0 },
-        uSheen: { value: 0 },
-        uSheenTint: { value: new THREE.Vector3(...(fx?.sheen?.tint ?? [0, 0, 0])) },
-        uSheenIndex: { value: fx?.sheen?.index ?? 0 },
-        uSheenDir: { value: fx?.sheen?.dir ?? 0 },
-        uSheenScale: { value: new THREE.Vector2(...(fx?.sheen?.scale ?? [1, 1])) },
-        uSheenOffset: { value: new THREE.Vector2(...(fx?.sheen?.offset ?? [0, 0])) },
-        tSheenCube: { value: this.emptyCube },
-        tSheenMask: { value: this.white },
         uBlendTint: { value: blendTint },
         uTintReplace: { value: num("$blendtintcoloroverbase", 0) },
         uSelfIllum: { value: selfIllum },
@@ -417,11 +444,6 @@ export class SourceMaterials {
         if (!t) break;
         bumpFrames.push(t);
       }
-    }
-    // a killstreak weapon whose material has the sheen pass ($sheenpassenabled): the sweep, drawn over it as the pass blends
-    if (m && fx?.sheen && flag("$sheenpassenabled")) {
-      this.loadSheen(p["$sheenmap"] ?? "cubemaps/cubemap_sheen001", p["$sheenmapmask"] ?? "effects/animatedsheen/animatedsheen0");
-      this.sheened.push({ material, wait: fx.sheen.wait });
     }
     if (m && (hasTimeProxies(m.proxies) || frames.length > 1 || bumpFrames.length > 1 || detail)) {
       this.dynamic.push({ material, data: m, paint, fx, frames, anim, bumpFrames, bumpAnim, detail, detailAnim: detail ? baseTextureAnimation(m.proxies, "$detail") : null });

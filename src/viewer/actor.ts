@@ -895,9 +895,7 @@ export class Actor {
         if (!(o instanceof THREE.SkinnedMesh)) return;
         const source = o.userData.source as { data: MaterialData | null; paint: Rgb | null } | undefined;
         if (!source) return;
-        const frame = o.userData.sheenFrame as ReturnType<typeof sheenFrame> | undefined;
-        const own = frame && this.sheen ? { ...fx, sheen: { ...this.sheen, ...frame } } : fx;
-        const next = uber ?? this.ctx.mats.material(source.data, undefined, source.paint, own);
+        const next = uber ?? this.ctx.mats.material(source.data, undefined, source.paint, fx);
         // a body in grey stays grey: what the conditions make of it shows when the grey is taken off
         if (this.gray && o.userData.ownMaterial) { o.userData.ownMaterial = next; return; }
         if (o.material !== next) o.material = next;
@@ -1029,7 +1027,8 @@ export class Actor {
     this.posedTime = NaN;
     this.updateCosmetics();
     if (this.heldHidden) this.applyHeldHidden();
-    if (anyCondition(this.conditions) || this.sheen) this.applyConditions();
+    if (anyCondition(this.conditions)) this.applyConditions();
+    this.applySheen();
     this.changed = true;
   }
 
@@ -1038,7 +1037,29 @@ export class Actor {
   setSheen(sheen: { tint: Rgb; index: number; wait: number } | null) {
     if (JSON.stringify(sheen) === JSON.stringify(this.sheen)) return;
     this.sheen = sheen;
-    this.applyConditions();
+    this.applySheen();
+  }
+
+  /** Gives the held weapon's meshes the sheen pass over them (a mesh of their own on the same geometry and skeleton), or takes it off. */
+  private applySheen() {
+    const meshes: THREE.SkinnedMesh[] = [];
+    this.cosmeticGroup?.traverse((o) => { if (o instanceof THREE.SkinnedMesh && o.userData.sheenFrame) meshes.push(o); });
+    for (const mesh of meshes) {
+      for (const child of [...mesh.children]) if (child.userData.sheenPass) mesh.remove(child);
+      const frame = mesh.userData.sheenFrame as ReturnType<typeof sheenFrame>;
+      const source = mesh.userData.source as { data: MaterialData | null } | undefined;
+      const material = this.sheen ? this.ctx.mats.sheenMaterial(source?.data ?? null, { ...this.sheen, ...frame }) : null;
+      if (!material) continue;
+      const pass = new THREE.SkinnedMesh(mesh.geometry, material);
+      pass.bindMode = mesh.bindMode;
+      pass.bind(mesh.skeleton, mesh.bindMatrix);
+      pass.frustumCulled = false;
+      pass.renderOrder = 1;
+      pass.userData.sheenPass = true;
+      pass.raycast = () => {}; // (clicks go to the weapon under it)
+      mesh.add(pass);
+    }
+    this.changed = true;
   }
 
   /**
