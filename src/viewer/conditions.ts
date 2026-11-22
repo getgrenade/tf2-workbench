@@ -13,9 +13,10 @@ export const CONDITION_LABELS: Record<ConditionKey, string> = { uber: "Ubercharg
 
 /** How long the conditions that Play mode applies last: jars add TF_COND_URINE / TF_COND_MAD_MILK for 10 s (JarExplode); fire lasts TF_BURNING_FLAME_LIFE. */
 /** The conditions only one class has: the toggle of another class is not offered (unless it is on, so it can be turned off). */
-export const CONDITION_CLASS: Partial<Record<ConditionKey, string>> = { cig: "spy", cloak: "spy" };
+export const CONDITION_CLASS: Partial<Record<ConditionKey, string>> = { cig: "spy" };
 
-/** How far a Spy is cloaked by default when the Cloak effect is switched on (0 seen, 1 gone): half way, his outline still showing. */
+/** How far a character is cloaked by default when the Cloak effect is switched on (0 seen, 1 gone): half way, the outline still showing.
+ * (Only the Spy cloaks in game, but every class's materials have the cloak pass, so any of them can be shown cloaked.) */
 export const DEFAULT_CLOAK = 0.5;
 /** CInvisProxy (tf_proxyentity.cpp): the tint of what is seen through a cloaking Spy, by team. */
 const CLOAK_TINT: Record<"red" | "blue", Rgb> = { red: [1, 0.5, 0.4], blue: [0.4, 0.5, 1] };

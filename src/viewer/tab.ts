@@ -2301,7 +2301,7 @@ export function createViewTab(els: Els) {
     if (e.actor.conditions.cloak) {
       const row = document.createElement("label");
       row.className = "cloakAmount";
-      row.title = "How far the Spy is cloaked: his middle goes first, his outline last";
+      row.title = "How far the character is cloaked: the middle goes first, the outline last";
       const name = document.createElement("span");
       name.textContent = "Cloak";
       const range = document.createElement("input");
