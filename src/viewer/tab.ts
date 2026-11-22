@@ -1,5 +1,5 @@
 import { icon as svgIcon, ICONS as LUCIDE, type IconName } from "../icons";
-import { shadowLayer, shadowOf, solidOf, type ShotEffects } from "./promo";
+import { shadowApart, shadowLayer, shadowOf, solidOf, type ShotEffects } from "./promo";
 import { partsOf } from "./promoMask";
 import { picturePsd } from "./promoPsd";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -5047,15 +5047,22 @@ export function createViewTab(els: Els) {
     const lit = <T>(job: () => Promise<T>) => (studio ? withStudioLight(studio, cam.quaternion, job) : withShotLight(pan?.light, job));
     try {
       return await lit(async () => {
-        const shot = await v.capture(1, true, { camera: cam, only: actors, size: { w: W, h: H }, canvas: true, groundShadow: shadow, look, ao });
+        // (with the view's look, the shot is taken without its shadow, which is taken apart below: the board tints and blends it)
+        const shot = await v.capture(1, true, { camera: cam, only: actors, size: { w: W, h: H }, canvas: true, groundShadow: look ? undefined : shadow, look, ao });
         // the parts of the character, for a fade mask that keeps some of them whole (not for a drag's quick step: the full one follows)
         if (pan?.parts && !quick) partsOf.set(shot.canvas!, v.partsPicture(actors, cam, shot.canvas!.width, shot.canvas!.height));
         // with effects, the shot again without them: the character alone, for its bounds and clicks
         if (shadow || look) {
           const plain = await v.capture(1, true, { camera: cam, only: actors, size: { w: W, h: H }, canvas: true });
           solidOf.set(shot.canvas!, plain.canvas!);
-          // the shadow on its own (with the look's glow and bloom it cannot be told from them: that shot keeps its shadow in its pixels)
+          // the shadow on its own: what the shot has over the plain one (with the look, from a shot of its own without the look, the
+          // look's glow and bloom not being told from a shadow)
           if (shadow && !look) shadowOf.set(shot.canvas!, shadowLayer(shot.canvas!, plain.canvas!));
+          else if (shadow) {
+            const shaded = await v.capture(1, true, { camera: cam, only: actors, size: { w: W, h: H }, canvas: true, groundShadow: shadow, ao });
+            shadowOf.set(shot.canvas!, shadowLayer(shaded.canvas!, plain.canvas!));
+            shadowApart.add(shot.canvas!);
+          }
         }
         // with particles in the shot (smoke, a hat's effect), the character alone too: its bounds and clicks are not those of the smoke
         if (v.hasParticles(actors)) {

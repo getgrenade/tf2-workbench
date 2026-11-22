@@ -134,3 +134,44 @@ export function buildCubeFace(pictures: Record<SkyFace, SkyPicture>, size: numbe
   }
   return out;
 }
+
+/** How a flat picture looks into a sky: turned about the vertical and tilted up (degrees), with a horizontal field of view. */
+export interface SkyView {
+  turn: number;
+  tilt: number;
+  fov: number;
+}
+
+/**
+ * A sky as a camera of the game sees it, w × h pixels (RGBA, opaque): each pixel's direction looked up on the sky's faces, as the `sky`
+ * shader does. Turn 0 looks the way the sky's front face does, a positive turn to the left (Source's angles), a positive tilt up.
+ */
+export function renderSkyView(pictures: Record<SkyFace, SkyPicture>, view: SkyView, w: number, h: number): Uint8ClampedArray<ArrayBuffer> {
+  const out = new Uint8ClampedArray(w * h * 4);
+  const yaw = (view.turn * Math.PI) / 180, pitch = (view.tilt * Math.PI) / 180;
+  // (Source: x forward, y left, z up; the camera looks along the front face's direction at turn 0)
+  const base = FRAMES.ft.n;
+  const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
+  const fx = base[0] * cy - base[1] * sy, fy = base[0] * sy + base[1] * cy;
+  const forward: V3 = [fx * cp, fy * cp, sp];
+  const right: V3 = [fy, -fx, 0];
+  // up = right × forward
+  const up: V3 = [right[1] * forward[2] - right[2] * forward[1], right[2] * forward[0] - right[0] * forward[2], right[0] * forward[1] - right[1] * forward[0]];
+  const tx = Math.tan((Math.min(170, Math.max(1, view.fov)) * Math.PI) / 360), ty = (tx * h) / w;
+  const rgb = [0, 0, 0];
+  const d: [number, number, number] = [0, 0, 0];
+  for (let y = 0; y < h; y++) {
+    const v = (1 - (2 * (y + 0.5)) / h) * ty;
+    for (let x = 0; x < w; x++) {
+      const u = ((2 * (x + 0.5)) / w - 1) * tx;
+      d[0] = forward[0] + right[0] * u + up[0] * v;
+      d[1] = forward[1] + right[1] * u + up[1] * v;
+      d[2] = forward[2] + right[2] * u + up[2] * v;
+      const hit = skyLookup(d);
+      sample(pictures[hit.face], hit.u, hit.v, rgb);
+      const i = (y * w + x) * 4;
+      out[i] = rgb[0]; out[i + 1] = rgb[1]; out[i + 2] = rgb[2]; out[i + 3] = 255;
+    }
+  }
+  return out;
+}

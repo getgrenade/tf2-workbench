@@ -7,7 +7,9 @@
 import { listDir, loadTextureFrames } from "../api";
 import { icon } from "../icons";
 import { parseTextureFrames } from "./sourceMaterials";
-import type { GroundSpec, OverlaySpec } from "./promo";
+import type { GroundSpec, OverlaySpec, SkySpec } from "./promo";
+import { loadSkyPictures } from "./skybox";
+import { renderSkyView } from "./skyboxMath";
 
 /** The folders of `materials/` whose textures are surfaces that tile (walls, floors, ground); the others are props, signs, effects. */
 const SURFACE = /^(brick|concrete|wood|metal|plaster|tile|tiles|stone|rock|rocks|nature|building|buildings|walls?|floors?|cliffs?|ground|dirt|sand|grass|carpet|fabric|asphalt|cobble|roof|roofs|harvest|egypt|hydro|desert|snow|ice|gravel|mud|wallpaper|ceiling|panels?)\b/i;
@@ -79,8 +81,9 @@ export function tileTexture(texture: HTMLCanvasElement, spec: OverlaySpec, w: nu
   return c;
 }
 
-/** An overlay's image over w × h (its texture read first). */
-export async function overlayImage(spec: OverlaySpec, w: number, h: number): Promise<HTMLCanvasElement> {
+/** An overlay's image over w × h (its texture read first); `draft`: a quick, rougher one while it is dragged. */
+export async function overlayImage(spec: OverlaySpec, w: number, h: number, draft = false): Promise<HTMLCanvasElement> {
+  if (spec.sky) return skyImage(spec.sky, w, h, draft);
   if (spec.ground) return groundImage(spec, spec.ground, spec.texture ? await loadTexture(spec.texture) : null, w, h);
   return tileTexture(await loadTexture(spec.texture), spec, w, h);
 }
@@ -288,4 +291,46 @@ async function preview(path: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/** How much of a sky layer shows at row `y` of a picture `h` tall (0..1): its fades at the top and the bottom, each easing out smoothly. */
+export function skyFade(sky: Pick<SkySpec, "fadeTop" | "fadeBottom">, y: number, h: number): number {
+  const ease = (t: number) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
+  const top = sky.fadeTop > 0 ? ease(y / (sky.fadeTop * h)) : 1;
+  const bottom = sky.fadeBottom > 0 ? ease((h - y) / (sky.fadeBottom * h)) : 1;
+  return top * bottom;
+}
+
+/**
+ * A sky layer over w × h: the view into the skybox, brightened or darkened, faded out at the top and the bottom. It is worked out at no
+ * more than SKY_RES pixels across (the skies' own pictures are no sharper than that at these fields of view) and scaled up smoothly.
+ */
+const SKY_RES = 1280, SKY_DRAFT = 400;
+export async function skyImage(sky: SkySpec, w: number, h: number, draft = false): Promise<HTMLCanvasElement> {
+  const pictures = await loadSkyPictures(sky.name);
+  const W = Math.max(1, Math.round(w)), H = Math.max(1, Math.round(h));
+  const k = Math.min(1, (draft ? SKY_DRAFT : SKY_RES) / W);
+  const rw = Math.max(1, Math.round(W * k)), rh = Math.max(1, Math.round(H * k));
+  const px = renderSkyView(pictures, sky, rw, rh);
+  const b = Math.max(0, sky.brightness);
+  for (let y = 0; y < rh; y++) {
+    const a = Math.round(255 * skyFade(sky, (y + 0.5) / k, H));
+    for (let x = 0; x < rw; x++) {
+      const i = (y * rw + x) * 4;
+      if (b !== 1) { px[i] *= b; px[i + 1] *= b; px[i + 2] *= b; }
+      px[i + 3] = a;
+    }
+  }
+  const small = document.createElement("canvas");
+  small.width = rw;
+  small.height = rh;
+  small.getContext("2d")!.putImageData(new ImageData(px, rw, rh), 0, 0);
+  if (rw === W && rh === H) return small;
+  const c = document.createElement("canvas");
+  c.width = W;
+  c.height = H;
+  const ctx = c.getContext("2d")!;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(small, 0, 0, W, H);
+  return c;
 }

@@ -349,7 +349,26 @@ export interface OverlaySpec {
    * of its own with the texture (when it has one: `texture` "" is none) laid on it as a floor seen from the side.
    */
   ground?: GroundSpec;
+  /** A skybox of the game instead of a texture: the view into it a camera would have, filling the picture (`texture` is ""). */
+  sky?: SkySpec;
 }
+
+/** A skybox layer of the board (see OverlaySpec.sky). */
+export interface SkySpec {
+  /** The skybox (`sky_dustbowl_01`). */
+  name: string;
+  /** Where the view looks: turned about the vertical, tilted up (degrees), and how wide it sees (horizontal degrees). */
+  turn: number;
+  tilt: number;
+  fov: number;
+  /** A factor on its colours. */
+  brightness: number;
+  /** How much of the picture's height fades out at its top and at its bottom (0: none), so the backdrop shows through there. */
+  fadeTop: number;
+  fadeBottom: number;
+}
+
+export const DEFAULT_SKY_SPEC: Omit<SkySpec, "name"> = { turn: 0, tilt: 8, fov: 75, brightness: 1, fadeTop: 0, fadeBottom: 0.45 };
 
 /** A ground of the board (see OverlaySpec.ground); its place and size are fractions of the picture. */
 export interface GroundSpec {
@@ -519,14 +538,13 @@ export type ShadowBlend = (typeof SHADOW_BLENDS)[number][0];
 export const DEFAULT_SHOT_EFFECTS: ShotEffects = { shadow: { on: true, azimuth: 0, length: 1, blur: 0.2, opacity: 0.5, spread: -1, taper: 1, color: "#000000" }, look: false };
 
 /**
- * The effects a shot is taken with, from the board's: its shadow at full strength, the board drawing it at its opacity (so that the
- * opacity changes nothing in the 3D view, and is not a reason to take a shot again); with the view's look, the shadow is in the shot's
- * own pixels, at its opacity.
+ * The effects a shot is taken with, from the board's: its shadow at full strength, the board drawing it at its opacity, colour and blend
+ * (so that those change nothing in the 3D view, and are not a reason to take a shot again), with the view's look or without it.
  */
 export const shotEffectsOf = (fx: ShotEffects): ShotEffects => {
   // (the colour is the board's too: not part of how a shot is taken)
   const { color: _color, blend: _blend, ...shadow } = fx.shadow;
-  return { ...fx, shadow: { ...shadow, opacity: fx.look ? fx.shadow.opacity : 1 } };
+  return { ...fx, shadow: { ...shadow, opacity: 1 } };
 };
 
 /**
@@ -541,6 +559,12 @@ export const solidOf = new WeakMap<HTMLCanvasElement, HTMLCanvasElement>();
  * its shadow in its pixels would make them), and the characters over them from `solidOf`.
  */
 export const shadowOf = new WeakMap<HTMLCanvasElement, HTMLCanvasElement>();
+
+/**
+ * Shots whose own pixels have no shadow, though it is in `shadowOf`: those taken with the view's look (its glow and bloom are in the
+ * shot, which is drawn as it is; its shadow was taken apart, without the look).
+ */
+export const shadowApart = new WeakSet<HTMLCanvasElement>();
 
 /** The shadow of a shot: what `shot` has over `plain` (the same shot without the shadow), as black with that alpha. */
 export function shadowLayer(shot: HTMLCanvasElement, plain: HTMLCanvasElement): HTMLCanvasElement {
@@ -801,72 +825,77 @@ export function renderPicture(canvas: HTMLCanvasElement, p: PromoPicture, look: 
     c.rotate((l.rotation * Math.PI) / 180);
     c.translate(-px, -py);
   };
-  // the shadows of the shots on the ground, together: the darkest of them where they overlap, under every character
+  // the shadows of the shots on the ground, together: the darkest of them where they overlap, under every character; drawn just under
+  // the lowest of the characters, so over what lies under them (a sky, a ground, a background overlay)
   const shadowed = p.layers.filter((l) => !l.hidden && shadowOf.has(l.image) && !shadowOff(l));
-  const half = scale < 1 ? 0.5 : 1;
-  const shadowKey = shadowed.length ? JSON.stringify([canvas.width, canvas.height, look.effects?.shadow.color, shadowed.map((l) => [idOfImage(l.image), layerRect(l), l.rotation ?? 0])]) : "";
-  const sizeKey = `${canvas.width}x${canvas.height}`;
-  const cachedShadow = shadowCache.get(p)?.get(sizeKey);
-  if (shadowed.length && cachedShadow?.key === shadowKey) {
-    ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.globalAlpha = look.effects?.look ? 1 : look.effects?.shadow.opacity ?? 1;
-    ctx.globalCompositeOperation = look.effects?.look ? "source-over" : look.effects?.shadow.blend ?? "source-over";
-    ctx.drawImage(cachedShadow.canvas, 0, 0, canvas.width, canvas.height);
-    ctx.restore();
-  } else if (shadowed.length) {
-    // (worked out at half the size it is drawn at on the board, a shadow being soft; at full size for an export)
-    const acc = document.createElement("canvas");
-    acc.width = Math.max(1, Math.round(canvas.width * half));
-    acc.height = Math.max(1, Math.round(canvas.height * half));
-    const actx = acc.getContext("2d", { willReadFrequently: true })!;
-    actx.fillStyle = "#fff";
-    actx.fillRect(0, 0, acc.width, acc.height);
-    actx.globalCompositeOperation = "darken";
-    // (each on white, so that "darken" takes the stronger of two shadows)
-    const one = document.createElement("canvas");
-    one.width = acc.width;
-    one.height = acc.height;
-    const octx = one.getContext("2d")!;
-    for (const l of shadowed) {
-      octx.setTransform(1, 0, 0, 1, 0, 0);
-      octx.fillStyle = "#fff";
-      octx.fillRect(0, 0, one.width, one.height);
-      octx.setTransform(scale * half, 0, 0, scale * half, 0, 0);
-      octx.imageSmoothingQuality = "high";
-      octx.save();
-      turn(octx, l);
-      const r = layerRect(l);
-      octx.drawImage(shadowOf.get(l.image)!, r.x, r.y, r.w, r.h);
-      octx.restore();
-      actx.drawImage(one, 0, 0);
+  const shadowAt = shadowed.length ? p.layers.indexOf(shadowed[0]) : -1;
+  const paintShadows = () => {
+    const half = scale < 1 ? 0.5 : 1;
+    const shadowKey = shadowed.length ? JSON.stringify([canvas.width, canvas.height, look.effects?.shadow.color, shadowed.map((l) => [idOfImage(l.image), layerRect(l), l.rotation ?? 0])]) : "";
+    const sizeKey = `${canvas.width}x${canvas.height}`;
+    const cachedShadow = shadowCache.get(p)?.get(sizeKey);
+    if (shadowed.length && cachedShadow?.key === shadowKey) {
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalAlpha = look.effects?.shadow.opacity ?? 1;
+      ctx.globalCompositeOperation = look.effects?.shadow.blend ?? "source-over";
+      ctx.drawImage(cachedShadow.canvas, 0, 0, canvas.width, canvas.height);
+      ctx.restore();
+    } else if (shadowed.length) {
+      // (worked out at half the size it is drawn at on the board, a shadow being soft; at full size for an export)
+      const acc = document.createElement("canvas");
+      acc.width = Math.max(1, Math.round(canvas.width * half));
+      acc.height = Math.max(1, Math.round(canvas.height * half));
+      const actx = acc.getContext("2d", { willReadFrequently: true })!;
+      actx.fillStyle = "#fff";
+      actx.fillRect(0, 0, acc.width, acc.height);
+      actx.globalCompositeOperation = "darken";
+      // (each on white, so that "darken" takes the stronger of two shadows)
+      const one = document.createElement("canvas");
+      one.width = acc.width;
+      one.height = acc.height;
+      const octx = one.getContext("2d")!;
+      for (const l of shadowed) {
+        octx.setTransform(1, 0, 0, 1, 0, 0);
+        octx.fillStyle = "#fff";
+        octx.fillRect(0, 0, one.width, one.height);
+        octx.setTransform(scale * half, 0, 0, scale * half, 0, 0);
+        octx.imageSmoothingQuality = "high";
+        octx.save();
+        turn(octx, l);
+        const r = layerRect(l);
+        octx.drawImage(shadowOf.get(l.image)!, r.x, r.y, r.w, r.h);
+        octx.restore();
+        actx.drawImage(one, 0, 0);
+      }
+      // white is no shadow, black the full one: the grey becomes the alpha of a layer of the shadows' colour over the backdrop
+      const tint = parseInt((look.effects?.shadow.color ?? "#000000").slice(1), 16) || 0;
+      const [tr, tg, tb] = [(tint >> 16) & 255, (tint >> 8) & 255, tint & 255];
+      const px = actx.getImageData(0, 0, acc.width, acc.height);
+      for (let i = 0; i < px.data.length; i += 4) {
+        px.data[i + 3] = 255 - px.data[i];
+        px.data[i] = tr; px.data[i + 1] = tg; px.data[i + 2] = tb;
+      }
+      actx.globalCompositeOperation = "source-over";
+      actx.putImageData(px, 0, 0);
+      if (scale < 1) {
+        let bySize = shadowCache.get(p);
+        if (!bySize) shadowCache.set(p, (bySize = new Map()));
+        if (bySize.size > 3) bySize.clear();
+        bySize.set(sizeKey, { key: shadowKey, canvas: acc });
+      }
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      // (the board's opacity of the shadows: each shot's is taken at full strength)
+      ctx.globalAlpha = look.effects?.shadow.opacity ?? 1;
+      ctx.globalCompositeOperation = look.effects?.shadow.blend ?? "source-over";
+      ctx.drawImage(acc, 0, 0, canvas.width, canvas.height);
+      ctx.restore();
     }
-    // white is no shadow, black the full one: the grey becomes the alpha of a layer of the shadows' colour over the backdrop
-    const tint = parseInt((look.effects?.shadow.color ?? "#000000").slice(1), 16) || 0;
-    const [tr, tg, tb] = [(tint >> 16) & 255, (tint >> 8) & 255, tint & 255];
-    const px = actx.getImageData(0, 0, acc.width, acc.height);
-    for (let i = 0; i < px.data.length; i += 4) {
-      px.data[i + 3] = 255 - px.data[i];
-      px.data[i] = tr; px.data[i + 1] = tg; px.data[i + 2] = tb;
-    }
-    actx.globalCompositeOperation = "source-over";
-    actx.putImageData(px, 0, 0);
-    if (scale < 1) {
-      let bySize = shadowCache.get(p);
-      if (!bySize) shadowCache.set(p, (bySize = new Map()));
-      if (bySize.size > 3) bySize.clear();
-      bySize.set(sizeKey, { key: shadowKey, canvas: acc });
-    }
-    ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    // (the board's opacity of the shadows: each shot's is taken at full strength)
-    ctx.globalAlpha = look.effects?.look ? 1 : look.effects?.shadow.opacity ?? 1;
-    ctx.globalCompositeOperation = look.effects?.look ? "source-over" : look.effects?.shadow.blend ?? "source-over";
-    ctx.drawImage(acc, 0, 0, canvas.width, canvas.height);
-    ctx.restore();
-  }
+  };
   p.layers.forEach((l, i) => {
     if (i === strokeAt) paintStroke(ctx, p.w, p.h, look.stroke, backdrop);
+    if (i === shadowAt) paintShadows();
     if (l.hidden) return;
     const r = layerRect(l);
     ctx.save();
@@ -879,7 +908,7 @@ export function renderPicture(canvas: HTMLCanvasElement, p: PromoPicture, look: 
       ctx.shadowBlur = glow.size * (p.h / 1080) * scale;
     }
     // (a shot whose shadow is drawn above is drawn without it)
-    const src = shadowOf.has(l.image) ? solidOf.get(l.image) ?? l.image : l.image;
+    const src = shadowOf.has(l.image) && !shadowApart.has(l.image) ? solidOf.get(l.image) ?? l.image : l.image;
     if (l.mask?.on) {
       const parts = l.mask.keep.length ? partsOf.get(l.image) : null;
       // at the size it is drawn (no larger than its image)

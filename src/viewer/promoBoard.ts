@@ -12,7 +12,8 @@ import { createBackdropPicker } from "./backdropPicker";
 import { DEFAULT_STUDIO, STUDIO_LABELS, STUDIO_ROLES, flipStudio, parseStudio, randomStudio, type StudioLight } from "./studioLight";
 import { createStudioSphere } from "./studioSphere";
 import { defaultMask, partsOf, type KeepPart, type LayerMask } from "./promoMask";
-import { DEFAULT_GROUND_SPEC, layer, LAYER_BLENDS, type GroundSpec, type LayerBlend, type OverlaySpec } from "./promo";
+import { DEFAULT_GROUND_SPEC, DEFAULT_SKY_SPEC, layer, LAYER_BLENDS, type GroundSpec, type LayerBlend, type OverlaySpec, type SkySpec } from "./promo";
+import { listSkies, skyLabel } from "./skybox";
 import { openTextureBrowser, overlayImage } from "./promoOverlay";
 import { DEFAULT_CHART, DEFAULT_GLOW, DEFAULT_STROKE, DEFAULT_TEXT, TEXT_FONTS, layerPivot, layerRect, turnPoint, measureContent, opaqueRect, loadBackdropPictures, randomBackdrop, refreshText, textLayer, type ChartCellRect, renderPicture, type Backdrop, type BoardLook, type PromoLayer, type PromoPicture, type ShotSpec } from "./promo";
 
@@ -1061,7 +1062,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     blend.onchange = () => { s.blend = blend.value as ShadowBlend; changedLook(); };
     wheelSelect(blend);
     field(shadowBox, "Blend", blend, "How the shadows are laid on the backdrop: Multiply darkens it by their colour (the best with a colour), Colour burn deepens and saturates it, Soft light and Overlay are gentler (at once)");
-    field(shadowBox, "Opacity", range(0, 1, 0.01, s.opacity, (v) => { s.opacity = v; changedLook(); if (look.effects?.look) changedEffects(); }), "How dark the shadows are (at once: the shots are not taken again)");
+    field(shadowBox, "Opacity", range(0, 1, 0.01, s.opacity, (v) => { s.opacity = v; changedLook(); }), "How dark the shadows are (at once: the shots are not taken again)");
   }
   showLookShadow();
   // (with spread shadows, the shots that do not know where their picture's middle is yet, such as a set's just made, are taken again)
@@ -1470,17 +1471,22 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     if (overlay?.overlay) {
       ev.preventDefault();
       preview.setPointerCapture(ev.pointerId);
-      const o = overlay.overlay, sx = o.ox ?? 0, sy = o.oy ?? 0, g = o.ground, gx = g?.cx ?? 0, gy = g?.cy ?? 0;
+      const o = overlay.overlay, sx = o.ox ?? 0, sy = o.oy ?? 0, g = o.ground, gx = g?.cx ?? 0, gy = g?.cy ?? 0, sky = o.sky, st = sky?.turn ?? 0, sl = sky?.tilt ?? 0;
       let frame = 0;
       preview.onpointermove = (m) => {
         const [x, y] = pointAt(m);
-        // (a ground is moved about the picture; the tiling of a background overlay slides)
-        if (g) { g.cx = Math.round((gx + (x - x0) / p.w) * 1000) / 1000; g.cy = Math.round((gy + (y - y0) / p.h) * 1000) / 1000; }
+        // (a sky turns and tilts with the pointer, its view following it; a ground is moved about the picture; the tiling of a background
+        // overlay slides)
+        if (sky) {
+          const perPixel = sky.fov / p.w;
+          sky.turn = Math.round((((st + (x - x0) * perPixel + 180) % 360 + 360) % 360 - 180) * 10) / 10;
+          sky.tilt = Math.round(Math.max(-80, Math.min(80, sl + (y - y0) * perPixel)) * 10) / 10;
+        } else if (g) { g.cx = Math.round((gx + (x - x0) / p.w) * 1000) / 1000; g.cy = Math.round((gy + (y - y0) / p.h) * 1000) / 1000; }
         else { o.ox = Math.round(sx + x - x0); o.oy = Math.round(sy + y - y0); }
         cancelAnimationFrame(frame);
-        frame = requestAnimationFrame(() => void retile(p, overlay));
+        frame = requestAnimationFrame(() => void retile(p, overlay, !!sky));
       };
-      preview.onpointerup = () => { preview.onpointermove = maskHoverMove; void retile(p, overlay).then(() => showLayer()); };
+      preview.onpointerup = () => { cancelAnimationFrame(frame); preview.onpointermove = maskHoverMove; void retile(p, overlay).then(() => showLayer()); };
       return;
     }
     // a click on nothing keeps what is selected (another character clicked is what changes it)
@@ -1571,6 +1577,12 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       if (!steps) return;
       wheelSum -= steps * 100;
       const o = overlay.overlay, was = o.tile;
+      if (o.sky) {
+        // (a sky's view widens or narrows, 5 degrees a step)
+        o.sky.fov = Math.max(20, Math.min(140, Math.round(o.sky.fov + steps * 5)));
+        void retile(p, overlay).then(() => showLayer());
+        return;
+      }
       if (o.ground) {
         // (a ground is sized, as wide and as deep in the same proportion)
         o.ground.width = Math.max(0.1, Math.min(4, Math.round((Math.round(o.ground.width / WHEEL_STEP) - steps) * WHEEL_STEP * 100) / 100));
@@ -1720,7 +1732,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       row.setAttribute("aria-selected", String(selection.includes(l)));
       const kind = document.createElement("span");
       kind.className = "hierIcon";
-      kind.innerHTML = icon(l.text ? TEXT_ICON : l.chart ? CHART_ICON : l.overlay?.ground ? "ground" : l.overlay ? "grid3x3" : l.shot ? SHOT_ICON : "image");
+      kind.innerHTML = icon(l.text ? TEXT_ICON : l.chart ? CHART_ICON : l.overlay?.ground ? "ground" : l.overlay?.sky ? "cloudFog" : l.overlay ? "grid3x3" : l.shot ? SHOT_ICON : "image");
       const name = document.createElement("span");
       name.className = "hierLabel";
       name.textContent = l.name;
@@ -1762,6 +1774,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
         { label: "Characters…", run: () => charactersPopup(p, r.left, r.bottom + 4) },
         "-",
         { label: "Image from a file…", run: () => void addImage(p) },
+        { label: "Skybox", run: () => void addSky(p) },
         { label: "Background overlay…", run: () => openTextureBrowser((tex) => void addOverlay(p, tex)) },
         { label: "Ground", run: () => void addGround(p) },
       ]);
@@ -2000,13 +2013,76 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     drawPreview();
     showInspector();
   }
+  /**
+   * A skybox of the game behind the picture, as a camera in it would see it, fading out at the bottom so the backdrop shows under the
+   * characters. It goes under everything (the background overlays and the ground lie on it).
+   */
+  async function addSky(p: PromoPicture) {
+    status.textContent = "Reading the skyboxes…";
+    let names: string[];
+    try {
+      names = await listSkies();
+    } catch (err) {
+      status.textContent = `Could not list the skyboxes: ${String(err)}`;
+      return;
+    }
+    if (!names.length) { status.textContent = "No skyboxes found in the game's files."; return; }
+    const name = ["sky_day01_01", "sky_dustbowl_01", "sky_tf2_04"].find((n) => names.includes(n)) ?? names[0];
+    const spec: OverlaySpec = { texture: "", tile: 1, grey: false, sky: { name, ...DEFAULT_SKY_SPEC } };
+    status.textContent = "Drawing the sky…";
+    const was = snapshot();
+    let l: PromoLayer;
+    try {
+      l = { ...layer(skyLabel(name), await overlayImage(spec, p.w, p.h), 0, 0, p.w, p.h), overlay: spec };
+    } catch (err) {
+      status.textContent = `Could not read the skybox: ${String(err)}`;
+      return;
+    }
+    l.opaque = { x0: 0, y0: 0, x1: l.image.width, y1: l.image.height };
+    p.layers.unshift(l);
+    if (p.strokeAt !== undefined) p.strokeAt++;
+    pushUndo(was);
+    status.textContent = "Drag the picture to turn the view, the wheel to widen it.";
+    if (picked === p) selectOnly(l);
+    draw(p);
+    drawPreview();
+    showInspector();
+  }
+  /** The settings of a sky layer: which sky and where the view looks, then its fades at the top and the bottom. */
+  function skyFields(p: PromoPicture, l: PromoLayer, sky: SkySpec) {
+    const again = () => void retile(p, l);
+    const pick = document.createElement("select");
+    pick.add(new Option(skyLabel(sky.name) || sky.name, sky.name));
+    pick.value = sky.name;
+    pick.onchange = () => {
+      sky.name = pick.value;
+      l.name = skyLabel(sky.name) || l.name;
+      void retile(p, l).then(() => { host.changed(); showInspector(); });
+    };
+    void listSkies().then((names) => {
+      if (!names.length) return;
+      pick.replaceChildren(...names.map((n) => new Option(skyLabel(n), n)));
+      if (!names.includes(sky.name)) pick.add(new Option(skyLabel(sky.name) || sky.name, sky.name));
+      pick.value = sky.name;
+    }).catch(() => {});
+    wheelSelect(pick);
+    field(layerBox, "Skybox", pick, "Which of the game's skyboxes");
+    field(layerBox, "Turn", range(-180, 180, 1, sky.turn, (v) => { sky.turn = v; again(); }, (v) => `${v}°`), "Which way the view looks (dragging the picture turns it too)");
+    field(layerBox, "Tilt", range(-80, 80, 1, sky.tilt, (v) => { sky.tilt = v; again(); }, (v) => `${v}°`), "How far up the view looks (dragging the picture up or down tilts it)");
+    field(layerBox, "Field of view", range(20, 140, 1, sky.fov, (v) => { sky.fov = v; again(); }, (v) => `${v}°`), "How wide the view is, across the picture (the wheel over the picture changes it too)");
+    field(layerBox, "Brightness", range(0, 2, 0.01, sky.brightness, (v) => { sky.brightness = v; again(); }), "Darker or lighter than the game draws it");
+    blendFields(p, l);
+    heading(layerBox, "Fade", "Where the sky fades out, so the backdrop shows through");
+    field(layerBox, "Top", range(0, 1, 0.01, sky.fadeTop, (v) => { sky.fadeTop = v; again(); }, (v) => `${Math.round(v * 100)}%`), "How much of the picture's height the sky fades out over at the top (0: none)");
+    field(layerBox, "Bottom", range(0, 1, 0.01, sky.fadeBottom, (v) => { sky.fadeBottom = v; again(); }, (v) => `${Math.round(v * 100)}%`), "How much of the picture's height the sky fades out over at the bottom (0: none)");
+  }
   /** An overlay's image made again from its texture, as its settings now say (at once when the texture is read already). */
   const retileRun = new WeakMap<PromoLayer, number>();
-  async function retile(p: PromoPicture, l: PromoLayer) {
+  async function retile(p: PromoPicture, l: PromoLayer, draft = false) {
     if (!l.overlay) return;
     const run = (retileRun.get(l) ?? 0) + 1;
     retileRun.set(l, run);
-    const image = await overlayImage(l.overlay, p.w, p.h).catch(() => null);
+    const image = await overlayImage(l.overlay, p.w, p.h, draft).catch(() => null);
     if (!image || run !== retileRun.get(l)) return;
     l.image = image;
     draw(p);
@@ -2015,6 +2091,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
   }
   /** The settings of a background overlay: its texture, its tiles, how it is laid over the backdrop. */
   function overlayFields(p: PromoPicture, l: PromoLayer, o: OverlaySpec) {
+    if (o.sky) return skyFields(p, l, o.sky);
     if (o.ground) return groundFields(p, l, o, o.ground);
     heading(layerBox, "Texture", o.texture, [{ label: "Change…", title: "Another texture from the game", run: () => openTextureBrowser((tex) => { o.texture = tex; l.name = tex.split("/").pop() || l.name; void retile(p, l).then(() => { host.changed(); showInspector(); }); }, o.texture) }]);
     field(layerBox, "Tile size", range(0.1, 4, 0.05, o.tile, (v) => { o.tile = v; void retile(p, l); }, (v) => `${v.toFixed(2)}×`), "How large the texture's tiles are (1: as the game has them)");

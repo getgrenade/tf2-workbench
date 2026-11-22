@@ -38,6 +38,22 @@ async function loadPicture(name: string, face: SkyFace): Promise<SkyPicture> {
   return { width: base.width, height: base.height, rgba: base.rgba, transform: parseTextureTransform(material.params["$basetexturetransform"]), clampS: base.clampS === true, clampT: base.clampT === true };
 }
 
+const pictureSets = new Map<string, Promise<Record<SkyFace, SkyPicture>>>();
+/** The six pictures of a sky as the game has them (the last few read are kept: the promo board draws views of them again and again). */
+export function loadSkyPictures(name: string): Promise<Record<SkyFace, SkyPicture>> {
+  let set = pictureSets.get(name);
+  if (set) { pictureSets.delete(name); pictureSets.set(name, set); return set; }
+  set = (async () => {
+    const pictures = {} as Record<SkyFace, SkyPicture>;
+    await Promise.all(SKY_FACES.map(async (f) => { pictures[f] = await loadPicture(name, f); }));
+    return pictures;
+  })();
+  set.catch(() => pictureSets.delete(name));
+  pictureSets.set(name, set);
+  while (pictureSets.size > 3) pictureSets.delete(pictureSets.keys().next().value!);
+  return set;
+}
+
 /** The cube texture of a sky (colours in sRGB, as the game's textures are). */
 export async function loadSkyTexture(name: string): Promise<THREE.CubeTexture> {
   const pictures = {} as Record<SkyFace, SkyPicture>;
