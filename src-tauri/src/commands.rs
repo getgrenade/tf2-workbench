@@ -687,12 +687,12 @@ fn checked_path(path: &str) -> Result<PathBuf, String> {
     }
 }
 
-/// Where a binary file may be written: a screenshot (.png) or a layered export (.psd).
+/// Where a binary file may be written: a picture (.png, .jpg), a layered export (.psd), a video (.mp4, .webm, .gif) or settings (.json).
 fn output_path(path: &str) -> Result<PathBuf, String> {
     let p = PathBuf::from(path);
     match p.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
-        Some("png") | Some("json") | Some("psd") | Some("mp4") | Some("webm") | Some("gif") => Ok(p),
-        _ => Err(format!("refusing to write {path}: only .png, .json, .psd, .mp4, .webm and .gif files")),
+        Some("png") | Some("json") | Some("psd") | Some("mp4") | Some("webm") | Some("gif") | Some("jpg") | Some("jpeg") => Ok(p),
+        _ => Err(format!("refusing to write {path}: only .png, .json, .psd, .mp4, .webm, .gif and .jpg files")),
     }
 }
 

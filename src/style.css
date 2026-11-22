@@ -1316,6 +1316,15 @@ body.dndActive.dndRefused * { cursor: no-drop !important; }
 .promoSideFoot .btns { display: grid; grid-template-columns: 1fr 1fr; }
 .promoSideFoot .btns .primary { grid-column: 1 / -1; }
 .promoSideFoot .chartInfo:empty { display: none; }
+.promoExport { display: flex; flex-direction: column; gap: var(--ui-2); margin-top: var(--ui-3); }
+.promoExport .row { display: flex; align-items: center; gap: var(--ui-3); }
+.promoExport .row > span { width: 64px; flex: none; color: var(--dim); font-size: var(--ui-fs-small); }
+.promoExport select { flex: 1; min-width: 0; }
+.promoSeg { flex: 1; display: flex; padding: 2px; gap: 2px; border-radius: var(--ui-radius-l); background: var(--ui-input); }
+.promoSeg button { flex: 1; height: 22px; padding: 0 var(--ui-2); border: 0; border-radius: calc(var(--ui-radius-l) - 2px); background: transparent; color: var(--dim); font-size: var(--ui-fs-small); cursor: pointer; }
+.promoSeg button:hover { color: var(--fg); }
+.promoSeg button.on { background: var(--ui-accent-soft); color: var(--fg); }
+.promoCharsPop .seg button.on:not(.t0):not(.t1) { background: var(--ui-accent-soft); color: var(--fg); }
 .promoCenter { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
 .promoThumbs { display: flex; gap: var(--ui-6); overflow-x: auto; overflow-y: hidden; padding: var(--ui-4) var(--ui-5) var(--ui-5); border-bottom: 1px solid var(--line); background: var(--panel); flex: none; }
 .promoThumbGroup { flex: none; display: flex; flex-direction: column; gap: var(--ui-2); }

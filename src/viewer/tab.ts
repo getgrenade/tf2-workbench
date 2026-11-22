@@ -42,11 +42,11 @@ import { gizmoKey } from "./gizmos";
 import { createHierarchy, type HierarchyHooks, type OutlinerNode, type Pick } from "./hierarchy";
 import { editHistory } from "./editHistory";
 import type { PlacementHistory } from "./placementHistory";
-import type { SceneCamera } from "./cameraData";
+import { cameraSize, nearestRatio, type SceneCamera } from "./cameraData";
 import { combine, createBoxSelect, type BoxHits, type BoxMode } from "./boxSelect";
 import { createTransformFields } from "./transformFields";
-import { openMenu } from "./popMenu";
-import { recordVideo, type VideoOptions } from "./videoRecorder";
+import { openMenu, type MenuItem } from "./popMenu";
+import { createStillsWriter, recordVideo, type VideoOptions } from "./videoRecorder";
 import { toggleVideoPanel } from "./videoUi";
 import { createPostUi } from "./postEffects";
 import { createSkyUi } from "./skyUi";
@@ -67,9 +67,9 @@ import { openRandomLoadout, regionLabel, rollLoadout, type LoadoutRule, type Rol
 import { choosePose, NOT_A_POSE, NOT_ROLLED_TAUNT, rollFace, type PoseChoice, type PoseSource } from "./randomPose";
 import { layoutChart } from "./chartLayout";
 import { bodyMasksLoaded } from "./bodyMasks";
-import { DEFAULT_CHART, DEFAULT_TEXT, LINEUP_SPACING, PROMO_FOV, aimDirection, layer, measureContent, openPromo, textLayer, type ChartCellRect, pictureBlob, type ChartSpec, type PromoLayer, type PromoPicture, type PromoText, type ShotSpec } from "./promo";
-import { boardShotEffects, showBoard, type BoardHost, type ShownBoard } from "./promoBoard";
-import { forgetBoard, loadBoards, saveBoard, type Written } from "./promoStore";
+import { DEFAULT_CHART, DEFAULT_TEXT, LINEUP_SPACING, PROMO_FOV, aimDirection, layer, measureContent, openPromo, textLayer, type ChartCellRect, layerRect, renderText, renderPicture, type ChartSpec, type PromoLayer, type PromoPicture, type PromoText, type ShotSpec } from "./promo";
+import { EXPORT_SIZES, boardShotEffects, showBoard, type BoardHost, type ShownBoard } from "./promoBoard";
+import { boardFileText, forgetBoard, loadBoards, readBoardFile, saveBoard, type Written } from "./promoStore";
 import type { PaintChartOpts } from "./viewer";
 import { isJunkSequence } from "./sequenceFilter";
 import { paramsToSetup } from "../compiler/jiggleBones";
@@ -1124,6 +1124,7 @@ export function createViewTab(els: Els) {
     },
     apply: (loadout) => (selected ? applyLoadout(selected, loadout) : Promise.resolve()),
     inspect: (item) => void inspectItem(item, false),
+    sendToBoard: (item) => ({ label: "Send to promo board", icon: "send", children: boardChoices((target) => void sendItemToBoard(item, target)) }),
     workshopStyles: (item, x, y) => openItemStyles(itemStylesHost, item.name, { x, y }),
     allowOverlap: () => settings().allowOverlappingCosmetics,
     temporary: () => (compilerPreview && selected && selected === compilerTarget && compilerPreview.cls === selected.cls ? { name: compilerPreview.name, paintable: compilerPreview.paintable, paint: compilerPaint } : null),
@@ -1760,7 +1761,7 @@ export function createViewTab(els: Els) {
         inBox: (box) => viewer!.boxHits(box),
         atPoint: (x, y) => viewer!.pointHits(x, y),
         apply: applyBox,
-        allowed: () => !play?.active && !viewer?.rig.active && !viewer?.cameras.active && !viewer?.modalActive && !viewer?.gizmoHot,
+        allowed: () => !play?.active && !viewer?.rig.active && !viewer?.cameras.overlayEditing && !viewer?.modalActive && !viewer?.gizmoHot,
       });
       // dev builds: a handle for inspecting the scene from the console
       if (import.meta.env.DEV) (window as unknown as { __workbench: unknown }).__workbench = { viewer, entities, models };
@@ -5054,7 +5055,7 @@ export function createViewTab(els: Els) {
    * with {@link PROMO_MARGIN} more room round the slot, so what reaches past the character (a long weapon) is not cut off at the slot's
    * edge but spills over it (see {@link marginBox}).
    */
-  async function promoShot(who: Entity | Entity[], dir: THREE.Vector3, w: number, h: number, fill: number, scaleDistance?: number, pan?: { fov?: number; panX?: number; panY?: number; light?: { azimuth: number; elevation: number }; particles?: { seed: number; time: number }; studio?: StudioLight; spreadPoint?: [number, number]; parts?: boolean; frame?: { distance: number; target: [number, number, number]; fill: number }; holdFrame?: boolean }, margin = true, effects?: ShotEffects, bounds?: THREE.Box3, quick = false, steady = false): Promise<HTMLCanvasElement> {
+  async function promoShot(who: Entity | Entity[], dir: THREE.Vector3, w: number, h: number, fill: number, scaleDistance?: number, pan?: { fov?: number; panX?: number; panY?: number; light?: { azimuth: number; elevation: number }; particles?: { seed: number; time: number }; studio?: StudioLight; spreadPoint?: [number, number]; parts?: boolean; frame?: { distance: number; target: [number, number, number]; fill: number }; holdFrame?: boolean; roll?: number }, margin = true, effects?: ShotEffects, bounds?: THREE.Box3, quick = false, steady = false): Promise<HTMLCanvasElement> {
     const v = ensureViewer();
     const actors = (Array.isArray(who) ? who : [who]).map((x) => x.actor);
     const fov = pan?.fov ?? PROMO_FOV;
@@ -5087,6 +5088,8 @@ export function createViewTab(els: Els) {
       }
     }
     const target = slideCamera(cam, w / h, fov, pan);
+    // (a held framing taken from a scene camera that leans: leaning as it does)
+    if (held && pan?.roll) { cam.lookAt(target); cam.rotateZ((pan.roll * Math.PI) / 180); cam.updateMatrixWorld(true); }
     v.restoreCamera(cam.position.toArray() as [number, number, number], target.toArray() as [number, number, number]);
     // the same camera, seeing the margin round the slot too: a taller view (the slot keeps its size in it) and a wider one
     const mx = margin ? PROMO_MARGIN.x : 0, my = margin ? PROMO_MARGIN.y : 0;
@@ -5953,8 +5956,8 @@ export function createViewTab(els: Els) {
   function poseSourceAfterEdit(part: ShotSpec, e: Entity): ShotSpec["poseOf"] {
     if (e.actor.isPosing || e.actor.holdsPose || !e.anim.seqName) return undefined;
     const pb = e.actor.playback, clip = pb.clip;
-    const span = clip && clip.frames > 1 ? (clip.frames - 1) / clip.fps : 0;
-    const at = span > 0 ? Math.max(0, Math.min(1, pb.time / span)) : 0;
+    // (the frame shown, not the time played: a taunt that has looped has played past its end, and its time would read as the last frame)
+    const at = clip && clip.frames > 1 ? Math.max(0, Math.min(1, pb.frame() / (clip.frames - 1))) : 0;
     if (part.poseOf && replayed.get(e) === e.anim.seqName) return { ...part.poseOf, at };
     const seq = e.anim.info?.sequences.find((q) => q.name === e.anim.seqName);
     return seq && seq.frames > 1 ? { id: `s${seq.name}`, at } : undefined;
@@ -5962,7 +5965,68 @@ export function createViewTab(els: Els) {
 
   /** The promo shot being edited in the 3D view, and what to do when the board is shown again. */
   let promoEditing: { spec: ShotSpec; /** the characters edited: the shot's one, or a composition's all */ ents: Entity[]; done: (set: boolean) => void; bar: HTMLElement; locked: number[];
-    /** a thumbnail's studio light shows in the view while it is edited: the view's own light and occlusion, to put back */ lightWas?: { light: LightState; ao: AoState } } | null = null;
+    /** a thumbnail's studio light shows in the view while it is edited: the view's own light and occlusion, to put back */ lightWas?: { light: LightState; ao: AoState };
+    /** a line-up's camera, there while it is edited (and how it was, to tell whether it was moved) */ shotCamera?: { id: string; was: string } } | null = null;
+
+  /**
+   * The aim of a shot that looks through a camera, exactly: which way it looks (its Turn and Tilt), how it leans, and its framing held
+   * (auto framing off), going round a point as far ahead of it as `center` is (where the board's Turn and Tilt turn it about).
+   */
+  function aimOfCamera(position: THREE.Vector3, quaternion: THREE.Quaternion, center: THREE.Vector3, fill: number): { yaw: number; pitch: number; roll?: number; frame: NonNullable<ShotSpec["frame"]>; holdFrame: true; panX?: number; panY?: number } {
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(quaternion).normalize();
+    const back = forward.clone().negate();
+    const upright = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(new THREE.Vector3(), forward, new THREE.Vector3(0, 1, 0)));
+    const lean = upright.invert().multiply(quaternion);
+    const roll = ((((2 * Math.atan2(lean.z, lean.w) * 180) / Math.PI + 180) % 360) + 360) % 360 - 180;
+    const ahead = center.clone().sub(position).dot(forward);
+    const distance = ahead > 1 ? ahead : 100;
+    return {
+      yaw: (Math.atan2(back.x, back.z) * 180) / Math.PI,
+      pitch: (Math.asin(Math.max(-1, Math.min(1, back.y))) * 180) / Math.PI,
+      roll: Math.abs(roll) > 1e-3 ? roll : undefined,
+      holdFrame: true,
+      frame: { distance, target: position.clone().addScaledVector(forward, distance).toArray() as [number, number, number], fill },
+      panX: undefined, panY: undefined,
+    };
+  }
+  /** The middle of characters, at the height of their chests (what a camera aimed at them goes round). */
+  const middleOf = (ents: Entity[]) => ents.reduce((m, e) => m.add(e.actor.offset), new THREE.Vector3()).divideScalar(Math.max(1, ents.length)).add(new THREE.Vector3(0, 40, 0));
+
+  /**
+   * A line-up's camera as the picture has it (the slot's frame, without the margin round it): its held framing, else the one it was last
+   * taken with, else fitted to the characters as they stand.
+   */
+  function groupShotCamera(spec: ShotSpec, ents: Entity[]): THREE.PerspectiveCamera {
+    const v = ensureViewer(), aspect = spec.w / spec.h, lens = spec.fov ?? PROMO_FOV, dir = shotDirection(spec);
+    const held = spec.holdFrame && spec.frame ? { distance: spec.frame.distance, target: new THREE.Vector3(...spec.frame.target), fill: spec.frame.fill } : framedAt.get(spec);
+    let cam: THREE.PerspectiveCamera;
+    if (held) {
+      cam = new THREE.PerspectiveCamera(lens, aspect, 0.1, 5000);
+      cam.position.copy(held.target).addScaledVector(dir.clone().normalize(), (held.distance * held.fill) / spec.fill);
+      cam.lookAt(held.target);
+      cam.updateMatrixWorld(true);
+      cam.userData.target = held.target.clone();
+    } else cam = v.framingCamera(ents.map((x) => x.actor), dir, aspect, spec.fill, lens, spec.scaleDistance !== undefined ? spec.scaleDistance / spec.fill : undefined);
+    const target = slideCamera(cam, aspect, lens, spec);
+    cam.lookAt(target);
+    if (held && spec.roll) cam.rotateZ((spec.roll * Math.PI) / 180);
+    cam.updateMatrixWorld(true);
+    return cam;
+  }
+
+  /** The temporary camera of a line-up edited in 3D: the picture's own, looked through (the view moving it), taken back when done. */
+  function addShotCamera(spec: ShotSpec, ents: Entity[]): { id: string; was: string } | undefined {
+    const rig = ensureViewer().cameras;
+    const cam = groupShotCamera(spec, ents);
+    const aspect = spec.w / spec.h;
+    const data: SceneCamera = {
+      id: crypto.randomUUID(), name: "Shot camera", position: cam.position.toArray() as [number, number, number], quaternion: cam.quaternion.toArray() as [number, number, number, number],
+      fov: spec.fov ?? PROMO_FOV, ratio: nearestRatio(aspect), height: 1080, aspect, navigateView: true,
+    };
+    rig.insert(data, rig.cameras.length);
+    rig.view(data.id);
+    return { id: data.id, was: JSON.stringify([data.position, data.quaternion, data.fov]) };
+  }
 
   /**
    * Puts the view's camera where the shot's is: the view has the picture's lens (as tall a view as the picture's, whatever the shape of the
@@ -6005,7 +6069,7 @@ export function createViewTab(els: Els) {
     }).then((ents) => new Promise<boolean>((resolve) => {
       const bar = document.createElement("div");
       bar.className = "promoEditBar";
-      bar.innerHTML = `<span class="promoEditNote">${spec.group ? "Editing a line-up: click a character to change anything about it (weapon, pose, cosmetics, where it stands). The picture's camera stays as it is. The promoted item stays on." : "Editing a promo shot: change anything about this character (weapon, pose, cosmetics), and the angle of the view. The promoted item stays on."}</span><button class="promoEditCancel">Cancel</button><button class="primary promoEditDone">Back to the promo board</button>`;
+      bar.innerHTML = `<span class="promoEditNote">${spec.group ? "Editing a line-up: click a character to change anything about it (weapon, pose, cosmetics, where it stands). You look through the picture's camera (Shot camera): moving the view moves it; leave it to move about freely. The promoted item stays on." : "Editing a promo shot: change anything about this character (weapon, pose, cosmetics), and the angle of the view. The promoted item stays on."}</span><button class="promoEditCancel">Cancel</button><button class="primary promoEditDone">Back to the promo board</button>`;
       document.getElementById("canvasWrap")?.appendChild(bar);
       // the promoted items it wears stay on (a line-up's one, a main picture's set)
       const locked = spec.loadout.map((x) => x.item).filter((id) => promo().ids.has(id) || id === spec.reroll?.item);
@@ -6018,11 +6082,16 @@ export function createViewTab(els: Els) {
         v.setAo(studioAo(studio));
       }
       promoEditing = { spec, ents, done: resolve, bar, locked, lightWas };
+      const ed = promoEditing;
       (bar.querySelector(".promoEditDone") as HTMLButtonElement).onclick = () => finishShotEdit(true);
       (bar.querySelector(".promoEditCancel") as HTMLButtonElement).onclick = () => finishShotEdit(false);
       hideBoardTab(); // the role's scene shows, in the board's place
-      // the view looks at it as the shot does, once the view shows (its shape is its own then)
-      void nextFrames().then(() => frameEditView(spec, ents));
+      // the view looks at it as the shot does, once the view shows (its shape is its own then): a line-up through its camera
+      void nextFrames().then(() => {
+        if (promoEditing !== ed) return;
+        if (spec.group) ed.shotCamera = addShotCamera(spec, ents);
+        else frameEditView(spec, ents);
+      });
     }));
   }
 
@@ -6035,6 +6104,12 @@ export function createViewTab(els: Els) {
     if (!ed) return;
     promoEditing = null;
     ed.bar.remove();
+    // the shot camera of a line-up: as it is now, then gone (it was only there to be edited)
+    const rig = viewer?.cameras;
+    const shotCam = ed.shotCamera && rig?.cameras.find((c) => c.id === ed.shotCamera!.id);
+    const camMoved = !!shotCam && JSON.stringify([shotCam.position, shotCam.quaternion, shotCam.fov]) !== ed.shotCamera!.was;
+    const shotCamData = shotCam ? structuredClone(shotCam) : null;
+    if (ed.shotCamera) rig?.remove(ed.shotCamera.id);
     if (ed.lightWas) { ensureViewer().setLight(ed.lightWas.light); ensureViewer().setAo(ed.lightWas.ao); }
     viewer?.setFov(+els.fov.value); // the view's own lens again
     hidePromoTab(promo().roles.get(ed.spec.role));
@@ -6043,6 +6118,7 @@ export function createViewTab(els: Els) {
     const live = entities.filter((x) => !isBuildingCls(x.cls));
     if (set && live.length && (live.length !== ents.length || live.some((x) => !ents.includes(x)))) {
       regroupShot(spec, ents, live);
+      if (shotCamData && spec.group) takeShotCamera(spec, shotCamData, live);
     } else if (set && ents.every((e) => entities.includes(e))) {
       if (selected && ents.includes(selected)) saveUi(selected);
       // a composition takes each of its characters, a shot its one
@@ -6064,6 +6140,7 @@ export function createViewTab(els: Els) {
         spec.yaw = ((((spec.yaw + 180) % 360) + 360) % 360) - 180;
         spec.pitch = Math.round((Math.asin(Math.max(-1, Math.min(1, d.y))) * 180) / Math.PI);
       }
+      if (spec.group && shotCamData && camMoved) takeShotCamera(spec, shotCamData, ents);
       promo().dressed.set(spec.role, dressKey(spec)); // it already is as the spec says
     } else {
       // what was changed in the view is not the shot: it is dressed (and, in a composition, stands) again from its spec
@@ -6072,6 +6149,12 @@ export function createViewTab(els: Els) {
     }
     if (backToBoard && session?.board) showBoardTab(session.board);
     ed.done(set);
+  }
+
+  /** A line-up takes its camera as edited in 3D: where it stands, where it looks, how it leans and its lens (the slot keeps its shape). */
+  function takeShotCamera(spec: ShotSpec, cam: SceneCamera, ents: Entity[]) {
+    Object.assign(spec, aimOfCamera(new THREE.Vector3(...cam.position), new THREE.Quaternion(...cam.quaternion), middleOf(ents), spec.fill), { fov: cam.fov });
+    delete spec.scaleDistance;
   }
 
   /** A character of a shot as it is in the view now: its class, team, loadout, weapon, bodygroups, pose and face. */
@@ -6157,10 +6240,26 @@ export function createViewTab(els: Els) {
     const res = (spec.resolution ?? 1) * (live ? 0.5 : 1);
     // (an item shown alone casts no shadow: it would float over one)
     spec.effects ??= structuredClone(boardShotEffects());
+    // the look it was given (the effects of the view when the board's look was turned on), whatever its scene has meanwhile
+    if (spec.effects?.look && spec.effects.post) usePost(spec.effects.post);
     // (nor does a shot whose own shadow is off: one that fades out, say)
     const effects = spec.effects && (spec.regions || spec.noShadow) ? { ...spec.effects, shadow: { ...spec.effects.shadow, on: false } } : spec.effects;
     // (a drag's step keeps the framing the shot last had, as the camera window does: not fitted again, nor measured)
     return promoShot(e, shotDirection(spec), Math.round(spec.w * res), Math.round(spec.h * res), spec.fill, spec.scaleDistance, spec, true, effects, Array.isArray(e) || live ? undefined : focusBounds(e, spec), live, live);
+  }
+
+  /** The open scene's effects are these (a promo scene's, for a shot: changed only when they differ). */
+  function usePost(post: Record<string, unknown>) {
+    if (JSON.stringify(capturePost()) === JSON.stringify({ ...capturePost(), ...post })) return;
+    setPostItems(postItemsOf(post as PostSource));
+  }
+
+  /** The effects of the scene you look at in the 3D view (while a shot is taken, the scene you came from). */
+  function viewPost(): Record<string, unknown> {
+    const home = isPromoTab(activeTab) ? promoHome?.scene : null;
+    if (!home) return capturePost();
+    const { shadows, fogs, rimLights, aos, shadow, fog, rimLight, ao, look } = home;
+    return structuredClone({ shadows, fogs, rimLights, aos, shadow, fog, rimLight, ao, look }) as Record<string, unknown>;
   }
 
   /**
@@ -6353,14 +6452,97 @@ export function createViewTab(els: Els) {
     for (const k of Object.keys(h) as (keyof BoardHost)[]) bound[k] = (...args: unknown[]) => { session = mine; return (h[k] as (...a: unknown[]) => unknown)(...args); };
     return bound as unknown as BoardHost;
   };
+  /**
+   * A page as sharp as it is drawn at `k` times its size: each shot taken again large enough where its image is smaller than it is drawn
+   * (its framing held: the same shot, more pixels), each text drawn again as large. Its other layers are as they are (a backdrop texture,
+   * a picture from a file). The page itself is not changed; nothing is taken again when it is sharp enough already.
+   */
+  async function sharpPage(p: PromoPicture, k: number): Promise<PromoPicture> {
+    const sharper = new Map<HTMLCanvasElement, HTMLCanvasElement>();
+    for (const l of p.layers) {
+      if (sharper.has(l.image) || l.hidden) continue;
+      const r = layerRect(l), want = (r.w * k) / Math.max(1, l.image.width);
+      if (want <= 1.05) continue;
+      if (l.shot) {
+        const copy = await stillCopy(l.shot);
+        copy.resolution = Math.min(4, (l.shot.resolution ?? 1) * want);
+        sharper.set(l.image, await inPromoScene(() => takeShot(copy)));
+      } else if (l.text) {
+        sharper.set(l.image, await renderText(l.text, (l.image.width / Math.max(1, l.box.w)) * want));
+      }
+    }
+    return sharper.size ? { ...p, layers: p.layers.map((l) => (sharper.has(l.image) ? { ...l, image: sharper.get(l.image)! } : l)) } : p;
+  }
+
+  /** A copy of a shot that is taken exactly as it is now (its framing held: one fitted anew can come out a little different), to change. */
+  async function stillCopy(spec: ShotSpec): Promise<ShotSpec> {
+    const copy = structuredClone(spec);
+    if (spec.holdFrame && spec.frame) return copy;
+    if (!framedAt.get(spec)) await inPromoScene(() => takeShot(spec));
+    const f = framedAt.get(spec);
+    if (f) { copy.holdFrame = true; copy.frame = { distance: f.distance, target: f.target.toArray() as [number, number, number], fill: f.fill }; }
+    return copy;
+  }
+
+  /** A picture made smaller to w × h, halving it while it is more than twice as large (each step a smooth one). */
+  function shrinkCanvas(src: HTMLCanvasElement, w: number, h: number): HTMLCanvasElement {
+    let c = src;
+    while (c.width / 2 >= w && c.height / 2 >= h) {
+      const half = document.createElement("canvas");
+      half.width = Math.round(c.width / 2);
+      half.height = Math.round(c.height / 2);
+      const hc = half.getContext("2d")!;
+      hc.imageSmoothingQuality = "high";
+      hc.drawImage(c, 0, 0, half.width, half.height);
+      c = half;
+    }
+    const out = document.createElement("canvas");
+    out.width = w;
+    out.height = h;
+    const ctx = out.getContext("2d")!;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(c, 0, 0, w, h);
+    return out;
+  }
+
   const promoBoardHost: BoardHost = {
-    async exportAll(pictures, look, format = "png") {
-      const picked = await open({ directory: true, title: format === "psd" ? "Folder for the promo Photoshop files" : "Folder for the promo pictures" });
+    async exportAll(pictures, look, o, say) {
+      const format = o.format;
+      const testTo = (window as unknown as { __exportTo?: string }).__exportTo; // (a test's folder: no window asks)
+      const picked = testTo ?? (await open({ directory: true, title: format === "psd" ? "Folder for the promo Photoshop files" : "Folder for the promo pictures" }));
       const dir = typeof picked === "string" ? picked : null;
       if (!dir) return "Cancelled.";
       const sep = dir.includes("\\") ? "\\" : "/";
-      for (const p of pictures) {
-        const bytes = format === "psd" ? await picturePsd(p, look) : new Uint8Array(await (await pictureBlob(p, look)).arrayBuffer());
+      for (const [i, p] of pictures.entries()) {
+        say(`Exporting ${i + 1} of ${pictures.length}: ${p.name}…`);
+        // its shots and texts as sharp as the size it is drawn at, then drawn, and made smaller to the size of the file
+        const page = await sharpPage(p, o.render);
+        const w = Math.round(p.w * o.out), h = Math.round(p.h * o.out);
+        let merged: HTMLCanvasElement | undefined;
+        if (format !== "psd" || o.render > o.out) {
+          const drawn = document.createElement("canvas");
+          renderPicture(drawn, page, look, o.render);
+          merged = drawn.width === w && drawn.height === h ? drawn : shrinkCanvas(drawn, w, h);
+        }
+        let bytes: Uint8Array;
+        if (format === "psd") bytes = await picturePsd(page, look, o.out, merged);
+        else {
+          let out = merged!;
+          if (format === "jpg") {
+            // (a JPG has no transparency: the cut corners are black)
+            const flat = document.createElement("canvas");
+            flat.width = w;
+            flat.height = h;
+            const ctx = flat.getContext("2d")!;
+            ctx.fillStyle = "#000";
+            ctx.fillRect(0, 0, w, h);
+            ctx.drawImage(out, 0, 0);
+            out = flat;
+          }
+          const blob = await new Promise<Blob | null>((r) => out.toBlob(r, format === "jpg" ? "image/jpeg" : "image/png", 0.93));
+          if (!blob) throw new Error(`could not encode ${p.name}`);
+          bytes = new Uint8Array(await blob.arrayBuffer());
+        }
         await writeBinaryFile(`${dir}${sep}${p.name}.${format}`, bytes);
       }
       // the board's settings beside them (no pixels): how each picture was made and changed, to make it again or learn from
@@ -6372,9 +6554,11 @@ export function createViewTab(els: Els) {
         })),
       };
       await writeBinaryFile(`${dir}${sep}promo-board.json`, new TextEncoder().encode(JSON.stringify(board, null, 1)));
-      void revealFile(dir).catch(() => {}); // the folder, to look at what was made
-      return `Saved ${pictures.length} ${format === "psd" ? "Photoshop files" : "pictures"} to ${dir}.`;
+      if (!testTo) void revealFile(dir).catch(() => {}); // the folder, to look at what was made
+      const size = EXPORT_SIZES.find(([k]) => Math.abs(k - o.out) < 1e-3)?.[1] ?? `×${o.out}`, drawnAt = EXPORT_SIZES.find(([k]) => Math.abs(k - o.render) < 1e-3)?.[1] ?? `×${o.render}`;
+      return `Saved ${pictures.length} ${format === "psd" ? "Photoshop files" : format.toUpperCase()} (${size}${o.render > o.out ? `, drawn at ${drawnAt}` : ""}) to ${dir}.`;
     },
+    viewLook: () => viewPost(),
     retake: (l, live) => inPromoScene(async () => {
       if (l.shot) l.image = await takeShot(l.shot, live);
       else if (l.chart) {
@@ -6430,6 +6614,87 @@ export function createViewTab(els: Els) {
         scene: db.items.filter((i) => i.paintable && worn.has(i.id)).sort((a, b) => a.displayName.localeCompare(b.displayName)).map(info),
         workshop: db.items.filter((i) => i.paintable && i.workshop).sort(newestFirst).map(info),
       };
+    },
+    async paintAnimation(p, look, o, say) {
+      const db = await loadItemDb();
+      // the shots to paint: those wearing something paintable, each once (the instances of a shared shot are one image)
+      const shots = new Map<HTMLCanvasElement, ShotSpec>();
+      for (const l of p.layers) if (l.shot && !shots.has(l.image) && (l.shot.group ?? [l.shot]).some((c) => c.loadout.some((x) => x.paintable))) shots.set(l.image, l.shot);
+      if (!shots.size) return "Nothing on this page can be painted.";
+      // its pictures: unpainted first, then each paint; with the teams, each on RED then on BLU
+      const teams: (0 | 1 | null)[] = o.teams ? [0, 1] : [null];
+      const tag = (t: 0 | 1 | null) => (t === null ? "" : t ? " (BLU)" : " (RED)");
+      const steps: { label: string; paint: number | null; team: 0 | 1 | null }[] = [];
+      if (o.unpainted) for (const t of teams) steps.push({ label: `Unpainted${tag(t)}`, paint: null, team: t });
+      // (only the team paints have a BLU picture: the others look the same on either team, so are shown once, on the page's own team)
+      for (const paint of db.paints) {
+        const teamPaint = paint.rgb2 != null && paint.rgb2 !== paint.rgb;
+        for (const t of teamPaint ? teams : [null]) steps.push({ label: `${paint.displayName}${tag(t)}`, paint: paint.id, team: t });
+      }
+      const slug = (s: string) => s.replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "_") || "page";
+      const base = `${slug(p.item ?? p.name)}_paints`;
+      let path = "", dir = "";
+      // (dev builds: a test names where it goes, the save window is not opened)
+      const testTo = import.meta.env.DEV ? (window as unknown as { __paintAnimTo?: string }).__paintAnimTo : undefined;
+      if (testTo) { if (o.format === "png") dir = testTo; else path = testTo; } else if (o.format === "png") {
+        const picked = await open({ directory: true, title: "Folder for the paint pictures" });
+        if (typeof picked !== "string") return "Cancelled.";
+        dir = picked.replace(/[\\/]+$/, "");
+      } else {
+        const picked = await save({ defaultPath: `${base}.${o.format}`, filters: [o.format === "gif" ? { name: "GIF", extensions: ["gif"] } : { name: "MP4 video", extensions: ["mp4"] }] });
+        if (!picked) return "Cancelled.";
+        path = picked;
+      }
+      const sep = dir.includes("\\") ? "\\" : "/";
+      const w = Math.max(2, Math.round(p.w * o.scale) & ~1), h = Math.max(2, Math.round(p.h * o.scale) & ~1);
+      const writer = await createStillsWriter(o.format, w, h, o.hold, (i, png) => writeBinaryFile(`${dir}${sep}${base}_${String(i + 1).padStart(3, "0")}_${slug(steps[i].label)}.png`, png),
+        { maxBytes: o.format === "gif" && o.fit2mb ? 2_000_000 : undefined, say });
+      const drawn = document.createElement("canvas"), frame = document.createElement("canvas");
+      let fileSize = 0;
+      frame.width = w;
+      frame.height = h;
+      try {
+        // every paint seen alike: each shot keeps the framing it has now (one fitted anew would shift a little with each paint)
+        const framing = new Map<ShotSpec, ShotSpec["frame"]>();
+        for (const spec of shots.values()) {
+          if (spec.holdFrame && spec.frame) continue;
+          if (!framedAt.get(spec)) await inPromoScene(() => takeShot(spec));
+          const f = framedAt.get(spec);
+          if (f) framing.set(spec, { distance: f.distance, target: f.target.toArray() as [number, number, number], fill: f.fill });
+        }
+        for (const [i, step] of steps.entries()) {
+          say(`Paint animation: ${i + 1} of ${steps.length}, ${step.label}…`);
+          const images = new Map<HTMLCanvasElement, HTMLCanvasElement>();
+          for (const [image, spec] of shots) {
+            const copy = structuredClone(spec);
+            const f = framing.get(spec);
+            if (f) { copy.holdFrame = true; copy.frame = f; }
+            // everything paintable its characters wear in this paint; with the teams, the characters in this team's skin
+            for (const part of copy.group ?? [copy]) {
+              part.loadout = part.loadout.map((x) => (x.paintable ? { ...x, paint: step.paint } : x));
+              if (step.team !== null) part.team = step.team;
+            }
+            images.set(image, await inPromoScene(() => takeShot(copy)));
+          }
+          const page: PromoPicture = { ...p, layers: p.layers.map((l) => (images.has(l.image) ? { ...l, image: images.get(l.image)! } : l)) };
+          renderPicture(drawn, page, look, o.scale);
+          const ctx = frame.getContext("2d")!;
+          ctx.clearRect(0, 0, w, h);
+          ctx.drawImage(drawn, 0, 0);
+          await writer.add(frame);
+        }
+        say("Paint animation: encoding…");
+        await new Promise((r) => setTimeout(r, 20));
+        const bytes = await writer.finish();
+        fileSize = bytes.length;
+        if (o.format !== "png") await writeBinaryFile(path, bytes);
+      } finally {
+        writer.close();
+      }
+      if (!testTo) void revealFile(o.format === "png" ? dir : path).catch(() => {});
+      return o.format === "png"
+        ? `Saved ${steps.length} paint pictures (${w} × ${h}) to ${dir}.`
+        : `Saved the paint animation (${steps.length} paints, ${writer.made.width} × ${writer.made.height}, ${(fileSize / 1e6).toFixed(2)} MB${writer.made.note ? `; to fit 2 MB: ${writer.made.note}` : ""}): ${path}`;
     },
     newChart: (itemId, style) => inPromoScene(async () => {
       const db = await loadItemDb();
@@ -6504,9 +6769,10 @@ export function createViewTab(els: Els) {
    * weapon, bodygroups, pose (the frame it shows: its animation and the moment of it are kept as the pose's source), face and eyes; two
    * or more in one scene, each standing where it stands, seen from the view's angle through its lens.
    */
-  function shotOfView(ents: Entity[]): ShotSpec {
+  function shotOfView(ents: Entity[]): { spec: ShotSpec; aspect?: number } {
     if (selected) saveUi(selected);
     const v = ensureViewer();
+    const through = v.cameras.activeCamera;
     const cam = v.getCamera();
     const d = new THREE.Vector3(...cam.position).sub(new THREE.Vector3(...cam.target)).normalize();
     const turn = (deg: number) => Math.round(((((deg + 180) % 360) + 360) % 360) - 180);
@@ -6527,29 +6793,38 @@ export function createViewTab(els: Els) {
       p.eyesFollow = e.actor.followsCamera;
       return p;
     };
+    const group = () => ents.map((e, i): ShotSpec => ({ ...part(e), role: GROUP_FIRST_ROLE + i, turn: 0, place: { x: e.actor.offset.x, y: e.actor.offset.y, z: e.actor.offset.z, yaw: e.actor.yaw } }));
+    if (through) {
+      // seen through a camera: the shot is that camera's (where it stands and looks, how it leans, its lens), its slot shaped as its frame,
+      // the characters standing where they stand (one alone too)
+      const size = cameraSize(through);
+      const aim = aimOfCamera(new THREE.Vector3(...through.position), new THREE.Quaternion(...through.quaternion), middleOf(ents), 1);
+      return { spec: { role: GROUP_ROLE, loadout: [], weapon: null, regions: null, fill: 1, w: 1, h: 1, ...aim, fov: through.fov, group: group() }, aspect: size.w / size.h };
+    }
     if (ents.length === 1) {
       // one alone: its camera at the front, the character turned by the angle the view sees it from
       const e = ents[0], p = part(e);
-      return { ...p, role: teamOf(p), yaw: turn(viewYaw - (e.actor.yaw * 180) / Math.PI), pitch, fov, fill: 0.95 };
+      return { spec: { ...p, role: teamOf(p), yaw: turn(viewYaw - (e.actor.yaw * 180) / Math.PI), pitch, fov, fill: 0.95 } };
     }
-    const group = ents.map((e, i): ShotSpec => ({ ...part(e), role: GROUP_FIRST_ROLE + i, turn: 0, place: { x: e.actor.offset.x, y: e.actor.offset.y, z: e.actor.offset.z, yaw: e.actor.yaw } }));
-    return { role: GROUP_ROLE, loadout: [], weapon: null, regions: null, yaw: turn(viewYaw), pitch, fov, fill: 1, w: 1, h: 1, group };
+    return { spec: { role: GROUP_ROLE, loadout: [], weapon: null, regions: null, yaw: turn(viewYaw), pitch, fov, fill: 1, w: 1, h: 1, group: group() } };
   }
 
   /** Sends the selected characters to a board (a new one with `target` null) as a new shot on the picture it shows, and shows the board. */
   async function sendToBoard(target: PromoSession | null) {
     const ents = sendTargets();
     if (!ents.length) return;
-    const spec = shotOfView(ents);
-    const aspect = Math.max(0.3, ensureViewer().camera.aspect);
+    const { spec, aspect: camAspect } = shotOfView(ents);
+    const aspect = camAspect ?? Math.max(0.3, ensureViewer().camera.aspect);
     const mine = target ?? newBlankBoard(false);
     const tab = mine?.board;
     if (!mine || !tab?.board) return;
     showBoardTab(tab);
     await tab.board.receive((p) => {
       // its slot: as tall as the picture; a group as wide as the view shows it, one alone as a character's
-      const h = Math.round(p.h * 0.98);
+      // (through a camera: exactly its frame's shape, as big as the picture holds)
+      let h = Math.round(p.h * 0.98);
       const w = Math.round(Math.min(p.w - 20, spec.group ? h * aspect : h * 0.66));
+      if (camAspect) h = Math.round(Math.min(h, w / camAspect));
       spec.w = w;
       spec.h = h;
       session = mine;
@@ -6557,24 +6832,61 @@ export function createViewTab(els: Els) {
     }, ents.length > 1 ? "the characters" : "the character");
   }
 
+  /** The boards something can be sent to, as a sub-menu: the open ones, then a new one (`send` gets null for that). */
+  function boardChoices(send: (target: PromoSession | null) => void): MenuItem[] {
+    const boards = tabs.filter((t) => t.board && sessions.has(t.board.session));
+    return [
+      // (boards of the same name are told apart by their place in the strip)
+      ...boards.map((t) => {
+        const same = boards.filter((x) => x.name === t.name);
+        return { label: same.length > 1 ? `${t.name} (${same.indexOf(t) + 1})` : t.name, run: () => send(t.board!.session) };
+      }),
+      { label: "New board", icon: "plus" as const, separator: boards.length > 0, run: () => send(null) },
+    ];
+  }
+
+  /**
+   * Sends a cosmetic to a board (a new one with `target` null) as a picture of it alone, as the promo's Item alone shots are: worn by the
+   * selected character's class when it can be (with the paint and style it has on it), else by the first class that can wear it.
+   */
+  async function sendItemToBoard(item: ItemInfo, target: PromoSession | null) {
+    const e = selected && !isBuildingCls(selected.cls) && itemUsableBy(item, gameClassOf(selected.cls)) ? selected : null;
+    const cls = e?.cls ?? CLASSES.find(([, m]) => !isBuildingCls(m) && itemUsableBy(item, gameClassOf(m)))?.[1];
+    if (!cls) return;
+    const on = e?.items.loadout.find((x) => x.item.id === item.id);
+    const team = e?.team ?? 0;
+    const mine = target ?? newBlankBoard(false);
+    const tab = mine?.board;
+    if (!mine || !tab?.board) return;
+    showBoardTab(tab);
+    await tab.board.receive((p) => {
+      // its slot: as tall as the picture, as wide as the promo's Item alone pictures are for their height
+      const h = Math.round(p.h * 0.9), w = Math.round(Math.min(p.w - 20, (h * 760) / 980));
+      session = mine;
+      const spec: ShotSpec = {
+        role: 2, cls: cls === promo().cls ? undefined : cls, team,
+        loadout: [{ item: item.id, name: item.displayName, paintable: item.paintable, paint: on?.paint?.id ?? null, style: on?.style ?? 0 }],
+        weapon: null, regions: defaultBodyGroupsFor(cls, item.equipRegions), yaw: 24, pitch: 13, fov: 20, fill: 1, w, h,
+      };
+      return inPromoScene(async () => {
+        // (centred on what is seen of it, as the promo's own Item alone pictures are)
+        const l: PromoLayer = { ...layer(item.displayName, await takeShot(spec), ...marginBox((p.w - w) / 2, (p.h - h) / 2, w, h)), shot: spec, centre: true };
+        measureContent(l);
+        return l;
+      });
+    }, item.displayName);
+  }
+
   /** The view's right-click menu. */
   function viewMenu(x: number, y: number) {
     const ents = sendTargets();
-    const boards = tabs.filter((t) => t.board && sessions.has(t.board.session));
     openMenu({ x, y }, [
       {
         label: ents.length > 1 ? `Send ${ents.length} characters to promo board` : "Send to promo board",
         icon: "send",
         hint: ents.length ? undefined : "select characters first",
         disabled: !ents.length,
-        children: ents.length ? [
-          // (boards of the same name are told apart by their place in the strip)
-          ...boards.map((t) => {
-            const same = boards.filter((x) => x.name === t.name);
-            return { label: same.length > 1 ? `${t.name} (${same.indexOf(t) + 1})` : t.name, run: () => void sendToBoard(t.board!.session) };
-          }),
-          { label: "New board", icon: "plus" as const, separator: boards.length > 0, run: () => void sendToBoard(null) },
-        ] : undefined,
+        children: ents.length ? boardChoices((target) => void sendToBoard(target)) : undefined,
       },
     ]);
   }
@@ -6684,6 +6996,18 @@ export function createViewTab(els: Els) {
   // dev builds: makes a promo from code (a test of it need not click through the window): `__promoDev.generate(["Bill's Hat"], "lineup")`
   if (import.meta.env.DEV) {
     (window as unknown as { __promoDev: unknown }).__promoDev = {
+      /** The open board saved as a board file and opened again as another (a test of board files): the file's size and the pages' layers. */
+      boardFileRoundTrip: async () => {
+        const t = activeBoard;
+        if (!t?.board) return null;
+        const s = t.board.session;
+        const text = await boardFileText({ name: t.name, title: s.title, set: [...s.ids], cls: s.cls, pictures: s.pictures });
+        await openBoardText(text, "test");
+        const now = activeBoard?.board?.session;
+        return { bytes: text.length, other: now !== s, before: s.pictures.map((p) => p.layers.map((l) => `${l.name} ${l.image.width}x${l.image.height}`)), after: now?.pictures.map((p) => p.layers.map((l) => `${l.name} ${l.image.width}x${l.image.height}`)), shotA: JSON.stringify(s.pictures[0]?.layers[0]?.shot), shotB: JSON.stringify(now?.pictures[0]?.layers[0]?.shot) };
+      },
+      /** The specs of the open promo's shots (a test of what a shot keeps). */
+      specs: () => (session?.pictures ?? []).flatMap((p) => p.layers.filter((l) => l.shot).map((l) => l.shot)),
       /** The size of each shot's image of the open promo (a test of what a drag takes live and what it takes in full). */
       sizes: () => (session?.pictures ?? []).flatMap((p) => p.layers.filter((l) => l.shot).map((l) => `${p.kind}/${l.name}: ${l.image.width}×${l.image.height}`)),
       /** How much of its slot each shot of the open promo fills: the silhouette's width and height, as shares of the slot's (a test of the framing). */
@@ -6944,6 +7268,7 @@ export function createViewTab(els: Els) {
   }
 
   const sceneFilters = [{ name: "TF2 Workbench scene", extensions: ["json"] }];
+  const boardFilters = [{ name: "TF2 Workbench promo board", extensions: ["json"] }];
 
   // --- scene tabs: several open scenes share the one viewer; the ones in the background are kept as saved scenes ------------
 
@@ -7723,6 +8048,43 @@ export function createViewTab(els: Els) {
       els.capture.status.textContent = `Could not load the scene: ${String(err)}`;
     }
   }
+  /** A promo board in a file of its own (name.board.json): its pages, layers, shots and images, to open again or pass on. */
+  async function saveBoardToFile(tab: SceneTab) {
+    const b = tab.board;
+    if (!b) return;
+    try {
+      const picked = await save({ defaultPath: `${tab.name.replace(/^Promo:\s*/, "").replace(/[\\/:*?"<>|]+/g, "_") || "board"}.board.json`, filters: boardFilters });
+      if (!picked) return;
+      const path = /\.board\.json$/i.test(picked) ? picked : picked.replace(/(\.json)?$/i, ".board.json");
+      const s = b.session;
+      await writeTextFile(path, await boardFileText({ name: tab.name, title: s.title, set: [...s.ids], cls: s.cls, pictures: s.pictures }));
+      els.capture.status.textContent = `Saved promo board: ${path}`;
+    } catch (err) {
+      els.capture.status.textContent = `Could not save the promo board: ${String(err)}`;
+    }
+  }
+
+  /** The text of a board file as a board of its own, in a tab, shown (`fallback`: its name when the file has none). */
+  async function openBoardText(text: string, fallback: string) {
+    const { saved, pictures } = await readBoardFile(text);
+    const mine = newSession(saved.title, saved.set, saved.cls);
+    sessions.add(mine);
+    if (!openBoard(mine, saved.name || `Promo: ${fallback}`, pictures, true)) { sessions.delete(mine); throw new Error("the board could not be shown"); }
+    scheduleSave(mine); // (kept in the app's folder like any board from now on)
+  }
+
+  /** A board file opens as a board of its own, in a tab, shown. */
+  async function loadBoardFromFile() {
+    try {
+      const path = await open({ multiple: false, filters: boardFilters });
+      if (typeof path !== "string") return;
+      await openBoardText(await readTextFile(path), path.replace(/^.*[\\/]/, "").replace(/\.board\.json$/i, ""));
+      els.capture.status.textContent = `Opened promo board: ${path}`;
+    } catch (err) {
+      els.capture.status.textContent = `Could not open the promo board: ${String(err)}`;
+    }
+  }
+
   /** The lights, or the post-processing effects, of the scene in a file of their own (name.l.json, name.p.json). */
   async function saveScenePart(part: ScenePart) {
     settleForSwitch();
@@ -7768,6 +8130,17 @@ export function createViewTab(els: Els) {
       { label: "Default", hint: "a fresh scene", run: () => void newSceneDefault() },
     ] },
     { label: "New promo board", hint: "blank, to fill by hand", run: () => newBlankBoard() },
+    (() => {
+      const boards = tabs.filter((t) => t.board && sessions.has(t.board.session));
+      return {
+        label: "Save promo board", hint: boards.length ? undefined : "none open", disabled: !boards.length,
+        children: boards.length ? boards.map((t) => {
+          const same = boards.filter((x) => x.name === t.name);
+          return { label: same.length > 1 ? `${t.name} (${same.indexOf(t) + 1})` : t.name, hint: ".board.json", run: () => void saveBoardToFile(t) };
+        }) : undefined,
+      };
+    })(),
+    { label: "Open promo board…", hint: ".board.json", run: () => void loadBoardFromFile() },
     { label: "Save scene", children: [
       { label: "All", hint: ".json", run: () => void saveSceneToFile() },
       { label: "Lights", hint: PART_SUFFIX.lights, run: () => void saveScenePart("lights") },

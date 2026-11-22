@@ -142,6 +142,8 @@ export interface ShotAim {
   frame?: { distance: number; target: [number, number, number]; fill: number };
   /** Auto framing is off (the framing is `frame`, taken the next time the shot is when it has none yet). */
   holdFrame?: boolean;
+  /** The camera leans about the way it looks (degrees; a shot through a scene camera that leans). Absent: upright. */
+  roll?: number;
 }
 
 /** The field of view of a promo shot or chart unless it says otherwise (`ShotSpec.fov`): degrees, vertical. */
@@ -522,6 +524,11 @@ export interface ShotEffects {
   /** The ground shadow (see ShadowParams): spread fans the shadows out or makes them converge, taper lightens them with height. */
   shadow: { on: boolean; azimuth: number; length: number; blur: number; opacity: number; spread?: number; taper?: number; /** the board's tint of them ("#rrggbb"; absent: black) */ color?: string; /** how the board lays them on the backdrop (see SHADOW_BLENDS; absent: normal) */ blend?: ShadowBlend };
   look: boolean;
+  /**
+   * The 3D view's effects the look is (its rim lights, fog, colour grade…, as a scene file has them), taken when the look was turned on:
+   * every shot taken again has them, whatever its scene has meanwhile (absent: the effects its scene has, as boards made before had it).
+   */
+  post?: Record<string, unknown>;
 }
 
 /** How the shadows are laid on the backdrop: as a canvas composite operation, with its name for the panel. */

@@ -52,7 +52,7 @@ export function createBoxSelect<A>(opts: {
   /** The thing under a point, for a click. */
   atPoint: (x: number, y: number) => BoxHits<A>;
   apply: (hits: BoxHits<A>, mode: BoxMode) => void;
-  /** False while something else owns the pointer (play mode, a camera view). */
+  /** False while something else owns the pointer (play mode, editing a camera's overlay). */
   allowed: () => boolean;
 }) {
   let on = false;

@@ -1,5 +1,6 @@
 /**
- * An animated GIF writer that keeps files small: one palette of 255 colours for the whole animation (median cut over a sample of every frame),
+ * An animated GIF writer that keeps files small: one palette of 255 colours for the whole animation (median cut over a sample of every frame;
+ * or, with `paletteEach`, one for each frame),
  * ordered dithering (it does not move from frame to frame, so still areas stay identical), and every frame stores only the box that changed
  * since the one before, with the unchanged pixels (and the ones that changed by less than `tolerance`) left transparent.
  */
@@ -17,6 +18,13 @@ export interface GifOptions {
   dither?: number;
   /** Frames with this much alpha or less are transparent (a GIF has one bit of it). Without it every pixel is opaque. */
   transparent?: boolean;
+  /**
+   * A palette for each frame (its own 255 colours) instead of one for the whole animation: for frames that differ in colour throughout
+   * (a hat in every paint, where one shared palette leaves each paint a few colours and its shades banded). Larger files.
+   */
+  paletteEach?: boolean;
+  /** How many colours a palette has, at most (2 to 255; fewer: smaller files, more banding). */
+  colours?: number;
 }
 
 const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
@@ -135,7 +143,8 @@ export function encodeGif(frames: GifFrame[], width: number, height: number, o: 
   const tolerance = o.tolerance ?? 8;
   const dither = o.dither ?? 0.4;
   // the last palette entry is kept for "transparent" (unchanged pixels, and the clear background of a transparent picture)
-  const colours = buildPalette(frames, 255);
+  const most = Math.max(2, Math.min(255, Math.round(o.colours ?? 255)));
+  const colours = buildPalette(o.paletteEach ? [frames[0]] : frames, most);
   const TRANS = 255;
   const palette = new Uint8Array(256 * 3);
   palette.set(colours);
@@ -149,19 +158,21 @@ export function encodeGif(frames: GifFrame[], width: number, height: number, o: 
   push(0x21, 0xff, 0x0b, ...Array.from("NETSCAPE2.0", (c) => c.charCodeAt(0)), 3, 1, 0, 0, 0);
 
   const pixels = width * height;
-  /** What the viewer of the file sees after the frames written so far (palette index, TRANS before the first). */
+  /** What the viewer of the file sees after the frames written so far (RGB; none before the first). */
   let shown: Uint8Array | null = null;
   const reach = dither * 24;
   let clock = 0, written = 0;
   for (let n = 0; n < frames.length; n++) {
     const src = frames[n].data;
+    const own = o.paletteEach && n > 0 ? buildPalette([frames[n]], most) : colours;
+    const pal = own === colours ? colours : own, near = own === colours ? nearest : new Nearest(own);
     const index = new Uint8Array(pixels);
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         const p = y * width + x, s = p * 4;
         if (transparent && src[s + 3] <= 127) { index[p] = TRANS; continue; }
         const t = (BAYER[(y & 3) * 4 + (x & 3)] / 16 - 0.5) * reach;
-        index[p] = nearest.at(clamp8(src[s] + t), clamp8(src[s + 1] + t), clamp8(src[s + 2] + t));
+        index[p] = near.at(clamp8(src[s] + t), clamp8(src[s + 1] + t), clamp8(src[s + 2] + t));
       }
     }
     // the box that differs from what is shown; pixels that stay (or are close enough) are written as transparent
@@ -169,14 +180,17 @@ export function encodeGif(frames: GifFrame[], width: number, height: number, o: 
     const out = new Uint8Array(pixels);
     const tol2 = tolerance * tolerance * 3;
     const prev = transparent ? null : shown;
+    const now = new Uint8Array(pixels * 3);
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         const p = y * width + x;
         const v = index[p];
+        const r = pal[v * 3], g = pal[v * 3 + 1], b = pal[v * 3 + 2];
         if (prev) {
-          const was = prev[p];
-          if (v === was || close(colours, v, was, tol2)) { out[p] = TRANS; index[p] = was; continue; }
+          const dr = r - prev[p * 3], dg = g - prev[p * 3 + 1], db = b - prev[p * 3 + 2];
+          if (dr * dr + dg * dg + db * db <= tol2) { out[p] = TRANS; now[p * 3] = prev[p * 3]; now[p * 3 + 1] = prev[p * 3 + 1]; now[p * 3 + 2] = prev[p * 3 + 2]; continue; }
         }
+        now[p * 3] = r; now[p * 3 + 1] = g; now[p * 3 + 2] = b;
         out[p] = v;
         if (x < x0) x0 = x;
         if (x > x1) x1 = x;
@@ -188,7 +202,7 @@ export function encodeGif(frames: GifFrame[], width: number, height: number, o: 
     const w = x1 - x0 + 1, h = y1 - y0 + 1;
     const box = new Uint8Array(w * h);
     for (let y = 0; y < h; y++) box.set(out.subarray((y0 + y) * width + x0, (y0 + y) * width + x0 + w), y * w);
-    shown = index;
+    shown = now;
     // delay in hundredths: cumulative rounding keeps the total time right
     clock += 100 / o.fps;
     const delay = Math.max(2, Math.round(clock) - written);
@@ -198,7 +212,13 @@ export function encodeGif(frames: GifFrame[], width: number, height: number, o: 
     push(0x21, 0xf9, 4, (transparent ? 2 : 1) << 2 | 1, ...u16(delay), TRANS, 0);
     const drawW = transparent ? width : w, drawH = transparent ? height : h;
     const body = transparent ? index : box;
-    push(0x2c, ...u16(x0), ...u16(y0), ...u16(drawW), ...u16(drawH), 0);
+    // (a frame with its own palette carries it: a local colour table of 256)
+    if (own !== colours) {
+      push(0x2c, ...u16(x0), ...u16(y0), ...u16(drawW), ...u16(drawH), 0x87);
+      const local = new Uint8Array(256 * 3);
+      local.set(own);
+      chunks.push(local);
+    } else push(0x2c, ...u16(x0), ...u16(y0), ...u16(drawW), ...u16(drawH), 0);
     push(8);
     const data = lzwEncode(body, 8);
     for (let i = 0; i < data.length; i += 255) {
@@ -217,8 +237,3 @@ export function encodeGif(frames: GifFrame[], width: number, height: number, o: 
 }
 
 const clamp8 = (v: number) => (v < 0 ? 0 : v > 255 ? 255 : v | 0);
-function close(p: Uint8Array, a: number, b: number, tol2: number): boolean {
-  if (tol2 <= 0) return false;
-  const dr = p[a * 3] - p[b * 3], dg = p[a * 3 + 1] - p[b * 3 + 1], db = p[a * 3 + 2] - p[b * 3 + 2];
-  return dr * dr + dg * dg + db * db <= tol2;
-}

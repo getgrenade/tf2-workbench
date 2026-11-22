@@ -65,8 +65,16 @@ const png = (canvas: HTMLCanvasElement) =>
   new Promise<Uint8Array>((resolve, reject) =>
     canvas.toBlob((b) => (b ? b.arrayBuffer().then((a) => resolve(new Uint8Array(a))) : reject(new Error("could not encode a layer's image"))), "image/png"));
 
+type BoardToSave = Omit<SavedBoard, "version" | "pictures"> & { pictures: PromoPicture[] };
+
 /** Writes a board: its new images, then the JSON. Linked layers share an image, which is written once. */
-export async function saveBoard(id: string, board: Omit<SavedBoard, "version" | "pictures"> & { pictures: PromoPicture[] }, written: Written): Promise<void> {
+export async function saveBoard(id: string, board: BoardToSave, written: Written): Promise<void> {
+  const saved = await boardData(board, written, (name, bytes) => savePromoFile(id, name, bytes));
+  await savePromoFile(id, "board.json", new TextEncoder().encode(JSON.stringify(saved)));
+}
+
+/** A board as its JSON, each image not written yet handed to `put` (as a PNG file of its own). */
+async function boardData(board: BoardToSave, written: Written, put: (name: string, bytes: Uint8Array) => Promise<void>): Promise<SavedBoard> {
   const pictures: SavedPicture[] = [];
   for (const p of board.pictures) {
     const layers: SavedLayer[] = [];
@@ -75,7 +83,7 @@ export async function saveBoard(id: string, board: Omit<SavedBoard, "version" | 
         let name = written.get(canvas);
         if (!name) {
           name = `image-${Date.now().toString(36)}-${written.size}.png`;
-          await savePromoFile(id, name, await png(canvas));
+          await put(name, await png(canvas));
           written.set(canvas, name);
         }
         return name;
@@ -91,13 +99,11 @@ export async function saveBoard(id: string, board: Omit<SavedBoard, "version" | 
     }
     pictures.push({ name: p.name, item: p.item, kind: p.kind, w: p.w, h: p.h, strokeAt: p.strokeAt, backdrop: p.backdrop, layers });
   }
-  const saved: SavedBoard = { version: 1, name: board.name, title: board.title, set: board.set, cls: board.cls, pictures };
-  await savePromoFile(id, "board.json", new TextEncoder().encode(JSON.stringify(saved)));
+  return { version: 1, name: board.name, title: board.title, set: board.set, cls: board.cls, pictures };
 }
 
 /** A saved image as a canvas. */
-async function image(id: string, file: string): Promise<HTMLCanvasElement> {
-  const bytes = await readPromoFile(id, file);
+async function image(bytes: BlobPart): Promise<HTMLCanvasElement> {
   const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
   const canvas = document.createElement("canvas");
   canvas.width = bitmap.width;
@@ -117,6 +123,11 @@ export interface LoadedBoard {
 /** Reads a board back: its pictures with their images; linked layers get one shot and one image again. */
 export async function loadBoard(id: string): Promise<LoadedBoard> {
   const saved = JSON.parse(new TextDecoder().decode(await readPromoFile(id, "board.json"))) as SavedBoard;
+  return { id, saved, ...(await boardPictures(saved, (name) => readPromoFile(id, name))) };
+}
+
+/** A board's pictures from its JSON, its images read with `get`. */
+async function boardPictures(saved: SavedBoard, get: (name: string) => Promise<BlobPart>): Promise<{ pictures: PromoPicture[]; written: Written }> {
   if (saved.version !== 1) throw new Error(`a board of version ${String(saved.version)} is not understood`);
   const images = new Map<string, HTMLCanvasElement>();
   const written: Written = new Map();
@@ -127,7 +138,7 @@ export async function loadBoard(id: string): Promise<LoadedBoard> {
     for (const s of p.layers) {
       let img = images.get(s.image);
       if (!img) {
-        img = await image(id, s.image);
+        img = await image(await get(s.image));
         images.set(s.image, img);
         written.set(img, s.image);
       }
@@ -136,7 +147,7 @@ export async function loadBoard(id: string): Promise<LoadedBoard> {
       if (parts && !partsOf.has(img)) {
         try {
           let pc = images.get(parts);
-          if (!pc) { pc = await image(id, parts); images.set(parts, pc); written.set(pc, parts); }
+          if (!pc) { pc = await image(await get(parts)); images.set(parts, pc); written.set(pc, parts); }
           partsOf.set(img, pc);
         } catch { /* taken again when it is needed */ }
       }
@@ -150,7 +161,48 @@ export async function loadBoard(id: string): Promise<LoadedBoard> {
     }
     pictures.push({ name: p.name, item: p.item, kind: p.kind, w: p.w, h: p.h, strokeAt: p.strokeAt, backdrop: p.backdrop, layers, texts: [] });
   }
-  return { id, saved, pictures, written };
+  return { pictures, written };
+}
+
+/**
+ * A board as one file to keep or pass on (`.board.json`): its JSON and its images in it (PNG, as base64), so it opens anywhere as it
+ * was. Opened, it is a board of its own (kept like any other from then on).
+ */
+export interface BoardFile {
+  app: "tf2-workbench";
+  kind: "promo-board";
+  version: 1;
+  board: SavedBoard;
+  images: Record<string, string>;
+}
+
+const toBase64 = (bytes: Uint8Array) => {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+};
+const fromBase64 = (text: string) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
+
+/** A board as the text of a board file. */
+export async function boardFileText(board: BoardToSave): Promise<string> {
+  const images: Record<string, string> = {};
+  const saved = await boardData(board, new Map(), async (name, bytes) => { images[name] = toBase64(bytes); });
+  const file: BoardFile = { app: "tf2-workbench", kind: "promo-board", version: 1, board: saved, images };
+  return JSON.stringify(file);
+}
+
+/** A board read from the text of a board file (its images are not in the app's folder yet: they are written with its first save there). */
+export async function readBoardFile(text: string): Promise<{ saved: SavedBoard; pictures: PromoPicture[] }> {
+  const file = JSON.parse(text) as Partial<BoardFile>;
+  if (file.app !== "tf2-workbench" || file.kind !== "promo-board" || !file.board || !file.images) throw new Error("not a TF2 Workbench promo board");
+  if (file.version !== 1) throw new Error(`a board file of version ${String(file.version)} is not understood`);
+  const images = file.images;
+  const { pictures } = await boardPictures(file.board, async (name) => {
+    const data = images[name];
+    if (data === undefined) throw new Error(`the board file has no image ${name}`);
+    return fromBase64(data);
+  });
+  return { saved: file.board, pictures };
 }
 
 /** Every board kept, oldest first (their ids carry when they were made). */

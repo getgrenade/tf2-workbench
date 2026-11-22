@@ -12,6 +12,8 @@ export interface SceneCamera {
   fov: number;
   ratio: CameraRatio;
   height: number;
+  /** A frame of its own shape (width / height) in place of the ratio's: the camera of a promo shot, shaped as its slot on the board. */
+  aspect?: number;
   /** Allow viewport navigation to edit the saved transform. Defaults off. */
   navigateView?: boolean;
   /** A shot of this camera includes the background (the sky or the colour) and the ground plane. Defaults off: they are left out. */
@@ -21,6 +23,11 @@ export interface SceneCamera {
   group?: string;
 }
 export interface CameraCollection { cameras: SceneCamera[]; active: string | null }
+/** The ratio nearest a shape (width / height). */
+export function nearestRatio(aspect: number): CameraRatio {
+  const of = (r: CameraRatio) => { const [w, h] = r.split(":").map(Number); return w / h; };
+  return CAMERA_RATIOS.reduce((a, b) => (Math.abs(Math.log(of(b) / aspect)) < Math.abs(Math.log(of(a) / aspect)) ? b : a));
+}
 export function cameraSizes(ratio: CameraRatio): { w: number; h: number }[] {
   if (ratio === "1:1") return [1024, 2048].map(n => ({ w: n, h: n }));
   // Landscape uses output height; portrait uses the same dimensions turned upright.
@@ -29,6 +36,7 @@ export function cameraSizes(ratio: CameraRatio): { w: number; h: number }[] {
   return ratio === "9:16" || ratio === "3:4" ? sizes.map(s => ({ w: s.h, h: s.w })) : sizes;
 }
 export function cameraSize(camera: SceneCamera) {
+  if (camera.aspect) return { w: Math.round(camera.height * camera.aspect), h: camera.height };
   const sizes = cameraSizes(camera.ratio);
   return sizes.find(s => s.h === camera.height) ?? sizes[0];
 }
@@ -57,6 +65,7 @@ export function parseCameras(raw: unknown): CameraCollection {
     if (!c || typeof c.id !== "string" || ids.has(c.id) || !vec(c.position, 3) || !vec(c.quaternion, 4) || !CAMERA_RATIOS.includes(c.ratio) || !Number.isFinite(c.fov) || c.fov <= 1 || c.fov >= 179 || c.quaternion.every(n => n === 0)) continue;
     const q = new THREE.Quaternion().fromArray(c.quaternion).normalize();
     const copy: SceneCamera = { id: c.id, name: typeof c.name === "string" ? c.name : "Camera", position: [...c.position], quaternion: q.toArray(), fov: c.fov, ratio: c.ratio, height: c.height };
+    if (typeof c.aspect === "number" && Number.isFinite(c.aspect) && c.aspect > 0.05 && c.aspect < 20) copy.aspect = c.aspect;
     copy.height = cameraSize(copy).h;
     if (c.navigateView === true) copy.navigateView = true;
     if (c.captureBackground === true) copy.captureBackground = true;

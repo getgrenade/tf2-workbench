@@ -156,7 +156,7 @@ app.innerHTML = `
       </div>
       <div id="iconPanel" class="panel" hidden>
         <h3 class="first" title="The camera the icon is taken with">Camera <span class="bgBtns"><button id="iconFovReset" title="Back to 5 degrees">Reset</button></span></h3>
-        <div class="ui-prop" title="The vertical field of view (degrees): less flattens the item like a long lens, more gives it depth"><span class="ui-key">Field of view</span><div class="ui-val"><input type="range" class="ui-range" id="iconFov" min="5" max="60" step="1" /><input type="number" class="ui-num" id="iconFovNumber" min="1" max="90" step="1" /></div></div>
+        <div class="ui-prop" title="The field of view in horizontal degrees (the icon is square: the same up and down): less flattens the item like a long lens, more gives it depth"><span class="ui-key">Field of view</span><div class="ui-val"><input type="range" class="ui-range" id="iconFov" min="5" max="60" step="1" /><input type="number" class="ui-num" id="iconFovNumber" min="1" max="90" step="1" /></div></div>
         <h3 title="Eases the picture out at the lines, so the cut there is not a hard edge. Outside the lines the picture is cut away.">Fade</h3>
         <div class="iconFadeEdge" data-edge="top">
           <label class="iconFadeSwitch" title="Eases the top of the picture out, down from the upper line"><input type="checkbox" data-k="on" /> Top</label>

@@ -113,7 +113,7 @@ export function createCameraUi(root: HTMLElement, getRig: () => CameraRig, prepa
   bind("create", () => { deselected = false; prepare(); const rig = getRig(); selected = rig.fromView().id; render(); });
   navigate.onchange = () => getRig().setNavigateView(selected, navigate.checked);
   capture.onchange = () => getRig().setCaptureBackground(selected, capture.checked);
-  ratio.onchange = () => { const rig = getRig(), data = rig.cameras.find(c => c.id === selected); if (data) { data.ratio = ratio.value as CameraRatio; data.height = cameraSizes(data.ratio)[0].h; rig.refresh(); } };
+  ratio.onchange = () => { const rig = getRig(), data = rig.cameras.find(c => c.id === selected); if (data) { delete data.aspect; data.ratio = ratio.value as CameraRatio; data.height = cameraSizes(data.ratio)[0].h; rig.refresh(); } };
   size.onchange = () => { const rig = getRig(), data = rig.cameras.find(c => c.id === selected); if (data) { data.height = +size.value; rig.refresh(); } };
   fov.onchange = () => { const rig = getRig(), data = rig.cameras.find(c => c.id === selected); if (data) { data.fov = verticalFov(Math.max(FOV_MIN, Math.min(FOV_MAX, +fov.value || 30)), aspectOf(data)); rig.refresh(); } };
   let fovCameraId = "", startFov = 30, shownFov = 30;

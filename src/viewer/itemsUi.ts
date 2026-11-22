@@ -1,4 +1,4 @@
-import { showContextMenu } from "./contextMenu";
+import { openMenu, type MenuItem } from "./popMenu";
 import { loadItemDb, reloadItemDb } from "./itemCatalog";
 import { itemIcon } from "./itemIcons";
 import { createBrowserSort, createBrowserView, makeTile, setTileImage } from "./browserView";
@@ -62,6 +62,8 @@ export interface ItemsHooks {
   inspect: (item: ItemInfo) => void;
   /** Opens the Styles panel of a workshop item (its styles, and the zips linked to it as styles) at a screen position. */
   workshopStyles?: (item: ItemInfo, x: number, y: number) => void;
+  /** The right-click menu's entry that sends an item to a promo board, as a picture of it alone (with its boards to pick from). */
+  sendToBoard?: (item: ItemInfo) => MenuItem | null;
   /** Items that must stay on (a promo shot's promoted items): they are not taken off, nor replaced by an item of their region. */
   locked?: () => number[];
   /** An item was not put on (or taken off) because of a locked one (`because`: the locked item it would have replaced). */
@@ -169,11 +171,15 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
     void hooks.apply(visible());
   }
 
-  /** The right-click menu of an item: inspect it; a workshop item's styles too. */
-  const itemMenu = (item: ItemInfo, x: number, y: number) => [
-    { label: "Inspect", run: () => hooks.inspect(item) },
-    ...(item.workshop && hooks.workshopStyles ? [{ label: "Styles…", run: () => hooks.workshopStyles!(item, x, y) }] : []),
-  ];
+  /** The right-click menu of an item: inspect it, send it to a promo board; a workshop item's styles too. */
+  const itemMenu = (item: ItemInfo, x: number, y: number): MenuItem[] => {
+    const send = hooks.sendToBoard?.(item);
+    return [
+      { label: "Inspect", run: () => hooks.inspect(item) },
+      ...(item.workshop && hooks.workshopStyles ? [{ label: "Styles…", run: () => hooks.workshopStyles!(item, x, y) }] : []),
+      ...(send ? [{ ...send, separator: true }] : []),
+    ];
+  };
 
   function renderEquipped() {
     els.equipped.innerHTML = "";
@@ -207,7 +213,7 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
       }
       card.oncontextmenu = (ev) => {
         ev.preventDefault();
-        showContextMenu(ev.clientX, ev.clientY, itemMenu(e.item, ev.clientX, ev.clientY));
+        openMenu({ x: ev.clientX, y: ev.clientY }, itemMenu(e.item, ev.clientX, ev.clientY));
       };
       card.onclick = (ev) => {
         if ((ev.target as HTMLElement).classList.contains("x")) {
@@ -488,7 +494,7 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
       tile.onclick = () => { if (picking) { if (picking.accept(it)) picking.pick(it); } else toggle(it); };
       tile.oncontextmenu = (ev) => {
         ev.preventDefault();
-        showContextMenu(ev.clientX, ev.clientY, itemMenu(it, ev.clientX, ev.clientY));
+        openMenu({ x: ev.clientX, y: ev.clientY }, itemMenu(it, ev.clientX, ev.clientY));
       };
       if (it.image) {
         tile.dataset.image = it.image;

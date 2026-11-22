@@ -28,19 +28,24 @@ const rgb = (hex: string) => {
 };
 const px = (value: number) => ({ units: "Pixels" as const, value });
 
-/** A canvas the size of the picture, drawn on by `paint`. */
-function full(p: PromoPicture, paint: (ctx: CanvasRenderingContext2D) => void): HTMLCanvasElement {
+/** A canvas the size of the picture (times `k`), drawn on by `paint` in the picture's own units. */
+function full(p: PromoPicture, paint: (ctx: CanvasRenderingContext2D) => void, k = 1): HTMLCanvasElement {
   const c = document.createElement("canvas");
-  c.width = p.w;
-  c.height = p.h;
-  paint(c.getContext("2d")!);
+  c.width = Math.round(p.w * k);
+  c.height = Math.round(p.h * k);
+  const ctx = c.getContext("2d")!;
+  ctx.scale(k, k);
+  paint(ctx);
   return c;
 }
 
-/** A layer's pixels, turned as it is, on a canvas just round them, and where that canvas is in the picture (it may reach past its edges). */
-function placed(l: PromoLayer, image: CanvasImageSource) {
+/**
+ * A layer's pixels, turned as it is, on a canvas just round them, and where that canvas is in the picture (it may reach past its edges);
+ * in a file `k` times the picture's size.
+ */
+function placed(l: PromoLayer, image: CanvasImageSource, k = 1) {
   const r = layerRect(l), rot = l.rotation ?? 0, piv = layerPivot(l);
-  const pts = [[r.x, r.y], [r.x + r.w, r.y], [r.x, r.y + r.h], [r.x + r.w, r.y + r.h]].map(([x, y]) => turnPoint(x, y, piv, rot));
+  const pts = [[r.x, r.y], [r.x + r.w, r.y], [r.x, r.y + r.h], [r.x + r.w, r.y + r.h]].map(([x, y]) => turnPoint(x, y, piv, rot).map((v) => v * k));
   const left = Math.floor(Math.min(...pts.map((q) => q[0]))), top = Math.floor(Math.min(...pts.map((q) => q[1])));
   const right = Math.ceil(Math.max(...pts.map((q) => q[0]))), bottom = Math.ceil(Math.max(...pts.map((q) => q[1])));
   const canvas = document.createElement("canvas");
@@ -49,6 +54,7 @@ function placed(l: PromoLayer, image: CanvasImageSource) {
   const ctx = canvas.getContext("2d")!;
   ctx.imageSmoothingQuality = "high";
   ctx.translate(-left, -top);
+  ctx.scale(k, k);
   if (rot) {
     ctx.translate(piv[0], piv[1]);
     ctx.rotate((rot * Math.PI) / 180);
@@ -59,11 +65,11 @@ function placed(l: PromoLayer, image: CanvasImageSource) {
 }
 
 /** A layer's fade as a Photoshop layer mask, placed and turned as its pixels are (none without one). */
-function layerMask(l: PromoLayer): Layer["mask"] {
+function layerMask(l: PromoLayer, k = 1): Layer["mask"] {
   if (!l.mask?.on) return undefined;
   const r = layerRect(l);
-  const grey = maskGrey(l.mask, Math.min(r.w, l.image.width), Math.min(r.h, l.image.height), l.mask.keep.length ? partsOf.get(l.image) : null);
-  const { canvas, left, top } = placed(l, grey);
+  const grey = maskGrey(l.mask, Math.min(r.w * k, l.image.width), Math.min(r.h * k, l.image.height), l.mask.keep.length ? partsOf.get(l.image) : null);
+  const { canvas, left, top } = placed(l, grey, k);
   // (black round it: what is outside the layer's rectangle is hidden too)
   const ctx = canvas.getContext("2d")!;
   ctx.globalCompositeOperation = "destination-over";
@@ -73,14 +79,15 @@ function layerMask(l: PromoLayer): Layer["mask"] {
 }
 
 /** A text layer as a type layer: its pixels (without the outline and shadow, which are its effects) and its text. */
-async function typeLayer(l: PromoLayer, t: TextSpec): Promise<Layer> {
-  const scale = l.scale;
+async function typeLayer(l: PromoLayer, t: TextSpec, k = 1): Promise<Layer> {
+  const scale = l.scale * k;
   const image = await renderText({ ...t, outline: false, shadow: false }, Math.max(1, scale));
-  const { canvas, left, top } = placed(l, image);
+  const { canvas, left, top } = placed(l, image, k);
   const r = layerRect(l), size = t.size * scale, pad = t.size * 0.3 * scale, lh = t.size * 1.18 * scale;
   // where the first line starts: its baseline, at the left, the middle or the right as the lines are aligned
-  const ax = t.align === "left" ? r.x + pad : t.align === "right" ? r.x + r.w - pad : r.x + r.w / 2;
-  const [x, y] = turnPoint(ax, r.y + pad + lh / 2 + size * 0.35, layerPivot(l), l.rotation ?? 0);
+  const ax = t.align === "left" ? r.x * k + pad : t.align === "right" ? (r.x + r.w) * k - pad : (r.x + r.w / 2) * k;
+  const piv = layerPivot(l);
+  const [x, y] = turnPoint(ax, r.y * k + pad + lh / 2 + size * 0.35, [piv[0] * k, piv[1] * k], l.rotation ?? 0);
   const a = ((l.rotation ?? 0) * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a);
   const effects: Layer["effects"] = {};
   if (t.outline) effects.stroke = [{ enabled: true, present: true, showInDialog: true, size: px(Math.max(1, size * 0.07)), position: "outside", fillType: "color", blendMode: "normal", opacity: 0.85, color: { r: 0, g: 0, b: 0 } }];
@@ -92,7 +99,7 @@ async function typeLayer(l: PromoLayer, t: TextSpec): Promise<Layer> {
     top,
     canvas,
     effects: t.outline || t.shadow ? effects : undefined,
-    mask: layerMask(l),
+    mask: layerMask(l, k),
     text: {
       text: t.text.replace(/\n/g, "\r"),
       transform: [c, s, -s, c, x, y],
@@ -109,32 +116,32 @@ const PSD_BLEND: Record<LayerBlend, NonNullable<Layer["blendMode"]>> = {
 };
 
 /** The PSD of a picture, as the board has it. */
-export async function picturePsd(p: PromoPicture, look: BoardLook): Promise<Uint8Array> {
+export async function picturePsd(p: PromoPicture, look: BoardLook, k = 1, merged?: HTMLCanvasElement): Promise<Uint8Array> {
   const backdrop = p.backdrop ?? look.backdrop;
   const glow = look.glow?.on ? look.glow : null;
   // (round corners that are cut: the backdrop is cut round them; what is over it is left whole, to be masked in Photoshop as wanted)
-  const children: Layer[] = [{ name: p.backdrop ? "Backdrop (its own)" : "Backdrop", canvas: full(p, (ctx) => { paintBackdrop(ctx, p.w, p.h, backdrop); cutCorners(ctx, p.w, p.h, look.stroke); }), left: 0, top: 0 }];
-  const border = (): Layer => ({ name: "Border", hidden: !look.stroke.on, canvas: full(p, (ctx) => paintStroke(ctx, p.w, p.h, { ...look.stroke, on: true }, backdrop)), left: 0, top: 0 });
+  const children: Layer[] = [{ name: p.backdrop ? "Backdrop (its own)" : "Backdrop", canvas: full(p, (ctx) => { paintBackdrop(ctx, p.w, p.h, backdrop); cutCorners(ctx, p.w, p.h, look.stroke); }, k), left: 0, top: 0 }];
+  const border = (): Layer => ({ name: "Border", hidden: !look.stroke.on, canvas: full(p, (ctx) => paintStroke(ctx, p.w, p.h, { ...look.stroke, on: true }, backdrop), k), left: 0, top: 0 });
   const strokeAt = Math.min(p.strokeAt ?? p.layers.length, p.layers.length);
   for (const [i, l] of p.layers.entries()) {
     if (i === strokeAt) children.push(border());
-    if (l.text) { children.push(await typeLayer(l, l.text)); continue; }
-    const { canvas, left, top } = placed(l, l.image);
+    if (l.text) { children.push(await typeLayer(l, l.text, k)); continue; }
+    const { canvas, left, top } = placed(l, l.image, k);
     children.push({
       name: l.name,
       hidden: l.hidden,
       canvas,
       left,
       top,
-      mask: layerMask(l),
+      mask: layerMask(l, k),
       opacity: l.opacity,
       blendMode: l.blend ? PSD_BLEND[l.blend] : undefined,
-      effects: glow && l.shot ? { outerGlow: { enabled: true, present: true, showInDialog: true, size: px(glow.size * (p.h / 1080)), color: { r: 0, g: 0, b: 0 }, blendMode: "multiply", opacity: glow.strength, source: "edge" } } : undefined,
+      effects: glow && l.shot ? { outerGlow: { enabled: true, present: true, showInDialog: true, size: px(glow.size * (p.h / 1080) * k), color: { r: 0, g: 0, b: 0 }, blendMode: "multiply", opacity: glow.strength, source: "edge" } } : undefined,
     });
   }
   if (strokeAt >= p.layers.length) children.push(border());
-  const merged = document.createElement("canvas");
-  renderPicture(merged, p, look);
-  const buffer = writePsd({ width: p.w, height: p.h, canvas: merged, children }, { noBackground: true, generateThumbnail: true });
+  // (the merged picture: the one the export drew, else drawn here)
+  if (!merged) { merged = document.createElement("canvas"); renderPicture(merged, p, look, k); }
+  const buffer = writePsd({ width: Math.round(p.w * k), height: Math.round(p.h * k), canvas: merged, children }, { noBackground: true, generateThumbnail: true });
   return new Uint8Array(buffer);
 }

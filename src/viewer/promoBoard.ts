@@ -7,6 +7,7 @@
 import { icon } from "../icons";
 import { showContextMenu } from "./contextMenu";
 import { rotateLightDirection } from "./lighting";
+import { FOV_MAX, FOV_MIN, horizontalFov, verticalFov } from "./cameraData";
 import { shotEffectsOf, SHADOW_BLENDS, type ShadowBlend, DEFAULT_SHOT_EFFECTS, LINEUP_SPACING, PROMO_FOV, solidOf } from "./promo";
 import { createBackdropPicker } from "./backdropPicker";
 import { DEFAULT_STUDIO, STUDIO_LABELS, STUDIO_ROLES, flipStudio, parseStudio, randomStudio, type StudioLight } from "./studioLight";
@@ -18,9 +19,12 @@ import { openTextureBrowser, overlayImage } from "./promoOverlay";
 import { DEFAULT_CHART, DEFAULT_GLOW, DEFAULT_STROKE, DEFAULT_TEXT, TEXT_FONTS, layerPivot, layerRect, turnPoint, measureContent, opaqueRect, loadBackdropPictures, randomBackdrop, refreshText, textLayer, type ChartCellRect, renderPicture, type Backdrop, type BoardLook, type PromoLayer, type PromoPicture, type ShotSpec } from "./promo";
 
 export interface BoardHost {
-  /** Writes every picture (asks where); resolves to what to say. */
-  /** Writes the pictures to a folder the user picks: as PNGs, or as layered Photoshop files. */
-  exportAll(pictures: PromoPicture[], look: BoardLook, format?: "png" | "psd"): Promise<string>;
+  /**
+   * Writes the pictures to a folder the user picks (PNG, JPG, or layered Photoshop files), at a size of theirs (`out`, times the page's
+   * own), drawn at `render` times it (no less than `out`) and made smaller to `out`: the shots are taken again as large as that, the texts
+   * drawn again. `say` tells how far it has got; resolves to what to say at the end.
+   */
+  exportAll(pictures: PromoPicture[], look: BoardLook, o: BoardExport, say: (text: string) => void): Promise<string>;
   /** Takes a layer's shot again as its spec now says (in the promo scene), replacing its image. */
   retake(layer: PromoLayer, live?: boolean): Promise<void>;
   /** A small picture through a layer's camera as its spec now says (w × h), to aim it by. */
@@ -65,6 +69,40 @@ export interface BoardHost {
   chartItems(): Promise<{ scene: ChartItem[]; workshop: ChartItem[] }>;
   /** A paint chart of an item (one of its styles) as a layer of a 1920 × 1080 page, and the item's name. */
   newChart(item: number, style: number): Promise<{ layer: PromoLayer; item: string }>;
+  /**
+   * A page painted in every paint, one picture each, as a GIF, an MP4 or a PNG sequence (asks where): each of its shots taken again with
+   * every paintable thing its characters wear in that paint (and, with `teams`, in BLU too, the characters' skins with it); the page itself
+   * is not changed. `say` tells how far it has got; resolves to what to say at the end.
+   */
+  paintAnimation(p: PromoPicture, look: BoardLook, o: PaintAnimation, say: (text: string) => void): Promise<string>;
+  /** The effects of the scene being looked at in the 3D view (see ShotEffects.post). */
+  viewLook?(): Record<string, unknown>;
+}
+
+/** How the board's pictures are exported (see BoardHost.exportAll). */
+export interface BoardExport {
+  format: "png" | "jpg" | "psd";
+  /** The size of the files, times the page's own (a 1080p page: 1 is 1080p, 4/3 1440p, 2 4K). */
+  out: number;
+  /** The size they are drawn at, times the page's own (no less than `out`): larger, then made smaller, for smoother edges. */
+  render: number;
+}
+/** The export sizes, times a page's own (a 1080 pixel tall page's names). */
+export const EXPORT_SIZES: [number, string][] = [[1, "1080p"], [4 / 3, "1440p"], [2, "4K"]];
+
+/** How a page's paint animation is made (see BoardHost.paintAnimation). */
+export interface PaintAnimation {
+  format: "gif" | "mp4" | "png";
+  /** The size, against the page's: 1 or 0.5. */
+  scale: number;
+  /** How long each paint shows (seconds). */
+  hold: number;
+  /** Team paints (and the unpainted picture) on RED, then on BLU (the characters in their BLU skins, the paint in its BLU colour); other paints once. */
+  teams: boolean;
+  /** The first picture is the page unpainted. */
+  unpainted: boolean;
+  /** A GIF is made to fit in 2 MB (the Steam Workshop's limit): plainer, then smaller, as far as it must. */
+  fit2mb?: boolean;
 }
 
 /** A cosmetic a paint chart can be made of: its id, its name, and its styles' names (none when it has one look). */
@@ -138,7 +176,8 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       <div class="promoLookFx"></div>
       <div class="promoSideFoot">
         <p class="chartInfo promoStatus" role="status"></p>
-        <div class="btns"><button class="promoNew" title="Make the pictures of another set">New set…</button><button class="promoExportPsd" title="Every picture as a Photoshop file, each layer of it a layer (texts editable, the glow and the text outline and shadow as layer effects)">Export PSDs…</button><button class="primary promoExportAll">Export all…</button></div>
+        <div class="promoExport"></div>
+        <div class="btns"><button class="promoNew" title="Make the pictures of another set">New set…</button><button class="primary promoExportAll">Export all…</button></div>
       </div>
     </aside>
     <main class="promoCenter">
@@ -1044,7 +1083,8 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     const fx = (look.effects ??= structuredClone(DEFAULT_SHOT_EFFECTS));
     const box = (label: string, get: () => boolean, set: (v: boolean) => void, title: string) =>
       check(fxBox, label, get(), (v) => { set(v); changedEffects(true); showLookFx(); }, title);
-    box("The 3D view's look", () => fx.look, (v) => (fx.look = v), "The post-processing of the 3D view (its colour grade, bloom, ambient occlusion, depth of field, and so on) in every shot, as the view has it now");
+    box("The 3D view's look", () => fx.look, (v) => { fx.look = v; if (v) fx.post = host.viewLook?.(); else delete fx.post; },
+      "The post-processing of the 3D view (its rim lights, colour grade, bloom, ambient occlusion, depth of field, and so on) in every shot, as the view has it when this is ticked: the shots keep it, taken again or painted. Untick and tick it again to take the view's look anew");
   }
   showLookFx();
   // the shadows: each character's, cast in its 3D scene onto the floor from one light for every shot (the characters are turned, the
@@ -1143,6 +1183,8 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
         e.preventDefault();
         showContextMenu(e.clientX, e.clientY, [
           { label: "New page after it", run: () => addPage(p) },
+          { label: "Paint animation…", disabled: !paintableOn(p), run: () => paintAnimPopup(p, e.clientX, e.clientY) },
+          "-",
           { label: "Delete this page", disabled: pictures.length < 2, run: () => deletePage(p) },
         ]);
       };
@@ -1960,6 +2002,109 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     window.addEventListener("keydown", esc, true);
     void host.chartItems().then((got) => { items = got; show(); }).catch((err) => { list.innerHTML = ""; const p = document.createElement("p"); p.className = "dim hint"; p.textContent = `Could not read the cosmetics: ${String(err)}`; list.append(p); });
   }
+  /** Whether a page has a shot whose characters wear something paintable (what a paint animation paints). */
+  const paintableOn = (p: PromoPicture) => p.layers.some((l) => l.shot && (l.shot.group ?? [l.shot]).some((c) => c.loadout.some((x) => x.paintable)));
+
+  /** The settings of a page's paint animation (remembered for the next one), then the animation made. */
+  let paintAnim: PaintAnimation = { format: "gif", scale: 0.5, hold: 1, teams: false, unpainted: true };
+  try { paintAnim = { ...paintAnim, ...JSON.parse(localStorage.getItem("tf2workbench.paintAnim") ?? "{}") }; } catch { /* the defaults */ }
+  let animating = false;
+  function paintAnimPopup(p: PromoPicture, x: number, y: number) {
+    document.querySelector(".promoCharsPop")?.remove();
+    const o = { ...paintAnim };
+    const pop = document.createElement("div");
+    pop.className = "promoCharsPop promoAnimPop";
+    pop.style.left = `${Math.round(Math.min(x, window.innerWidth - 300))}px`;
+    pop.style.top = `${Math.round(Math.min(y, window.innerHeight - 300))}px`;
+    const close = () => { pop.remove(); window.removeEventListener("pointerdown", outside, true); window.removeEventListener("keydown", esc, true); };
+    const outside = (e: PointerEvent) => { if (!pop.contains(e.target as Node)) close(); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); close(); } };
+    const title = document.createElement("h4");
+    title.textContent = `Paint animation: ${p.kind}`;
+    /** A row of choices, one on. */
+    const seg = <T,>(label: string, choices: [T, string][], get: () => T, set: (v: T) => void, tip: string) => {
+      const row = document.createElement("div");
+      row.className = "row";
+      row.title = tip;
+      const name = document.createElement("span");
+      name.className = "dim";
+      name.textContent = label;
+      name.style.width = "64px";
+      const box = document.createElement("div");
+      box.className = "seg";
+      const draw = () => {
+        box.replaceChildren(...choices.map(([v, text]) => {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.textContent = text;
+          b.className = get() === v ? "on" : "";
+          b.onclick = () => { set(v); draw(); };
+          return b;
+        }));
+      };
+      draw();
+      row.append(name, box);
+      return row;
+    };
+    const tick = (label: string, get: () => boolean, set: (v: boolean) => void, tip: string) => {
+      const row = document.createElement("label");
+      row.className = "row";
+      row.title = tip;
+      const c = document.createElement("input");
+      c.type = "checkbox";
+      c.checked = get();
+      c.onchange = () => set(c.checked);
+      row.append(c, document.createTextNode(label));
+      return row;
+    };
+    const holdRow = document.createElement("label");
+    holdRow.className = "row";
+    holdRow.title = "How long each paint shows";
+    const holdName = document.createElement("span");
+    holdName.className = "dim";
+    holdName.textContent = "Each paint";
+    holdName.style.width = "64px";
+    const hold = document.createElement("input");
+    hold.type = "number";
+    hold.className = "ui-num";
+    hold.min = "0.2"; hold.max = "10"; hold.step = "0.1";
+    hold.value = String(o.hold);
+    hold.onchange = () => { o.hold = Math.max(0.2, Math.min(10, Number(hold.value) || 1)); hold.value = String(o.hold); };
+    holdRow.append(holdName, hold, document.createTextNode("seconds"));
+    const note = document.createElement("p");
+    note.className = "dim hint";
+    const shots = p.layers.filter((l) => l.shot).length;
+    note.textContent = `Every paintable cosmetic on the page's ${shots === 1 ? "shot" : `${shots} shots`} is painted alike, one paint per picture. The page itself is not changed.`;
+    const go = document.createElement("button");
+    go.type = "button";
+    go.className = "primary";
+    go.textContent = "Make the animation";
+    go.disabled = animating;
+    go.onclick = () => {
+      paintAnim = o;
+      try { localStorage.setItem("tf2workbench.paintAnim", JSON.stringify(o)); } catch { /* not remembered */ }
+      close();
+      animating = true;
+      void host.paintAnimation(p, look, o, (text) => { status.textContent = text; })
+        .then((text) => { status.textContent = text; })
+        .catch((err) => { status.textContent = `Could not make the paint animation: ${String(err)}`; })
+        .finally(() => { animating = false; });
+    };
+    pop.append(
+      title,
+      seg<PaintAnimation["format"]>("Format", [["gif", "GIF"], ["mp4", "MP4"], ["png", "PNG sequence"]], () => o.format, (v) => (o.format = v), "GIF and MP4: one file. PNG sequence: a picture per paint, named after it, in a folder"),
+      seg<number>("Size", [[1, "×1"], [0.5, "×0.5"]], () => o.scale, (v) => (o.scale = v), `×1: ${p.w} × ${p.h}; ×0.5: ${Math.round(p.w / 2)} × ${Math.round(p.h / 2)}`),
+      holdRow,
+      tick("Unpainted first", () => o.unpainted, (v) => (o.unpainted = v), "The first picture shows the cosmetics as they come, unpainted"),
+      tick("GIF: fit in 2 MB (Workshop)", () => !!o.fit2mb, (v) => (o.fit2mb = v), "If the GIF comes out over 2 MB, it is made plainer (less dithering, fewer colours), then smaller, until it fits. The message at the end says what it gave up"),
+      tick("Team colours (team paints on RED and on BLU)", () => o.teams, (v) => (o.teams = v), "Each team paint (Team Spirit and the like), and the unpainted picture, is shown on RED, then on BLU: the characters in their BLU skins, the paint in its BLU colour. Other paints are shown once"),
+      note, go,
+    );
+    document.body.append(pop);
+    window.addEventListener("pointerdown", outside, true);
+    window.addEventListener("keydown", esc, true);
+  }
+
   /** A new page of a paint chart of an item (after the page shown), shown once taken. */
   async function addChartPage(it: ChartItem, style: number) {
     const after = picked;
@@ -2077,7 +2222,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     field(layerBox, "Skybox", pick, "Which of the game's skyboxes");
     field(layerBox, "Turn", range(-180, 180, 1, sky.turn, (v) => { sky.turn = v; again(); }, (v) => `${v}°`), "Which way the view looks (dragging the picture turns it too)");
     field(layerBox, "Tilt", range(-80, 80, 1, sky.tilt, (v) => { sky.tilt = v; again(); }, (v) => `${v}°`), "How far up the view looks (dragging the picture up or down tilts it)");
-    field(layerBox, "Field of view", range(20, 140, 1, sky.fov, (v) => { sky.fov = v; again(); }, (v) => `${v}°`), "How wide the view is, across the picture (the wheel over the picture changes it too)");
+    field(layerBox, "Field of view", range(20, 140, 1, sky.fov, (v) => { sky.fov = v; again(); }, (v) => `${v}°`), "How wide the view is, in horizontal degrees across the picture (the wheel over the picture changes it too)");
     field(layerBox, "Brightness", range(0, 2, 0.01, sky.brightness, (v) => { sky.brightness = v; again(); }), "Darker or lighter than the game draws it");
     blendFields(p, l);
     heading(layerBox, "Fade", "Where the sky fades out, so the backdrop shows through");
@@ -2762,13 +2907,16 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       const zoom = l.chart ? range(0.4, CHART_ZOOM, 0.01, aim.fill, (v) => { aim.fill = v; retake(p, l); }, (v) => `${Math.round(v * 100)}%`) : null;
       if (zoom) field(layerBox, "Zoom", zoom, "How near the camera comes to the item in each picture of the chart: in, it frames a detail of it");
       // (the field of view of a shot's lens: wide is near and deep, narrow is far and flat; the framing keeps what it frames the same size)
-      if (spec) field(layerBox, "Field of view", range(10, 90, 1, spec.fov ?? PROMO_FOV, (v) => {
+      // (shown as every field of view of the app is, as hlmv does: the horizontal angle, across the shot's frame; the shot keeps the vertical one)
+      const frameAspect = spec ? Math.max(0.05, spec.w / spec.h) : 1;
+      if (spec) field(layerBox, "Field of view", range(FOV_MIN, FOV_MAX, 1, Math.round(horizontalFov(spec.fov ?? PROMO_FOV, frameAspect)), (v) => {
+        const next = verticalFov(v, frameAspect);
         // (a shot at a distance shared with others, RED's and BLU's: the distance goes with the lens, so the character keeps its size)
         const half = (deg: number) => Math.tan((deg * Math.PI) / 360);
-        if (spec.scaleDistance) spec.scaleDistance *= half(spec.fov ?? PROMO_FOV) / half(v);
-        spec.fov = v;
+        if (spec.scaleDistance) spec.scaleDistance *= half(spec.fov ?? PROMO_FOV) / half(next);
+        spec.fov = next;
         retake(p, l);
-      }, (v) => `${v}°`), "The camera's lens, as a vertical angle: wide (high) is near the subject and deep, narrow (low) far and flat");
+      }, (v) => `${v}°`), "The camera's lens, in horizontal degrees across the shot (as the 3D view, the cameras and hlmv count it): wide (high) is near the subject and deep, narrow (low) far and flat");
       check(layerBox, "Auto framing", !aim.holdFrame, (v) => {
         // off: the framing it has now stays (taken from the shot as it is); on: fitted again
         aim.holdFrame = v ? undefined : true;
@@ -3032,13 +3180,51 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     ev.stopImmediatePropagation();
   };
 
-  $(".promoExportPsd").onclick = async () => {
-    status.textContent = "Exporting the Photoshop files…";
-    status.textContent = await host.exportAll(pictures, look, "psd").catch((err) => `Could not export: ${String(err)}`);
+  // the export: its format, the size of the files, and the size they are drawn at (remembered for the next time)
+  let exportAs: BoardExport = { format: "png", out: 1, render: 1 };
+  try { exportAs = { ...exportAs, ...JSON.parse(localStorage.getItem("tf2workbench.boardExport") ?? "{}") }; } catch { /* the defaults */ }
+  const keepExport = () => { try { localStorage.setItem("tf2workbench.boardExport", JSON.stringify(exportAs)); } catch { /* not remembered */ } };
+  const exportBox = $(".promoExport");
+  const sizeName = (k: number) => EXPORT_SIZES.find(([s]) => Math.abs(s - k) < 1e-3)?.[1] ?? `×${k}`;
+  const drawExport = () => {
+    exportBox.replaceChildren();
+    const row = (label: string, tip: string, control: HTMLElement) => {
+      const r = document.createElement("div");
+      r.className = "row";
+      r.title = tip;
+      const name = document.createElement("span");
+      name.textContent = label;
+      r.append(name, control);
+      exportBox.append(r);
+    };
+    const seg = <T,>(choices: [T, string][], get: () => T, set: (v: T) => void) => {
+      const box = document.createElement("div");
+      box.className = "promoSeg";
+      for (const [v, text] of choices) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = text;
+        b.classList.toggle("on", get() === v);
+        b.onclick = () => { set(v); keepExport(); drawExport(); };
+        box.append(b);
+      }
+      return box;
+    };
+    row("Format", "PNG and JPG: the pictures as they are. PSD: each layer of the board a layer of the file (texts editable, the glow and the text outline and shadow as layer effects)",
+      seg<BoardExport["format"]>([["png", "PNG"], ["jpg", "JPG"], ["psd", "PSD"]], () => exportAs.format, (v) => (exportAs.format = v)));
+    row("Size", "The size of the files (a 1920 × 1080 page: 1080p, 2560 × 1440, 3840 × 2160; other pages as much larger)",
+      seg<number>(EXPORT_SIZES.map(([k, n]) => [k, n]), () => exportAs.out, (v) => { exportAs.out = v; exportAs.render = Math.max(exportAs.render, v); }));
+    const render = document.createElement("select");
+    for (const [k, n] of EXPORT_SIZES) if (k >= exportAs.out - 1e-3) render.add(new Option(Math.abs(k - exportAs.out) < 1e-3 ? `${n} (the size of the files)` : `${n}, made smaller`, String(k)));
+    render.value = String(EXPORT_SIZES.find(([k]) => Math.abs(k - exportAs.render) < 1e-3)?.[0] ?? exportAs.out);
+    render.onchange = () => { exportAs.render = Number(render.value); keepExport(); };
+    row("Render at", "Drawn larger than the files, then made smaller to their size: smoother edges for the same size of file (slower)", render);
   };
+  drawExport();
   $(".promoExportAll").onclick = async () => {
-    status.textContent = "Exporting…";
-    status.textContent = await host.exportAll(pictures, look).catch((err) => `Could not export: ${String(err)}`);
+    const o = { ...exportAs, render: Math.max(exportAs.render, exportAs.out) };
+    status.textContent = `Exporting ${o.format.toUpperCase()} at ${sizeName(o.out)}${o.render > o.out ? `, drawn at ${sizeName(o.render)}` : ""}…`;
+    status.textContent = await host.exportAll(pictures, look, o, (text) => { status.textContent = text; }).catch((err) => `Could not export: ${String(err)}`);
   };
   boardKeys.add(keys);
   $(".promoNew").onclick = () => host.newSet();

@@ -59,6 +59,115 @@ async function pickCodec(format: "mp4" | "webm", w: number, h: number, fps: numb
 }
 
 /**
+ * A slideshow of still pictures, each held for `hold` seconds (a paint animation): pictures are handed in one at a time (a video is
+ * encoded as they come, a PNG sequence written as they come; a GIF keeps them until it is made), then `finish` gives the file.
+ * Every picture is `w` × `h` (even, as video codecs ask). A GIF with `maxBytes` is made smaller until it fits (see fitGif); `made` then
+ * says what it came to.
+ */
+export async function createStillsWriter(format: "gif" | "mp4" | "png", w: number, h: number, hold: number, writeFrame?: (index: number, png: Uint8Array) => Promise<void>,
+  o: { maxBytes?: number; say?: (text: string) => void } = {}) {
+  const made = { width: w, height: h, note: "" };
+  const gif: GifFrame[] = [];
+  let encoder: VideoEncoder | null = null;
+  let mp4: Mp4Muxer<Mp4Target> | null = null;
+  let failure: unknown = null;
+  // (a video holds each picture as repeated frames: every player shows that, whatever it makes of long frames)
+  const fps = 10, per = Math.max(1, Math.round(hold * fps));
+  let frames = 0, count = 0;
+  if (format === "mp4") {
+    if (!videoSupport().codecs) throw new Error("This system cannot encode video here: use GIF or a PNG sequence.");
+    const config = await pickCodec("mp4", w, h, fps, Math.round(w * h * fps * 0.14));
+    if (!config) throw new Error(`This system cannot encode H.264 MP4 at ${w}×${h}: try the half size.`);
+    mp4 = new Mp4Muxer({ target: new Mp4Target(), video: { codec: "avc", width: w, height: h, frameRate: fps }, fastStart: "in-memory" });
+    encoder = new VideoEncoder({ output: (chunk, meta) => mp4!.addVideoChunk(chunk, meta), error: (e) => { failure = e; } });
+    encoder.configure(config);
+  }
+  return {
+    async add(canvas: HTMLCanvasElement) {
+      if (failure) throw failure;
+      if (encoder) {
+        for (let k = 0; k < per; k++) {
+          while (encoder.encodeQueueSize > 6) await new Promise((r) => setTimeout(r, 4));
+          const frame = new VideoFrame(canvas, { timestamp: Math.round(frames * 1e6 / fps), duration: Math.round(1e6 / fps) });
+          encoder.encode(frame, { keyFrame: k === 0 });
+          frame.close();
+          frames++;
+        }
+      } else if (format === "png") {
+        const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, "image/png"));
+        if (!blob) throw new Error(`Could not make picture ${count + 1} into a PNG`);
+        await writeFrame!(count, new Uint8Array(await blob.arrayBuffer()));
+      } else gif.push({ data: canvas.getContext("2d")!.getImageData(0, 0, w, h).data });
+      count++;
+    },
+    async finish(): Promise<Uint8Array> {
+      if (format === "gif") {
+        const fit = fitGif(gif, w, h, 1 / hold, o.maxBytes ?? Infinity, o.say);
+        Object.assign(made, fit, { note: fit.note });
+        return fit.bytes;
+      }
+      if (format === "png") return new Uint8Array(0);
+      await encoder!.flush();
+      if (failure) throw failure;
+      encoder!.close();
+      mp4!.finalize();
+      return new Uint8Array(mp4!.target.buffer);
+    },
+    close() { try { if (encoder && encoder.state !== "closed") encoder.close(); } catch { /* closed */ } },
+    /** What the file came to (a GIF fitted to `maxBytes` may be smaller, or plainer, than asked). */
+    made,
+  };
+}
+
+/**
+ * A GIF of these frames no larger than `maxBytes`: first as good as it gets, then, while too large, plainer (less dithering, more
+ * tolerance for what stays from frame to frame, fewer colours), then smaller (scaled down by about as much as it is over). What it
+ * gave up is in `note`.
+ */
+export function fitGif(frames: GifFrame[], w: number, h: number, fps: number, maxBytes: number, say?: (text: string) => void): { bytes: Uint8Array; width: number; height: number; note: string } {
+  const tries = [
+    { dither: 0.6, tolerance: 8, colours: 255, note: "" },
+    { dither: 0.3, tolerance: 12, colours: 255, note: "less dithering" },
+    { dither: 0, tolerance: 16, colours: 192, note: "no dithering, 192 colours" },
+    { dither: 0, tolerance: 18, colours: 128, note: "no dithering, 128 colours" },
+  ];
+  const mb = (n: number) => `${(n / 1e6).toFixed(2)} MB`;
+  let bytes: Uint8Array = new Uint8Array(0);
+  for (const t of tries) {
+    bytes = encodeGif(frames, w, h, { fps, paletteEach: true, dither: t.dither, tolerance: t.tolerance, colours: t.colours });
+    if (bytes.length <= maxBytes) return { bytes, width: w, height: h, note: t.note };
+    say?.(`Paint animation: ${mb(bytes.length)}, over ${mb(maxBytes)}; making it smaller…`);
+  }
+  // then smaller: the size of a GIF goes about with its area
+  const last = tries[tries.length - 1];
+  let k = 1;
+  for (let i = 0; i < 8; i++) {
+    k *= Math.max(0.5, Math.min(0.95, Math.sqrt(maxBytes / bytes.length) * 0.97));
+    const sw = Math.max(2, Math.round(w * k)), sh = Math.max(2, Math.round(h * k));
+    const small = frames.map((f) => ({ data: shrinkFrame(f.data, w, h, sw, sh) }));
+    bytes = encodeGif(small, sw, sh, { fps, paletteEach: true, dither: last.dither, tolerance: last.tolerance, colours: last.colours });
+    if (bytes.length <= maxBytes || sw < 160) return { bytes, width: sw, height: sh, note: `${last.note}, ${sw} × ${sh}` };
+    say?.(`Paint animation: ${mb(bytes.length)} at ${sw} × ${sh}; making it smaller…`);
+  }
+  return { bytes, width: w, height: h, note: "could not fit" };
+}
+
+/** RGBA pixels of one size, smoothly scaled to another. */
+function shrinkFrame(data: Uint8ClampedArray, w: number, h: number, sw: number, sh: number): Uint8ClampedArray {
+  const src = document.createElement("canvas");
+  src.width = w;
+  src.height = h;
+  src.getContext("2d")!.putImageData(new ImageData(new Uint8ClampedArray(data), w, h), 0, 0);
+  const dst = document.createElement("canvas");
+  dst.width = sw;
+  dst.height = sh;
+  const ctx = dst.getContext("2d", { willReadFrequently: true })!;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(src, 0, 0, sw, sh);
+  return ctx.getImageData(0, 0, sw, sh).data;
+}
+
+/**
  * Renders the scene frame by frame (the scene is moved on by exactly one frame's time between two pictures, so the result is smooth however
  * long the pictures take) and returns the file. A turntable turns the current camera round the vertical axis through its focus.
  * A PNG sequence hands each frame to `writeFrame` as it is drawn (nothing is kept) and returns no bytes.
