@@ -2130,6 +2130,25 @@ export function createViewTab(els: Els) {
     bodyBox.classList.toggle("twoCols", parts.size > 0 && rest.length > 0);
     if (parts.size) bodyBox.appendChild(left);
     if (rest.length) bodyBox.appendChild(right);
+    // a Spy's disguise mask: the face of a class on it, as a disguised Spy's teammates see him
+    if (gameClassOf(e.cls) === "spy") {
+      const row = document.createElement("label");
+      row.className = "spyMaskRow bgMask";
+      row.title = "The disguise mask on the Spy's face, showing the class he is disguised as (as his own team sees him)";
+      const name = document.createElement("span");
+      name.textContent = "Mask";
+      const pick = document.createElement("select");
+      pick.append(new Option("None", ""), ...SPY_MASKS.map((c) => new Option(c[0].toUpperCase() + c.slice(1), c)));
+      pick.value = e.spyMask ?? "";
+      pick.onchange = () => {
+        for (const t of entities.filter((x) => x === e || (multi.has(x.id) && gameClassOf(x.cls) === "spy"))) {
+          t.spyMask = pick.value || null;
+          void applyLoadout(t, t.applied);
+        }
+      };
+      row.append(name, pick);
+      bodyBox.appendChild(row);
+    }
   }
 
   async function applyBodygroups(e: Entity) {
@@ -2311,25 +2330,6 @@ export function createViewTab(els: Els) {
       b.setAttribute("aria-pressed", String(e.actor.conditions[key]));
       b.onclick = () => setCondition(e, key, !e.actor.conditions[key]);
       condBox.appendChild(b);
-    }
-    // a Spy's disguise mask: the face of a class on it, as a disguised Spy's teammates see him
-    if (gameClassOf(e.cls) === "spy") {
-      const row = document.createElement("label");
-      row.className = "spyMaskRow";
-      row.title = "The disguise mask on the Spy's face, showing the class he is disguised as (as his own team sees him)";
-      const name = document.createElement("span");
-      name.textContent = "Mask";
-      const pick = document.createElement("select");
-      pick.append(new Option("None", ""), ...SPY_MASKS.map((c) => new Option(c[0].toUpperCase() + c.slice(1), c)));
-      pick.value = e.spyMask ?? "";
-      pick.onchange = () => {
-        for (const t of entities.filter((x) => x === e || (multi.has(x.id) && gameClassOf(x.cls) === "spy"))) {
-          t.spyMask = pick.value || null;
-          void applyLoadout(t, t.applied);
-        }
-      };
-      row.append(name, pick);
-      condBox.appendChild(row);
     }
   }
 
