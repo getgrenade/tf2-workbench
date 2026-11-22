@@ -15,6 +15,7 @@ import { bodyClass, bodyGroups, hiddenBodyBits, legacyBodyGroups, materialBodyGr
 import { bodyMaskTexture } from "./bodyMasks";
 import { PoseHistory, clonePose, poseToClip, sampleClip, type PoseData } from "./poseRig";
 import type { Rgb } from "./proxies";
+import { sheenFrame } from "./killstreak";
 import { NO_CONDITIONS, anyCondition, materialEffects, type Conditions } from "./conditions";
 import type { SourceMaterials } from "./sourceMaterials";
 
@@ -894,7 +895,9 @@ export class Actor {
         if (!(o instanceof THREE.SkinnedMesh)) return;
         const source = o.userData.source as { data: MaterialData | null; paint: Rgb | null } | undefined;
         if (!source) return;
-        const next = uber ?? this.ctx.mats.material(source.data, undefined, source.paint, fx);
+        const frame = o.userData.sheenFrame as ReturnType<typeof sheenFrame> | undefined;
+        const own = frame && this.sheen ? { ...fx, sheen: { ...this.sheen, ...frame } } : fx;
+        const next = uber ?? this.ctx.mats.material(source.data, undefined, source.paint, own);
         // a body in grey stays grey: what the conditions make of it shows when the grey is taken off
         if (this.gray && o.userData.ownMaterial) { o.userData.ownMaterial = next; return; }
         if (o.material !== next) o.material = next;
@@ -978,6 +981,7 @@ export class Actor {
     this.boneOverride.clear();
     const classIndex = new Map(this.classData.bones.map((b, i) => [b.name.toLowerCase(), i]));
     for (const [index, { data, paint, skin, clip, idle, loop }] of list.entries()) {
+      let weaponFrame: ReturnType<typeof sheenFrame> | undefined;
       const rig = new Rig(data.bones);
       const bones = data.bones.map((info) => {
         const b = new THREE.Bone();
@@ -1010,6 +1014,8 @@ export class Actor {
           const material = this.ctx.mats.material(this.materials.get(path) ?? null, undefined, paint);
           const mesh = this.makeSkinnedMesh(m, material, skeleton, data, this.flexCosmetic);
           mesh.userData.source = { data: this.materials.get(path) ?? null, paint, skins: override ? [override] : m.materials, base: override ?? m.material };
+          // (the held weapon's meshes: a killstreak's sheen sweeps along its length, see setSheen)
+          if (list[index].weapon) mesh.userData.sheenFrame = weaponFrame ??= sheenFrame(data);
           mesh.userData.cosmeticSlot = index + 1; // 1.. in the order of the list; 0 / unset is the class's own mesh
           // (what hiding by hand keys the item's triangles by: the same item keeps them when it is rebuilt)
           mesh.userData.meshData = m;
@@ -1023,8 +1029,16 @@ export class Actor {
     this.posedTime = NaN;
     this.updateCosmetics();
     if (this.heldHidden) this.applyHeldHidden();
-    if (anyCondition(this.conditions)) this.applyConditions();
+    if (anyCondition(this.conditions) || this.sheen) this.applyConditions();
     this.changed = true;
+  }
+
+  /** The sheen of the held weapon's killstreak (null: none): its colour, whether it is an Australium's, and the wait between sweeps. */
+  private sheen: { tint: Rgb; index: number; wait: number } | null = null;
+  setSheen(sheen: { tint: Rgb; index: number; wait: number } | null) {
+    if (JSON.stringify(sheen) === JSON.stringify(this.sheen)) return;
+    this.sheen = sheen;
+    this.applyConditions();
   }
 
   /**

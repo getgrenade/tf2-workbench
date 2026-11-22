@@ -1540,3 +1540,11 @@ body.dndActive.dndRefused * { cursor: no-drop !important; }
 .texVmtText { width: 100%; box-sizing: border-box; min-height: 160px; resize: vertical; font-family: var(--ui-mono); font-size: var(--ui-fs-small); line-height: 1.45; tab-size: 4;
   white-space: pre; background: var(--ui-input); color: var(--fg); border: 1px solid var(--line); border-radius: var(--ui-radius-s); padding: 4px 6px; }
 .texVmtError { color: var(--ui-red); min-height: 0; }
+
+/* the Weapons panel's killstreak (Sheen, Killstreaker, streak), under the slot buttons while a weapon is held */
+.killstreakRow { display: flex; flex-direction: column; gap: 4px; padding: 6px 0; border-bottom: 1px solid var(--line, rgba(255, 255, 255, 0.08)); margin-bottom: 4px; }
+.killstreakRow[hidden] { display: none; }
+.killstreakRow > label:not(.ksHigh) { display: grid; grid-template-columns: 82px 1fr; align-items: center; gap: 6px; }
+.killstreakRow > label > span { opacity: 0.75; }
+.killstreakRow select { min-width: 0; width: 100%; }
+.killstreakRow .ksHigh { display: flex; align-items: center; gap: 6px; cursor: pointer; }

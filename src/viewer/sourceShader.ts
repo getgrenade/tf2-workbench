@@ -33,8 +33,10 @@ varying vec2 vBodyUv;
 varying vec3 vWorldPos;
 varying vec3 vN;
 varying vec4 vT;
+varying vec3 vModelPos;
 void main() {
   vHideW = hideW;
+  vModelPos = position; // (the weapon sheen pass maps its mask in the model's own space)
   vVisDev = visDev;
   vVisDevPos = visDevPos;
   vBodyUv = uv;
@@ -68,6 +70,15 @@ uniform sampler2D tDetail;      // $detail, blend mode 6: the fire layer of a bu
 uniform bool uHasDetail;
 uniform float uDetailScale;
 uniform float uDetailBlend;
+uniform float uSheen;                   // a killstreak weapon's sheen is sweeping now
+uniform vec3 uSheenTint;
+uniform float uSheenIndex;
+uniform float uSheenDir;
+uniform vec2 uSheenScale;
+uniform vec2 uSheenOffset;
+uniform samplerCube tSheenCube;
+uniform sampler2D tSheenMask;
+varying vec3 vModelPos;
 uniform float uGray;                    // plain grey (RGB 115) instead of the texture (the alpha of the texture still cuts the shape out)
 uniform sampler2D tDetailMat;    // $detail of blend mode 0 / 1 / 8, mixed into the base colour
 uniform int uDetailMode;         // -1: none
@@ -367,6 +378,20 @@ ${bodyMaskDiscard}
   else if (uViewMode > 1.5) result = vec3(dot(result, vec3(0.2126, 0.7152, 0.0722)));
   if (!uUnlit) result += studioRimLight(Nv, vWorldPos);
   if (uDecalModulate) { result = mix(vec3(0.5), pow(albedo, vec3(1.0 / 2.2)), baseTex.a); alpha = 1.0; }
+  if (uSheen > 0.5) {
+    // weapon_sheen_pass_ps2x.fxc: a hard reflection of the sheen cubemap (by the mesh's own normal), tinted and scaled by ten, where
+    // the mask's frame lets it through; blended over the weapon (SRC_ALPHA, ONE_MINUS_SRC_ALPHA)
+    vec3 Ns = normalize(vN);
+    vec3 Rs = 2.0 * Ns * dot(Ns, V) - V;
+    vec3 sheenEnv = textureCube(tSheenCube, vec3(Rs.z, Rs.x, Rs.y)).rgb * uSheenTint * 10.0;
+    vec2 st = uSheenDir < 0.5 ? vModelPos.zy : (uSheenDir < 1.5 ? vModelPos.zx : vModelPos.yx);
+    st = (st - uSheenOffset) / uSheenScale;
+    st.y = 1.0 - st.y;
+    vec4 sheenMask = texture2D(tSheenMask, st);
+    vec4 sheen = vec4(sheenEnv * sheenMask.rgb, max(max(sheenEnv.r, sheenEnv.g), sheenEnv.b) * sheenMask.r);
+    if (uSheenIndex > 0.5) sheen *= 1.8;
+    result = mix(result, sheen.rgb, clamp(sheen.a, 0.0, 1.0));
+  }
 
   gl_FragColor = vec4(result, alpha);
   #include <colorspace_fragment>
