@@ -3543,7 +3543,10 @@ export function createViewTab(els: Els) {
     if (base) saveUi(base);
     const copiedPose = copy && base ? base.actor.snapshotCustomPose() : null;
     const pose = copiedPose && base ? { ...copiedPose, bones: base.actor.boneNames, editing: base.actor.isPosing } : undefined;
-    const e = newEntity(v.addActor(), base?.cls ?? CLASSES[0][1], base?.team ?? 0);
+    // a character is a merc: of the selected one's class, unless that is no merc (an NPC, a building, a prop), when it is the first class;
+    // Ctrl copies whatever is selected
+    const merc = base && (copy || CLASSES.some(([, m]) => m === base.cls)) ? base : null;
+    const e = newEntity(v.addActor(), merc?.cls ?? CLASSES[0][1], merc?.team ?? 0);
     e.group = hierarchy().activeGroup() ?? (copy ? base?.group : undefined);
     if (copy && base) e.actor.setScale(base.actor.scale);
     if (copy && base) e.actor.setEyesFollowCamera(base.actor.followsCamera);
@@ -8382,7 +8385,7 @@ export function createViewTab(els: Els) {
           { label: BOSSES.buster.label, run: () => void addBoss("buster") },
           { label: BOSSES.tank.label, run: () => void addBoss("tank") },
           ...(["hatman", "monoculus", "merasmus", "skeleton", "skeletonKing"] as const).map((key, i) => ({ label: BOSSES[key].label, separator: i === 0, run: () => void addBoss(key) })),
-          ...(["saxton", "santaHale", "hellHale"] as const).map((key, i) => ({ label: BOSSES[key].label, separator: i === 0, run: () => void addBoss(key) })),
+          ...(["saxton", "santaHale", "hellHale", "krampus"] as const).map((key, i) => ({ label: BOSSES[key].label, separator: i === 0, run: () => void addBoss(key) })),
         ],
       },
       { label: "Prop…", icon: ICON.prop, hint: "opens the prop browser", run: () => document.dispatchEvent(new CustomEvent("workbench:reveal-panel", { detail: "props" })) },

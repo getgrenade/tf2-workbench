@@ -85,6 +85,8 @@ export const BOSSES: Record<string, Boss> = {
   saxton: { label: "Saxton Hale", model: "vsh/player/saxton_hale", sequence: "stand_MELEE", map: "vsh_nucleus" },
   santaHale: { label: "Santa Hale", model: "vsh/player/santa_hale", sequence: "stand_MELEE", map: "vsh_maul" },
   hellHale: { label: "Hellfire Hale", model: "vsh/player/hell_hale", sequence: "stand_MELEE", map: "vsh_outburst" },
+  // the Smissmas boss of koth_krampus, which packs his model
+  krampus: { label: "Krampus", model: "bots/krampus", sequence: "krampus_idle", map: "koth_krampus" },
 };
 
 /** The boss a prop's `cls` is, if it is one. */
