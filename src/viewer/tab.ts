@@ -88,6 +88,7 @@ import { loadSettings, onSettingsChange, settings, updateSetting } from "../sett
 import { accentHex } from "../theme";
 import { zombieFamily, type Actor } from "./actor";
 import { DISPENSER_MAX_METAL, defaultFx, type BuildingFx } from "./buildingFx";
+import { BOSSES, GIANT_SCALE, ROBOTS, bossOf, robotOf } from "./npcs";
 import { BUILDINGS, buildingCls, buildingLabel, buildingOf, classPath, defaultBuildingSequence, isBuildingCls, type BuildingKind, type BuildingStage, type TeleporterMode } from "./buildings";
 import { bakeClip, blendingTaunts, createAnimUi, newAnimState, type AnimEls, type AnimState } from "./animUi";
 import { createFlexUi, flexGlobalsFor, type FlexEls } from "./flexUi";
@@ -642,10 +643,12 @@ export function createViewTab(els: Els) {
   });
   const eyesFollow = document.getElementById("flexEyesFollow") as HTMLInputElement | null;
   if (eyesFollow) eyesFollow.onchange = () => { selected?.actor.setEyesFollowCamera(eyesFollow.checked); };
-  const gameClassOf = (mdl: string) => CLASSES.find(([, m]) => m === mdl)?.[2] ?? mdl;
+  const gameClassOf = (mdl: string) => robotOf(mdl)?.gameClass ?? CLASSES.find(([, m]) => m === mdl)?.[2] ?? mdl;
   const classLabelOf = (mdl: string) => {
     const building = buildingOf(mdl);
     if (building) return buildingLabel(building);
+    const npc = robotOf(mdl) ?? bossOf(mdl);
+    if (npc) return npc.label;
     // any other model of a path is a prop: it goes by its model's name
     return CLASSES.find(([, m]) => m === mdl)?.[0] ?? (isBuildingCls(mdl) ? propLabel(mdl.split("#")[0]) : "…");
   };
@@ -864,6 +867,28 @@ export function createViewTab(els: Els) {
       // a building wears nothing: its team is its skin
       e.actor.setSkin(e.team);
       applyBuildingFx(e);
+      // a boss has the models the game attaches to it (the Horsemann's axe, the Skeleton King's crown, the tank's tracks)
+      const boss = bossOf(e.cls);
+      if (boss?.attached) {
+        const list: CosmeticSpec[] = [];
+        for (const a of boss.attached) {
+          const path = `models/${a.model}.mdl`;
+          try {
+            let data = models.get(path);
+            if (!data) {
+              data = parsePayload(await loadModel(path));
+              models.set(path, data);
+            }
+            await ensureMaterials(data, 0);
+            const clip = a.loop ? await cosmeticSequenceClip(path, a.loop) : null;
+            list.push({ data, paint: null, skin: 0, clip, loop: !!clip });
+          } catch (err) {
+            console.error(`${path}: ${String(err)}`);
+          }
+        }
+        if (token !== e.loadoutToken || !entities.includes(e)) return;
+        e.actor.setCosmetics(list);
+      }
       return;
     }
     loadout = loadout.filter((x) => !x.hidden); // an item hidden with its eye stays in the loadout but is not worn
@@ -1924,7 +1949,7 @@ export function createViewTab(els: Els) {
       if (left.includes("cig")) void applyUnusuals(e);
     }
     if (e === selected) renderConditions(); // some effects are the toggles of one class
-    if (isBuildingCls(cls)) preset = { ...preset, seqName: preset?.seqName ?? defaultBuildingSequence(cls) };
+    if (isBuildingCls(cls)) preset = { ...preset, seqName: preset?.seqName ?? (defaultBuildingSequence(cls) || bossOf(cls)?.sequence || "") };
     if (!preset && e.actor.inspectOnly) preset = { seqName: "ref" }; // an item opened alone stays in the reference pose on every class
     const token = ++e.showToken;
     const path = classPath(cls);
@@ -1974,6 +1999,7 @@ export function createViewTab(els: Els) {
       const from = preset?.playback?.();
       if (from) Object.assign(e.actor.playback, { time: from.time, speed: from.speed, loopAll: from.loopAll, playing: from.playing });
       applyBuildingFx(e, !preset?.playback);
+      if (bossOf(e.cls)?.attached) void applyLoadout(e, []); // what the game attaches to a boss
       if (e === selected) {
         anim.show(e.anim, e.actor);
         renderBuildingPanel();
@@ -3483,7 +3509,8 @@ export function createViewTab(els: Els) {
         removable: true,
         // a prop is on no team: it wears a skin, and says so only when it has more than one
         ...(skinsOf(e) === 0 ? { team: e.team } : skinsOf(e) > 1 ? { skin: e.team } : {}),
-        icon: buttons.get(e.cls)?.querySelector("img")?.src ?? "",
+        // (a robot has its class's icon)
+        icon: buttons.get(robotOf(e.cls) ? CLASSES.find(([, , g]) => g === gameClassOf(e.cls))?.[1] ?? e.cls : e.cls)?.querySelector("img")?.src ?? "",
         fogged: e.actor.fogged,
         canClearParticles: !!viewer?.hasFrozenWeaponEffects(e.actor),
       })),
@@ -8303,7 +8330,7 @@ export function createViewTab(els: Els) {
   // The Add menu of the outliner: a character, a buildable, a light or a camera
   const ICON = {
     character: "userRound", buildable: "wrench", prop: "box", light: "lightbulb", camera: "video", sun: "sun", point: "circleDot", spot: "flashlight",
-    area: "rectangleHorizontal", folder: "folder", classes: "users",
+    area: "rectangleHorizontal", folder: "folder", classes: "users", npc: "bot",
   } as const satisfies Record<string, IconName>;
   const propsRoot = document.getElementById("propsPane");
   if (propsRoot) createPropPanel(propsRoot, { add: (path, at) => void addProp(path, at) });
@@ -8335,6 +8362,23 @@ export function createViewTab(els: Els) {
           { label: "Dispenser", run: () => void addBuilding("dispenser") },
           { label: "Sentry", run: () => void addBuilding("sentry") },
           { label: "Teleporter", run: () => void addBuilding("teleporter") },
+        ],
+      },
+      {
+        label: "NPC",
+        icon: ICON.npc,
+        children: [
+          {
+            label: "MvM robot",
+            children: Object.entries(ROBOTS).filter(([, r]) => !r.giant).map(([key, r]) => ({ label: r.label.replace(/^Robot /, ""), run: () => void addRobot(key) })),
+          },
+          {
+            label: "MvM giant",
+            children: Object.entries(ROBOTS).filter(([, r]) => r.giant).map(([key, r]) => ({ label: r.label.replace(/^Giant /, ""), run: () => void addRobot(key) })),
+          },
+          { label: BOSSES.buster.label, run: () => void addBoss("buster") },
+          { label: BOSSES.tank.label, run: () => void addBoss("tank") },
+          ...(["hatman", "monoculus", "merasmus", "skeleton", "skeletonKing"] as const).map((key, i) => ({ label: BOSSES[key].label, separator: i === 0, run: () => void addBoss(key) })),
         ],
       },
       { label: "Prop…", icon: ICON.prop, hint: "opens the prop browser", run: () => document.dispatchEvent(new CustomEvent("workbench:reveal-panel", { detail: "props" })) },
@@ -8503,6 +8547,43 @@ export function createViewTab(els: Els) {
     recordAdd("Add building", [{ kind: "character", id: String(e.id) }]);
     await show(e, e.cls);
     v.charactersChanged();
+  }
+
+  /** Puts an MvM robot in the scene: a character of the robot's model (a giant at the miniboss scale), in the selected one's team, with its class's stock primary weapon in hand. */
+  async function addRobot(key: string) {
+    const robot = ROBOTS[key];
+    const v = ensureViewer();
+    const base = selected;
+    if (base) saveUi(base);
+    const team = base && !isBuildingCls(base.cls) ? base.team : 1; // the robots are BLU unless a RED one is wanted
+    const e = newEntity(v.addActor(), key, team);
+    e.group = hierarchy().activeGroup();
+    if (robot.giant) e.actor.setScale(new THREE.Vector3(GIANT_SCALE, GIANT_SCALE, GIANT_SCALE));
+    const db = await loadItemDb().catch(() => null);
+    const slot = MENU_SLOT[robot.gameClass] ?? "primary"; // (the Medic's medigun, the Engineer's wrench, the Spy's knife)
+    if (db) e.held = db.weapons.find((w) => w.baseItem && itemUsableBy(w, robot.gameClass) && slotForClass(w, robot.gameClass) === slot) ?? null;
+    entities.push(e);
+    selected = e;
+    soleSelection(e);
+    v.select(e.actor);
+    restoreUi(e);
+    renderEntities();
+    recordAdd("Add robot", [{ kind: "character", id: String(e.id) }]);
+    await show(e, e.cls);
+    v.charactersChanged();
+  }
+
+  /** Puts a boss in the scene: a prop of its model, at its size and in its skin, with what the game attaches to it. */
+  async function addBoss(key: string) {
+    const boss = BOSSES[key];
+    await addProp(`models/${boss.model}.mdl`);
+    const e = selected;
+    if (!e || e.cls !== boss.model) return;
+    if (boss.scale) {
+      e.actor.setScale(new THREE.Vector3(boss.scale, boss.scale, boss.scale));
+      ensureViewer().placeActorAt(e.actor, e.actor.offset.x, -e.actor.bindMinY * boss.scale, e.actor.offset.z);
+    }
+    if (boss.skin && skinsOf(e) > boss.skin) await setTeam(e, boss.skin);
   }
 
   /** Swaps a building's model for another level or stage, keeping its place, team and animation clock. */
