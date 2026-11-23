@@ -62,12 +62,31 @@ impl Material {
     }
 }
 
+/// The VTF a material names. Whatever extension the name ends with goes, as the game drops it: some of TF2's own VMTs name the
+/// artist's source file (the Frontier Justice's festive texture, shared by the Festive Grenade Launcher, and the Festive Ubersaw's are
+/// `.psd`), which the game reads as the `.vtf` of that name.
 fn vtf_path(name: &str) -> String {
     let mut p = name.replace('\\', "/").to_ascii_lowercase();
-    if let Some(s) = p.strip_suffix(".vtf") {
-        p = s.to_string();
+    if let Some(dot) = p.rfind('.') {
+        if !p[dot..].contains('/') {
+            p.truncate(dot);
+        }
     }
     format!("materials/{}.vtf", p.trim_start_matches('/'))
+}
+
+/// Source's missing texture, the pink and black checkerboard, for a $basetexture the game files don't have.
+fn error_texture() -> vtf::Image {
+    const N: u32 = 64;
+    const CELL: u32 = 16;
+    let mut rgba = Vec::with_capacity((N * N * 4) as usize);
+    for y in 0..N {
+        for x in 0..N {
+            let pink = (x / CELL + y / CELL) % 2 == 0;
+            rgba.extend_from_slice(if pink { &[255, 0, 255, 255] } else { &[0, 0, 0, 255] });
+        }
+    }
+    vtf::Image { width: N, height: N, flags: 0, rgba }
 }
 
 fn load_texture(vpk: &VpkSet, name: &str) -> Result<vtf::Image> {
@@ -193,7 +212,12 @@ fn build(vpk: &VpkSet, vmt_path: &str, vmt: vmt::Vmt) -> Material {
         if slot == "detail" && !matches!(vmt.get("$detailblendmode").and_then(|v| v.trim().parse::<i32>().ok()).unwrap_or(0), 0 | 1 | 8) { continue; }
         match load_texture(vpk, name) {
             Ok(img) => textures.push((slot.to_string(), img)),
-            Err(e) => errors.push(format!("{slot}: {e}")),
+            Err(e) => {
+                if slot == "base" {
+                    textures.push((slot.to_string(), error_texture()));
+                }
+                errors.push(format!("{slot}: {e}"));
+            }
         }
     }
     // `AnimatedTexture` on $basetexture (the Festive lights blink this way): keep every frame as slot `base_f<N>`
@@ -228,4 +252,26 @@ fn build(vpk: &VpkSet, vmt_path: &str, vmt: vmt::Vmt) -> Material {
         }
     }
     Material { path: vmt_path.to_string(), shader: vmt.shader, params: vmt.params, proxies: vmt.proxies, textures, errors }
+}
+
+#[cfg(test)]
+mod texture_name_tests {
+    use super::*;
+
+    #[test]
+    fn a_named_extension_goes() {
+        assert_eq!(vtf_path("models/weapons/c_items/c_frontierjustice_xmas.psd"), "materials/models/weapons/c_items/c_frontierjustice_xmas.vtf");
+        assert_eq!(vtf_path("Models\\Weapons\\c_items\\c_ubersaw_xms.PSD"), "materials/models/weapons/c_items/c_ubersaw_xms.vtf");
+        assert_eq!(vtf_path("models/player/scout.vtf"), "materials/models/player/scout.vtf");
+        assert_eq!(vtf_path("models/player/scout"), "materials/models/player/scout.vtf");
+        assert_eq!(vtf_path("models/v1.5/scout"), "materials/models/v1.5/scout.vtf");
+    }
+
+    #[test]
+    fn the_error_texture_is_the_checkerboard() {
+        let t = error_texture();
+        assert_eq!((t.width, t.height, t.rgba.len()), (64, 64, 64 * 64 * 4));
+        assert_eq!(&t.rgba[0..4], &[255, 0, 255, 255]);
+        assert_eq!(&t.rgba[16 * 4..16 * 4 + 4], &[0, 0, 0, 255]);
+    }
 }
