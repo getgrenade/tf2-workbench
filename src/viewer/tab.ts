@@ -14,7 +14,7 @@ import { searchPaths, importSourceDir, readItemSession, readPropSession, saveIte
 import { FILE_DROP_EVENT, type FileDropDetail } from "../fileDrop";
 import { parseTextureFrames } from "./sourceMaterials";
 import { getWeaponProfile, importEffectZip, removeCustomEffect, type WeaponProfile, type UnusualEffectInfo } from "../api";
-import { lipSync, loadScene, phonemeClasses, scenePlaying, voiceLines, type VoiceLine } from "../api";
+import { lipSync, loadScene, npcVoiceLines, phonemeClasses, scenePlaying, voiceLines, type VoiceLine } from "../api";
 import { closeVoiceLines, openVoiceLines } from "./voiceLinesUi";
 import { FaceDriver, type FaceLine } from "./faceDriver";
 import type { FlexGlobals } from "./flex";
@@ -4970,10 +4970,17 @@ export function createViewTab(els: Els) {
       void refreshFace(prev);
     }
     const e = selected;
-    if (!line || !e || isBuildingCls(e.cls)) return 0;
-    const scene = await loadSceneCached(line.scene);
+    if (!line || !e || (isBuildingCls(e.cls) && !bossOf(e.cls))) return 0;
+    // an NPC's line has no scene: its sound, said from the start
+    const scene = line.scene
+      ? await loadSceneCached(line.scene)
+      : { path: "", events: [], ramp: [], expressions: {}, sounds: { [line.sound.name.toLowerCase()]: line.sound } };
     if (!scene) return 0;
-    const speaks = scene.events.filter((ev) => ev.kind === "speak").map((ev) => ({ start: ev.start, sound: scene.sounds[ev.params.toLowerCase()] })).filter((s) => s.sound?.waves.length);
+    const speaks = line.scene
+      ? scene.events.filter((ev) => ev.kind === "speak").map((ev) => ({ start: ev.start, sound: scene.sounds[ev.params.toLowerCase()] })).filter((s) => s.sound?.waves.length)
+      : [{ start: 0, sound: line.sound }];
+    // a robot says the line's robot waves (the scene names the class's sound)
+    if (robotOf(e.cls)) for (const s of speaks) if (s.sound.name.toLowerCase() === line.sound.name.toLowerCase()) s.sound = line.sound;
     const [classes, lines] = await Promise.all([
       mouthShapesOf(e),
       Promise.all(speaks.map(async (s) => {
@@ -5009,8 +5016,26 @@ export function createViewTab(els: Els) {
 
   els.face.lines.onclick = () =>
     openVoiceLines({
-      character: () => (selected && !isBuildingCls(selected.cls) ? { label: classLabelOf(selected.cls), game: gameClassOf(selected.cls) } : null),
-      lines: (game) => voiceLines(game),
+      // (the key the lines are asked for with: a class, a robot's class and voice, or an NPC)
+      character: () => {
+        const e = selected;
+        if (!e) return null;
+        const boss = bossOf(e.cls);
+        const bossKey = boss && Object.keys(BOSSES).find((k) => BOSSES[k] === boss);
+        if (bossKey) return BOSSES[bossKey].voice ? { label: boss.label, game: `npc:${bossKey}` } : null;
+        if (isBuildingCls(e.cls)) return null;
+        const robot = robotOf(e.cls);
+        return { label: classLabelOf(e.cls), game: robot ? `${robot.gameClass}|${robot.giant ? "mght" : "norm"}` : gameClassOf(e.cls) };
+      },
+      lines: async (game) => {
+        if (game.startsWith("npc:")) {
+          const boss = BOSSES[game.slice(4)];
+          if (boss.map) await mountMap(boss.map);
+          return boss.voice ? npcVoiceLines(boss.voice) : [];
+        }
+        const [cls, robot] = game.split("|") as [string, "norm" | "mght" | undefined];
+        return voiceLines(cls, robot);
+      },
       play: playVoiceLine,
       seek: (time, playing) => {
         voiceClock = { time, playing, since: performance.now() };

@@ -149,7 +149,10 @@ fn response_label(name: &str, class: &str) -> String {
 
 /// The voice lines of a class, from its response rules (`scripts/talker/<class>.txt` and `<class>_auto.txt`): each response's scenes,
 /// with the sound the scene speaks and its waves, grouped by the response (what the line is for), in the rules' order.
-pub fn voice_lines(state: &AppState, class: &str) -> Result<Value, String> {
+/// With `robot` ("norm" for a robot, "mght" for a giant), the waves are the MvM robot's own: the game plays a robot's line from
+/// `vo/mvm/<norm|mght>/` (tf_player.cpp), with `_mvm_` (a giant's `_mvm_m_`) after the class's name. A giant of a class with no giant voice
+/// speaks with the robot's; a line with no robot version is left out, as the game says nothing then.
+pub fn voice_lines(state: &AppState, class: &str, robot: Option<&str>) -> Result<Value, String> {
     let v = state.voice()?;
     let vpk = state.vpk()?;
     let class = if class == "demo" { "demoman" } else { class }.to_ascii_lowercase();
@@ -179,8 +182,61 @@ pub fn voice_lines(state: &AppState, class: &str) -> Result<Value, String> {
             let Some(speak) = scene.all_events().find(|e| e.kind == choreo::SPEAK) else { continue };
             let Some(entry) = v.sounds.get(&speak.params.to_ascii_lowercase()) else { continue };
             let end = scene.all_events().map(|e| e.end).fold(0.0f32, f32::max);
-            out.push(json!({ "group": group, "scene": path, "sound": { "name": entry.name, "waves": entry.waves }, "duration": end }));
+            let waves: Vec<String> = match robot {
+                Some(kind) => entry.waves.iter().filter_map(|w| robot_wave(&vpk, w, &class, kind)).collect(),
+                None => entry.waves.clone(),
+            };
+            if waves.is_empty() {
+                continue;
+            }
+            out.push(json!({ "group": group, "scene": path, "sound": { "name": entry.name, "waves": waves }, "duration": end }));
         }
+    }
+    Ok(Value::Array(out))
+}
+
+/// A class's wave as an MvM robot says it (`vo/taunts/heavy_taunts01.mp3` -> `vo/mvm/norm/taunts/heavy_mvm_taunts01.mp3`), if the game has
+/// it: a giant's (`mght`, `_mvm_m_`), else the robot's.
+fn robot_wave(vpk: &source_formats::VpkSet, wave: &str, class: &str, kind: &str) -> Option<String> {
+    let w = soundscript::clean_wave(wave);
+    let rest = w.strip_prefix("vo/")?;
+    let (sub, file) = match rest.strip_prefix("taunts/") { Some(f) => ("taunts/", f), None => ("", rest) };
+    let line = file.strip_prefix(class)?.strip_prefix('_')?;
+    let kinds: &[(&str, &str)] = if kind == "mght" { &[("mght", "_mvm_m_"), ("norm", "_mvm_")] } else { &[("norm", "_mvm_")] };
+    kinds.iter().map(|(k, infix)| format!("vo/mvm/{k}/{sub}{class}{infix}{line}")).find(|p| vpk.contains(&format!("sound/{p}")))
+}
+
+/// An NPC's lines, one per wave: the sounds of its sound script entries whose names start with one of `sounds` (and contain none of
+/// `skip`), grouped by the entry; and the sound files under the `folders` (paths from `sound/`, a map's packed files included), grouped by
+/// their name without its number (`kill_generic03.mp3`: "kill generic").
+pub fn npc_voice_lines(state: &AppState, sounds: &[String], skip: &[String], folders: &[String]) -> Result<Value, String> {
+    let v = state.voice()?;
+    let vpk = state.vpk()?;
+    let mut out = Vec::new();
+    let prefixes: Vec<String> = sounds.iter().map(|s| s.to_ascii_lowercase()).collect();
+    let skip: Vec<String> = skip.iter().map(|s| s.to_ascii_lowercase()).collect();
+    for (key, entry) in &v.sounds {
+        if !prefixes.iter().any(|p| key.starts_with(p.as_str())) || skip.iter().any(|s| key.contains(s.as_str())) {
+            continue;
+        }
+        let group = entry.name.split('.').skip(1).collect::<Vec<_>>().join(".");
+        for wave in &entry.waves {
+            out.push(json!({ "group": if group.is_empty() { entry.name.clone() } else { group.clone() }, "scene": "", "sound": { "name": entry.name, "waves": [wave] }, "duration": 0 }));
+        }
+    }
+    let mut files: Vec<String> = Vec::new();
+    for folder in folders {
+        let prefix = format!("sound/{}", folder.trim_start_matches('/').to_ascii_lowercase());
+        files.extend(vpk.files_with_prefix(&prefix).into_iter().filter(|p| p.ends_with(".mp3") || p.ends_with(".wav")));
+    }
+    files.sort();
+    files.dedup();
+    for path in files {
+        let wave = path.trim_start_matches("sound/").to_string();
+        let stem = wave.rsplit('/').next().unwrap_or(&wave);
+        let stem = stem.rsplit_once('.').map_or(stem, |(s, _)| s);
+        let group = stem.trim_end_matches(|c: char| c.is_ascii_digit()).trim_end_matches('_').replace('_', " ");
+        out.push(json!({ "group": group, "scene": "", "sound": { "name": stem, "waves": [wave] }, "duration": 0 }));
     }
     Ok(Value::Array(out))
 }

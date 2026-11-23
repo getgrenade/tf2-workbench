@@ -62,31 +62,37 @@ export interface Boss {
   map?: string;
   /** It floats where it is put (MONOCULUS) rather than standing on its origin, which the game keeps on the ground. */
   floats?: boolean;
+  /**
+   * What it says, for the voice lines: the sound script entries whose names start with `sounds` (less those with `skip` in them), and the
+   * sound files under `folders` (from sound/; a map's packed files too).
+   */
+  voice?: { sounds?: string[]; skip?: string[]; folders?: string[] };
 }
 
 export const BOSSES: Record<string, Boss> = {
   // headless_hatman.cpp: the axe follows the Horsemann (the mallet in the Doomsday scenario); headless_hatman_attack.cpp stands in ITEM1
-  hatman: { label: "Horseless Headless Horsemann", model: "bots/headless_hatman", sequence: "stand_item1", attached: [{ model: "weapons/c_models/c_bigaxe/c_bigaxe" }] },
-  monoculus: { label: "MONOCULUS", model: "props_halloween/halloween_demoeye", sequence: "general_noise", floats: true },
-  merasmus: { label: "Merasmus", model: "bots/merasmus/merasmus", sequence: "stand_melee" },
+  hatman: { label: "Horseless Headless Horsemann", model: "bots/headless_hatman", sequence: "stand_item1", attached: [{ model: "weapons/c_models/c_bigaxe/c_bigaxe" }], voice: { sounds: ["Halloween.HeadlessBossAlert", "Halloween.HeadlessBossAttack", "Halloween.HeadlessBossBoo", "Halloween.HeadlessBossDeath", "Halloween.HeadlessBossDying", "Halloween.HeadlessBossLaugh", "Halloween.HeadlessBossPain", "Halloween.HeadlessBossSpawn"] } },
+  monoculus: { label: "MONOCULUS", model: "props_halloween/halloween_demoeye", sequence: "general_noise", floats: true, voice: { sounds: ["Halloween.EyeballBoss", "Halloween.MonoculusBoss"] } },
+  merasmus: { label: "Merasmus", model: "bots/merasmus/merasmus", sequence: "stand_melee", voice: { sounds: ["Halloween.Merasmus", "Merasmus.RoundBegins"], skip: ["merasmus_", "merasmusloop"] } },
   // zombie.cpp: a skeleton on no team wears the third skin; the king is the boss model at twice the size, with a crown on bip_head
-  skeleton: { label: "Skeleton", model: "bots/skeleton_sniper/skeleton_sniper", sequence: "stand_melee", skin: 2 },
-  skeletonKing: { label: "Skeleton King", model: "bots/skeleton_sniper_boss/skeleton_sniper_boss", sequence: "stand_melee", skin: 2, scale: 2, attached: [{ model: "player/items/demo/crown" }] },
-  buster: { label: "Sentry Buster", model: "bots/demo/bot_sentry_buster", sequence: "stand_item1" },
+  skeleton: { label: "Skeleton", model: "bots/skeleton_sniper/skeleton_sniper", sequence: "stand_melee", skin: 2, voice: { sounds: ["Halloween.skeleton_laugh_small", "Halloween.skeleton_laugh_medium"] } },
+  skeletonKing: { label: "Skeleton King", model: "bots/skeleton_sniper_boss/skeleton_sniper_boss", sequence: "stand_melee", skin: 2, scale: 2, attached: [{ model: "player/items/demo/crown" }], voice: { sounds: ["Halloween.skeleton_laugh_giant"] } },
+  buster: { label: "Sentry Buster", model: "bots/demo/bot_sentry_buster", sequence: "stand_item1", voice: { sounds: ["MVM.SentryBuster"] } },
   // tf_tank_boss.cpp: the tracks (playing "forward") and the bomb follow the tank, which plays "movement"
   tank: {
     label: "Tank",
     model: "bots/boss_bot/boss_tank",
     sequence: "movement",
+    voice: { sounds: ["MVM.TankStart", "MVM.TankDeploy", "MVM.TankPing", "MVM.TankSmash", "MVM.TankExplodes", "MVM.TankEnd", "MVM.TankEngineLoop"] },
     attached: [{ model: "bots/boss_bot/tank_track_l", loop: "forward" }, { model: "bots/boss_bot/tank_track_r", loop: "forward" }, { model: "bots/boss_bot/bomb_mechanism" }],
   },
   // Versus Saxton Hale: the VScript game mode gives its Hale a model the maps pack (with its animations), not the game's archives; the
   // holiday maps have their own Hales
-  saxton: { label: "Saxton Hale", model: "vsh/player/saxton_hale", sequence: "stand_MELEE", map: "vsh_nucleus" },
-  santaHale: { label: "Santa Hale", model: "vsh/player/santa_hale", sequence: "stand_MELEE", map: "vsh_maul" },
-  hellHale: { label: "Hellfire Hale", model: "vsh/player/hell_hale", sequence: "stand_MELEE", map: "vsh_outburst" },
+  saxton: { label: "Saxton Hale", model: "vsh/player/saxton_hale", sequence: "stand_MELEE", map: "vsh_nucleus", voice: { folders: ["mvm/saxton_hale_ns_2025_1/"] } },
+  santaHale: { label: "Santa Hale", model: "vsh/player/santa_hale", sequence: "stand_MELEE", map: "vsh_maul", voice: { folders: ["mvm/saxton_hale_ml_2025_1/"] } },
+  hellHale: { label: "Hellfire Hale", model: "vsh/player/hell_hale", sequence: "stand_MELEE", map: "vsh_outburst", voice: { folders: ["mvm/hellfire_hale_ob_2025_1/", "mvm/hellfire_hale_new_ob_2025_1/"] } },
   // the Smissmas boss of koth_krampus, which packs his model
-  krampus: { label: "Krampus", model: "bots/krampus", sequence: "krampus_idle", map: "koth_krampus" },
+  krampus: { label: "Krampus", model: "bots/krampus", sequence: "krampus_idle", map: "koth_krampus", voice: { folders: ["mvm/krampus"] } },
 };
 
 /** The boss a prop's `cls` is, if it is one. */

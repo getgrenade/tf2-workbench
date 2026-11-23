@@ -569,6 +569,19 @@ impl VpkSet {
         Ok(())
     }
 
+    /// The paths (lower case) of the game's files and of the mounted maps' packed files that start with `prefix`, sorted.
+    pub fn files_with_prefix(&self, prefix: &str) -> Vec<String> {
+        let prefix = Self::norm(prefix);
+        let start = self.sorted.partition_point(|p| p.as_str() < prefix.as_str());
+        let mut out: Vec<String> = self.sorted[start..].iter().take_while(|p| p.starts_with(&prefix)).cloned().collect();
+        for (_, zip) in self.maps.read().unwrap().iter() {
+            out.extend(zip.paths().filter(|p| p.starts_with(&prefix)).map(str::to_string));
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
     /// A file of a mounted map's pakfile.
     fn map_read(&self, key: &str) -> Option<Vec<u8>> {
         self.maps.read().unwrap().iter().find(|(_, z)| z.contains(key)).and_then(|(_, z)| z.read(key))

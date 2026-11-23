@@ -644,8 +644,14 @@ pub async fn scene_playing(state: State<'_, AppState>, paths: Vec<String>, seque
 
 /// A class's voice lines, from its response rules.
 #[tauri::command]
-pub async fn voice_lines(state: State<'_, AppState>, class: String) -> Result<serde_json::Value, String> {
-    workbench_core::voice::voice_lines(&state, &class)
+pub async fn voice_lines(state: State<'_, AppState>, class: String, robot: Option<String>) -> Result<serde_json::Value, String> {
+    workbench_core::voice::voice_lines(&state, &class, robot.as_deref())
+}
+
+/// An NPC's lines: the waves of the sound script entries named with `sounds` (less those with `skip`) and the sound files under `folders`.
+#[tauri::command]
+pub async fn npc_voice_lines(state: State<'_, AppState>, sounds: Vec<String>, skip: Vec<String>, folders: Vec<String>) -> Result<serde_json::Value, String> {
+    workbench_core::voice::npc_voice_lines(&state, &sounds, &skip, &folders)
 }
 
 /// A class's phoneme mouth shapes (two sets, `plain` and `hwm`: phoneme code -> controller weights).

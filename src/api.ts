@@ -165,8 +165,11 @@ export interface VoiceLine {
   /** Seconds. */
   duration: number;
 }
-/** A class's voice lines, from its response rules. */
-export const voiceLines = (className: string) => invoke<VoiceLine[]>("voice_lines", { class: className });
+/** A class's voice lines, from its response rules. With `robot` ("norm", "mght" for a giant), the MvM robot's own waves of the lines (and only the lines the robots have). */
+export const voiceLines = (className: string, robot?: "norm" | "mght") => invoke<VoiceLine[]>("voice_lines", { class: className, robot: robot ?? null });
+/** An NPC's lines, one per wave (no scene): its sound script entries and the sound files under its folders (a map's packed ones too). */
+export const npcVoiceLines = (voice: { sounds?: string[]; skip?: string[]; folders?: string[] }) =>
+  invoke<VoiceLine[]>("npc_voice_lines", { sounds: voice.sounds ?? [], skip: voice.skip ?? [], folders: voice.folders ?? [] });
 /** The lip sync of a wave (the game's phoneme data for its voice lines), or null. */
 export const lipSync = (wave: string) => invoke<import("./viewer/faceScene").LipSync | null>("lip_sync", { wave });
 /** A sound file's bytes (from `sound/`). */

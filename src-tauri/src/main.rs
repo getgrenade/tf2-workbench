@@ -54,6 +54,7 @@ fn main() {
             commands::load_scene,
             commands::scene_playing,
             commands::voice_lines,
+            commands::npc_voice_lines,
             commands::phoneme_classes,
             commands::lip_sync,
             commands::read_sound,
