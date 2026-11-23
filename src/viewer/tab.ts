@@ -130,6 +130,9 @@ const ROW_BEHIND = 90;
 const ALL_CLASSES_ORDER = ["pyro", "engineer", "spy", "heavy", "sniper", "scout", "soldier", "demo", "medic"];
 
 /** Label, model file name under models/player, and the class name items_game.txt uses. */
+/** The model a character is drawn with: a merc's HWM model when it is set to (see Entity.hwm), else its class's or the building's or prop's. */
+const modelPath = (e: { cls: string; hwm?: boolean }, cls = e.cls) => (e.hwm && CLASSES.some(([, m]) => m === cls) ? `models/player/hwm/${cls}.mdl` : classPath(cls));
+
 const CLASSES: [label: string, mdl: string, gameClass: string][] = [
   ["Soldier", "soldier", "soldier"],
   ["Scout", "scout", "scout"],
@@ -288,6 +291,8 @@ interface Entity {
   hidden: boolean;
   /** Model name under models/player ("soldier"). */
   cls: string;
+  /** A merc drawn with its HWM model (models/player/hwm: the high-detail head, with more face flexes), not the game's own. */
+  hwm?: boolean;
   /** Team skin family: 0 RED, 1 BLU. */
   team: number;
   /** The cosmetics browser's state (the full loadout, including items the class cannot wear right now). */
@@ -563,7 +568,7 @@ export function createViewTab(els: Els) {
     },
     selection: () => {
       const e = selected;
-      return e ? { cls: e.cls, team: e.team, lod: e.lod, model: models.get(classPath(e.cls)) ?? null } : null;
+      return e ? { cls: e.cls, team: e.team, lod: e.lod, model: models.get(modelPath(e)) ?? null } : null;
     },
     classes: () => CLASSES.map(([label, mdl]) => ({ id: mdl, label, icon: buttons.get(mdl)?.querySelector("img")?.src ?? "" })),
     selectClass: (cls) => pick(cls),
@@ -966,7 +971,7 @@ export function createViewTab(els: Els) {
     const merged = { ...groups, ...Object.fromEntries(e.bodyManual) };
     // a Voodoo-Cursed soul puts the class model in its zombie skin: its materials load before the skin changes
     e.zombie = everything.some(({ item }) => item.skinOverride);
-    const classData = models.get(classPath(e.cls)); // (the model's name: the Demoman's is demo.mdl)
+    const classData = models.get(modelPath(e)); // (the model's name: the Demoman's is demo.mdl)
     if (classData) await ensureClassMaterials(e, classData);
     await ensureGroupMaterials(e, merged);
     if (token !== e.loadoutToken || !entities.includes(e)) return; // a newer loadout or class superseded this one
@@ -988,13 +993,13 @@ export function createViewTab(els: Els) {
     if (e === selected) refreshTextures();
     if (e === selected) renderJiggles();
     if (imported) {
-      const target = classPath(e.cls);
+      const target = modelPath(e);
       if (e.anim.modelPath !== imported.animation || e.anim.targetPath !== target) {
         await anim.attach(e.actor, e.anim, imported.animation, { seqName: imported.sequence }, target);
       }
       if (token === e.loadoutToken && e === selected) anim.show(e.anim, e.actor);
     } else if (e.anim.targetPath) {
-      await anim.attach(e.actor, e.anim, classPath(e.cls));
+      await anim.attach(e.actor, e.anim, modelPath(e));
       if (token === e.loadoutToken) playWeaponAnimation(e, weapon);
     }
     if (token === e.loadoutToken) await applyUnusuals(e);
@@ -1145,8 +1150,29 @@ export function createViewTab(els: Els) {
     buttons.set(mdl, b);
   }
 
+  // HWM model: the merc's high-detail head (models/player/hwm, made for SFM), for the selected merc
+  const hwmToggle = document.createElement("button");
+  hwmToggle.id = "hwmModel";
+  hwmToggle.className = "hwmToggle";
+  hwmToggle.textContent = "HWM model";
+  hwmToggle.title = "Draw this merc with its HWM model (models/player/hwm): the high-detail head with more face flexes, made for SFM";
+  hwmToggle.setAttribute("aria-pressed", "false");
+  els.classes.after(hwmToggle);
+  hwmToggle.onclick = () => {
+    const e = selected;
+    if (!e || !CLASSES.some(([, m]) => m === e.cls)) return;
+    stopPlay();
+    e.hwm = !e.hwm;
+    markSelected();
+    void show(e, e.cls, { seq: e.anim.seq, seqName: e.anim.seqName, encoded: e.anim.encoded.slice(), playback: () => e.actor.playback });
+  };
+
   function markSelected() {
     for (const [mdl, b] of buttons) b.classList.toggle("on", mdl === selected?.cls);
+    const merc = !!selected && CLASSES.some(([, m]) => m === selected!.cls);
+    hwmToggle.hidden = !merc;
+    hwmToggle.classList.toggle("on", merc && !!selected!.hwm);
+    hwmToggle.setAttribute("aria-pressed", String(merc && !!selected!.hwm));
   }
 
   function pick(mdl: string) {
@@ -1223,7 +1249,7 @@ export function createViewTab(els: Els) {
 
   /** Loads the materials of the class models that body groups switch on (a character loads those of the default models only). */
   async function ensureGroupMaterials(e: Entity, groups: Record<string, number>) {
-    const data = models.get(classPath(e.cls));
+    const data = models.get(modelPath(e));
     if (!data) return;
     const wanted = new Set<string>();
     for (const bp of data.bodyParts) {
@@ -1927,7 +1953,7 @@ export function createViewTab(els: Els) {
     if (isBuildingCls(cls)) preset = { ...preset, seqName: preset?.seqName ?? defaultBuildingSequence(cls) };
     if (!preset && e.actor.inspectOnly) preset = { seqName: "ref" }; // an item opened alone stays in the reference pose on every class
     const token = ++e.showToken;
-    const path = classPath(cls);
+    const path = modelPath(e, cls);
     let data = models.get(path);
     if (!data) {
       if (e === selected) els.info.textContent = `Loading ${path}…`;
@@ -2059,7 +2085,7 @@ export function createViewTab(els: Els) {
     if (!bodyBox) return;
     bodyBox.replaceChildren();
     const e = selected;
-    const data = e ? models.get(classPath(e.cls)) : null;
+    const data = e ? models.get(modelPath(e)) : null;
     const parts = new Map((data?.bodyParts ?? []).filter((bp) => bp.models.length > 1).map((bp) => [bp.name.toLowerCase(), bp] as const));
     const groups = e?.actor.bodyGroups ?? [];
     if (bodyReset) bodyReset.disabled = !e || e.bodyManual.size === 0;
@@ -2367,7 +2393,7 @@ export function createViewTab(els: Els) {
 
   /** Draws the class of a character at its LOD (the cosmetics follow through applyLoadout). */
   async function applyClassLod(e: Entity) {
-    const path = classPath(e.cls);
+    const path = modelPath(e);
     const lod = e.lod;
     if (lod <= 0) { e.actor.setClassLod(null); if (e === selected) renderLod(); return; }
     try {
@@ -2396,7 +2422,7 @@ export function createViewTab(els: Els) {
     if (!lodBox) return;
     lodBox.replaceChildren();
     const e = selected;
-    const base = e ? models.get(classPath(e.cls)) : null;
+    const base = e ? models.get(modelPath(e)) : null;
     if (!e || !base) { lodBox.hidden = true; return; }
     const count = Math.max(base.lodCount, compilerOn ? 3 : 1);
     lodBox.hidden = count < 2;
@@ -2583,7 +2609,7 @@ export function createViewTab(els: Els) {
       };
       // the character itself (its skin of the team it is on, or its zombie skin)
       // (by the character's own class name: the Demoman's model is demo.mdl, not the game class's demoman.mdl)
-      const classData = models.get(classPath(e.cls));
+      const classData = models.get(modelPath(e));
       if (classData) {
         const skin = e.zombie ? zombieFamily(classData.skinCount, e.team) ?? e.team : e.team;
         add(`${e.name ?? cls[0].toUpperCase() + cls.slice(1)} (character)`, classData, (m) => m.materials[skin] ?? m.material, (p) => materials.get(p), "character");
@@ -2651,7 +2677,7 @@ export function createViewTab(els: Els) {
     bodyPicker?.sync();
     itemsUi.load(e.items);
     weapons.load(e.held);
-    flex.restore(e.flex, models.get(classPath(e.cls)) ?? null);
+    flex.restore(e.flex, models.get(modelPath(e)) ?? null);
     e.heldFlex = undefined;
     e.face?.invalidate(); // a paused scene face is shown on the sliders again
     if (eyesFollow) eyesFollow.checked = e.actor.followsCamera;
@@ -3516,6 +3542,7 @@ export function createViewTab(els: Els) {
     const e = newEntity(v.addActor(), base?.cls ?? CLASSES[0][1], base?.team ?? 0);
     e.group = hierarchy().activeGroup() ?? (copy ? base?.group : undefined);
     if (copy && base) e.actor.setScale(base.actor.scale);
+    if (base?.hwm && e.cls === base.cls) e.hwm = true; // (a new merc of the selected one's class is drawn the same)
     if (copy && base) e.actor.setEyesFollowCamera(base.actor.followsCamera);
     if (copy && base && inPlace) v.copyPlacement(base.actor, e.actor);
     // Ctrl + Add: a copy with the same cosmetics, paints, styles, weapon, expression and animation
@@ -4494,7 +4521,7 @@ export function createViewTab(els: Els) {
       if (data) for (const t of [0, 1]) await ensureMaterials(data, skinOf(t));
     }
     // the character and the rest of what it wears are drawn in the cell's team too: both skins' materials are there
-    const classData = models.get(classPath(e.cls));
+    const classData = models.get(modelPath(e));
     if (classData) for (const t of [0, 1]) await ensureMaterials(classData, t);
     for (const w of e.applied) {
       for (const path of [itemModelFor(w.item, gameClassOf(e.cls), w.style), ...(w.item.extraModels ?? [])]) {
@@ -4637,7 +4664,7 @@ export function createViewTab(els: Els) {
     e.flex = values;
     e.heldFlex = undefined;
     e.rolledFlex = values.size > 0;
-    if (e === selected) flex.restore(values, models.get(classPath(e.cls)) ?? null);
+    if (e === selected) flex.restore(values, models.get(modelPath(e)) ?? null);
     e.actor.setFlexControllers(flexBase(e));
     e.face?.invalidate();
   }
@@ -4663,6 +4690,7 @@ export function createViewTab(els: Els) {
     while (extras.length > s.copies - 1) removeEntity(extras.pop()!);
     while (extras.length < s.copies - 1) {
       const e = newEntity(v.addActor(), base.cls, base.team);
+      e.hwm = base.hwm;
       e.group = base.group;
       e.actor.setScale(base.actor.scale);
       e.held = base.held;
@@ -4763,8 +4791,8 @@ export function createViewTab(els: Els) {
   };
   const phonemeCache = new Map<string, Promise<Partial<Record<"plain" | "hwm", PhonemeClasses>> | null>>();
   /** The character's own controller values (the sliders). */
-  const flexBase = (e: Entity) => flexGlobalsFor(models.get(classPath(e.cls)) ?? null, e === selected ? flex.state() : e.flex);
-  const controllersOf = (e: Entity) => new Set((models.get(classPath(e.cls))?.flexControllers ?? []).map((c) => c.name.toLowerCase()));
+  const flexBase = (e: Entity) => flexGlobalsFor(models.get(modelPath(e)) ?? null, e === selected ? flex.state() : e.flex);
+  const controllersOf = (e: Entity) => new Set((models.get(modelPath(e))?.flexControllers ?? []).map((c) => c.name.toLowerCase()));
   /** The mouth shapes for a character: of the class's two sets, the one that drives the controllers its model has. */
   async function mouthShapesOf(e: Entity): Promise<PhonemeClasses | null> {
     const game = gameClassOf(e.cls);
@@ -4782,7 +4810,7 @@ export function createViewTab(els: Els) {
 
   /** Paused, the sliders show the face the scene gives (so it can be edited and reset); null puts the character's own values back. */
   function showFace(e: Entity, values: FlexGlobals | null) {
-    const data = models.get(classPath(e.cls)) ?? null;
+    const data = models.get(modelPath(e)) ?? null;
     if (!values) {
       if (e === selected && e.heldFlex) flex.restore(e.heldFlex, data);
       e.heldFlex = undefined;
@@ -4915,7 +4943,7 @@ export function createViewTab(els: Els) {
     e.flex = values;
     e.heldFlex = undefined;
     e.face.release();
-    flex.restore(values, models.get(classPath(e.cls)) ?? null);
+    flex.restore(values, models.get(modelPath(e)) ?? null);
   };
 
 
@@ -4991,7 +5019,7 @@ export function createViewTab(els: Els) {
         e.flex = values;
         e.heldFlex = undefined;
         e.face.release();
-        if (e === selected) flex.restore(values, models.get(classPath(e.cls)) ?? null);
+        if (e === selected) flex.restore(values, models.get(modelPath(e)) ?? null);
       },
     });
 
@@ -5230,7 +5258,7 @@ export function createViewTab(els: Els) {
       // the team: the class's own skin now, the cosmetics' with the loadout below
       e.team = team;
       markTeams();
-      const data = models.get(classPath(e.cls));
+      const data = models.get(modelPath(e));
       if (data) await ensureClassMaterials(e, data);
     }
     e.items = { loadout, activeId: loadout.at(-1)?.item.id ?? null };
@@ -5578,7 +5606,7 @@ export function createViewTab(els: Els) {
       e.flex = new Map(Object.entries(spec.flex ?? {}));
       e.heldFlex = undefined;
       e.rolledFlex = false;
-      if (e === selected) flex.restore(e.flex, models.get(classPath(e.cls)) ?? null);
+      if (e === selected) flex.restore(e.flex, models.get(modelPath(e)) ?? null);
       e.actor.setFlexControllers(flexBase(e));
       promo().dressed.set(spec.role, dress);
     }
@@ -6626,7 +6654,7 @@ export function createViewTab(els: Els) {
     setPose: (spec, id, at) => inPromoScene(async () => { await poseShot(spec, id, at); }),
     bodygroups: (spec) => inPromoScene(async () => {
       const e = await dressForShot(spec);
-      const parts = models.get(classPath(e.cls))?.bodyParts.filter((bp) => bp.models.length > 1) ?? [];
+      const parts = models.get(modelPath(e))?.bodyParts.filter((bp) => bp.models.length > 1) ?? [];
       return parts.map((bp) => {
         const key = bp.name.toLowerCase();
         const byItems = e.bodyItems[key] ?? e.bodyItems[bp.name];
@@ -7148,6 +7176,7 @@ export function createViewTab(els: Els) {
       const pose = reaction ? reaction.pose : e.actor.snapshotCustomPose();
       return {
         cls: e.cls,
+        ...(e.hwm ? { hwm: true } : {}),
         team: e.team,
         ...(e.name ? { name: e.name } : {}),
         ...(e.group ? { group: e.group } : {}),
@@ -7210,6 +7239,7 @@ export function createViewTab(els: Els) {
   function buildEntity(s: SceneEntity, byId: Map<number, ItemInfo>, paints: Map<number, PaintInfo>, id?: number): Entity {
     const v = ensureViewer();
     const e = newEntity(v.addActor(), s.cls, s.team, id);
+      e.hwm = s.hwm === true;
       e.name = s.name;
       e.group = s.group;
       e.hidden = s.hidden === true;
@@ -7305,7 +7335,7 @@ export function createViewTab(els: Els) {
 
   /** A scene's saved pose as a pose of this character's skeleton (bones matched by name). */
   function posedFromScene(e: Entity, p: { bones: string[]; pos: Float32Array; quat: Float32Array; scale?: Float32Array }): PoseData | undefined {
-    const data = models.get(classPath(e.cls));
+    const data = models.get(modelPath(e));
     if (!data) return undefined;
     const names = data.bones.map((b) => b.name);
     const blank = e.actor.snapshotPose() ?? e.actor.bindPose();
@@ -8970,7 +9000,7 @@ export function createViewTab(els: Els) {
   /** How many skins a prop has (the skin families of its model); 0 for what is not a prop (a character or a building: they have a team). */
   function skinsOf(e: Entity): number {
     if (!e.actor.sourceBind) return 0;
-    return models.get(classPath(e.cls))?.skinCount ?? 1;
+    return models.get(modelPath(e))?.skinCount ?? 1;
   }
   /** The team buttons of a character, or the skin buttons of a prop that has several skins (a prop with one has neither). */
   function syncSkins() {
@@ -9006,7 +9036,7 @@ export function createViewTab(els: Els) {
     markTeams();
     renderEntities();
     if (compilerOn && e === selected) compiler.selectionChanged();
-    const data = models.get(classPath(e.cls));
+    const data = models.get(modelPath(e));
     if (!data || !viewer) return;
     await ensureClassMaterials(e, data);
     await applyLoadout(e, e.applied); // loads the cosmetics' team materials and switches every skin together
