@@ -93,6 +93,7 @@ fn main() {
             commands::remove_promo,
             commands::refresh_workshop,
             commands::mount_item_zips,
+            commands::mount_map,
             commands::workshop_stamp,
             commands::list_poses,
             commands::read_poses,

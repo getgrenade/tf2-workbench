@@ -58,12 +58,16 @@ export interface Boss {
   skin?: number;
   /** Models the game attaches to it, and the sequence one plays over and over (the tank's tracks). */
   attached?: { model: string; loop?: string }[];
+  /** The map (in tf/maps) whose packed files have the model: the game's archives do not. */
+  map?: string;
+  /** It floats where it is put (MONOCULUS) rather than standing on its origin, which the game keeps on the ground. */
+  floats?: boolean;
 }
 
 export const BOSSES: Record<string, Boss> = {
   // headless_hatman.cpp: the axe follows the Horsemann (the mallet in the Doomsday scenario); headless_hatman_attack.cpp stands in ITEM1
   hatman: { label: "Horseless Headless Horsemann", model: "bots/headless_hatman", sequence: "stand_item1", attached: [{ model: "weapons/c_models/c_bigaxe/c_bigaxe" }] },
-  monoculus: { label: "MONOCULUS", model: "props_halloween/halloween_demoeye", sequence: "general_noise" },
+  monoculus: { label: "MONOCULUS", model: "props_halloween/halloween_demoeye", sequence: "general_noise", floats: true },
   merasmus: { label: "Merasmus", model: "bots/merasmus/merasmus", sequence: "stand_melee" },
   // zombie.cpp: a skeleton on no team wears the third skin; the king is the boss model at twice the size, with a crown on bip_head
   skeleton: { label: "Skeleton", model: "bots/skeleton_sniper/skeleton_sniper", sequence: "stand_melee", skin: 2 },
@@ -76,6 +80,11 @@ export const BOSSES: Record<string, Boss> = {
     sequence: "movement",
     attached: [{ model: "bots/boss_bot/tank_track_l", loop: "forward" }, { model: "bots/boss_bot/tank_track_r", loop: "forward" }, { model: "bots/boss_bot/bomb_mechanism" }],
   },
+  // Versus Saxton Hale: the VScript game mode gives its Hale a model the maps pack (with its animations), not the game's archives; the
+  // holiday maps have their own Hales
+  saxton: { label: "Saxton Hale", model: "vsh/player/saxton_hale", sequence: "stand_MELEE", map: "vsh_nucleus" },
+  santaHale: { label: "Santa Hale", model: "vsh/player/santa_hale", sequence: "stand_MELEE", map: "vsh_maul" },
+  hellHale: { label: "Hellfire Hale", model: "vsh/player/hell_hale", sequence: "stand_MELEE", map: "vsh_outburst" },
 };
 
 /** The boss a prop's `cls` is, if it is one. */

@@ -190,6 +190,13 @@ pub fn mount_item_zips(state: State<'_, AppState>, paths: Vec<String>) -> Result
     state.mount_item_zips(paths.into_iter().map(PathBuf::from).collect())
 }
 
+/// Mounts the files a map packs (`tf/maps/<map>.bsp`): the models only a map has, like Versus Saxton Hale's bosses, which its VScript
+/// game mode gives the players. Mounting a map again does nothing.
+#[tauri::command]
+pub fn mount_map(state: State<'_, AppState>, map: String) -> Result<(), String> {
+    state.vpk()?.mount_map(&map).map_err(|e| e.to_string())
+}
+
 /// A value that changes when the importer's zips do, so the interface can tell when a refresh is due.
 #[tauri::command]
 pub fn workshop_stamp(state: State<'_, AppState>) -> Result<String, String> {

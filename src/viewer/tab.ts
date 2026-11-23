@@ -10,7 +10,7 @@ import { propLabel } from "../props/propList";
 import { forgetThumbnail } from "../props/propThumbs";
 import { decodeTga, encodeTga, iconProblem, ICON_SAFE_ROWS } from "../compiler/tga";
 import { fadeAmount, maskIcon, type IconFade } from "../compiler/iconMask";
-import { searchPaths, importSourceDir, readItemSession, readPropSession, saveItemIcon, buildItem, buildProp, loadTextureFrames, readSourceFile, revealFile, sourceSiblings, sourceStamp, mountItemZips } from "../api";
+import { searchPaths, importSourceDir, readItemSession, readPropSession, saveItemIcon, buildItem, buildProp, loadTextureFrames, readSourceFile, revealFile, sourceSiblings, sourceStamp, mountItemZips, mountMap } from "../api";
 import { FILE_DROP_EVENT, type FileDropDetail } from "../fileDrop";
 import { parseTextureFrames } from "./sourceMaterials";
 import { getWeaponProfile, importEffectZip, removeCustomEffect, type WeaponProfile, type UnusualEffectInfo } from "../api";
@@ -1957,6 +1957,9 @@ export function createViewTab(els: Els) {
     if (!data) {
       if (e === selected) els.info.textContent = `Loading ${path}…`;
       try {
+        // a boss only a map has (Saxton Hale) is read from that map's packed files
+        const map = bossOf(cls)?.map;
+        if (map) await mountMap(map);
         data = parsePayload(await loadModel(path));
       } catch (err) {
         if (e === selected) els.info.textContent = `Failed to load ${path}:\n${String(err)}`;
@@ -8379,6 +8382,7 @@ export function createViewTab(els: Els) {
           { label: BOSSES.buster.label, run: () => void addBoss("buster") },
           { label: BOSSES.tank.label, run: () => void addBoss("tank") },
           ...(["hatman", "monoculus", "merasmus", "skeleton", "skeletonKing"] as const).map((key, i) => ({ label: BOSSES[key].label, separator: i === 0, run: () => void addBoss(key) })),
+          ...(["saxton", "santaHale", "hellHale"] as const).map((key, i) => ({ label: BOSSES[key].label, separator: i === 0, run: () => void addBoss(key) })),
         ],
       },
       { label: "Prop…", icon: ICON.prop, hint: "opens the prop browser", run: () => document.dispatchEvent(new CustomEvent("workbench:reveal-panel", { detail: "props" })) },
@@ -8576,13 +8580,21 @@ export function createViewTab(els: Els) {
   /** Puts a boss in the scene: a prop of its model, at its size and in its skin, with what the game attaches to it. */
   async function addBoss(key: string) {
     const boss = BOSSES[key];
+    if (boss.map) {
+      try {
+        await mountMap(boss.map);
+      } catch (err) {
+        els.info.textContent = `${boss.label} is in maps/${boss.map}.bsp, which could not be read:\n${String(err)}`;
+        return;
+      }
+    }
     await addProp(`models/${boss.model}.mdl`);
     const e = selected;
     if (!e || e.cls !== boss.model) return;
-    if (boss.scale) {
-      e.actor.setScale(new THREE.Vector3(boss.scale, boss.scale, boss.scale));
-      ensureViewer().placeActorAt(e.actor, e.actor.offset.x, -e.actor.bindMinY * boss.scale, e.actor.offset.z);
-    }
+    if (boss.scale) e.actor.setScale(new THREE.Vector3(boss.scale, boss.scale, boss.scale));
+    // the game keeps a boss's origin on the ground (its reference pose can reach below it: the Horsemann's, the tank's tracks); one that
+    // floats sits on its lowest point, like a prop
+    ensureViewer().placeActorAt(e.actor, e.actor.offset.x, boss.floats ? -e.actor.bindMinY * (boss.scale ?? 1) : 0, e.actor.offset.z);
     if (boss.skin && skinsOf(e) > boss.skin) await setTeam(e, boss.skin);
   }
 

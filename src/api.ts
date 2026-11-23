@@ -258,6 +258,8 @@ export const refreshWorkshop = () => invoke<void>("refresh_workshop");
 
 /** Takes dropped item zips to mount in place (read-only, this session only): the next workshop refresh shows them under the Workshop filter. */
 export const mountItemZips = (paths: string[]) => invoke<void>("mount_item_zips", { paths });
+/** Mounts the files a map packs (`tf/maps/<map>.bsp`), for the models only a map has. */
+export const mountMap = (map: string) => invoke<void>("mount_map", { map });
 /** A value that changes when those zips do. */
 export const workshopStamp = () => invoke<string>("workshop_stamp");
 export const listPoses = () => invoke<string[]>("list_poses");
