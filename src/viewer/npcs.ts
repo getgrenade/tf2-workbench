@@ -93,6 +93,10 @@ export const BOSSES: Record<string, Boss> = {
   hellHale: { label: "Hellfire Hale", model: "vsh/player/hell_hale", sequence: "stand_MELEE", map: "vsh_outburst", voice: { folders: ["mvm/hellfire_hale_ob_2025_1/", "mvm/hellfire_hale_new_ob_2025_1/"] } },
   // the Smissmas boss of koth_krampus, which packs his model
   krampus: { label: "Krampus", model: "bots/krampus", sequence: "krampus_idle", map: "koth_krampus", voice: { folders: ["mvm/krampus"] } },
+  // ghost.cpp: the Halloween ghost floats where it haunts, moaning and booing (without the hat, and the red one, too)
+  ghost: { label: "Ghost", model: "props_halloween/ghost", sequence: "idle", floats: true, voice: { sounds: ["Halloween.GhostMoan", "Halloween.GhostBoo", "Halloween.Haunted"] } },
+  ghostNoHat: { label: "Ghost (no hat)", model: "props_halloween/ghost_no_hat", sequence: "idle", floats: true, voice: { sounds: ["Halloween.GhostMoan", "Halloween.GhostBoo", "Halloween.Haunted"] } },
+  ghostRed: { label: "Ghost (red)", model: "props_halloween/ghost_no_hat_red", sequence: "idle", floats: true, voice: { sounds: ["Halloween.GhostMoan", "Halloween.GhostBoo", "Halloween.Haunted"] } },
   // the farm's chickens of ctf_applejack, which packs their model (standing, sitting, pecking, walking and running; five feathers)
   chicken: { label: "Chicken", model: "applejack/applejack_chicken", sequence: "stand_a", map: "ctf_applejack" },
 };
