@@ -82,7 +82,10 @@ export interface MapProp { index: number | null; model: string; origin: V3; angl
 const vertexShader = /* glsl */ `
   #ifdef PROP
     attribute vec3 amb0; attribute vec3 amb1; attribute vec3 amb2; attribute vec3 amb3; attribute vec3 amb4; attribute vec3 amb5;
-    varying vec3 vAmb0; varying vec3 vAmb1; varying vec3 vAmb2; varying vec3 vAmb3; varying vec3 vAmb4; varying vec3 vAmb5;
+    // (a prop with baked light has no ambient cube: the GPU passes only so many values on to the pixels)
+    #ifndef STATIC_LIGHT
+      varying vec3 vAmb0; varying vec3 vAmb1; varying vec3 vAmb2; varying vec3 vAmb3; varying vec3 vAmb4; varying vec3 vAmb5;
+    #endif
     // the strongest light on it (toward it, the map's axes) and its colour; the model's tangents
     attribute vec3 keyDir; attribute vec3 keyColor; attribute vec4 propTangent;
     varying vec3 vKeyDir; varying vec3 vKeyColor; varying vec4 vTangent;
@@ -104,8 +107,8 @@ const vertexShader = /* glsl */ `
   uniform mat3 uTexTransform;
   uniform mat3 uTexTransform2;
   uniform mat3 uBumpTransform;
-  varying vec2 vUv;
-  varying vec2 vUv2;
+  // the base texture's uv and the second's, together (the GPU passes only so many values on)
+  varying vec4 vUvs;
   varying vec2 vBumpUv;
   // the map's axes (z up), for the ambient cube and the cubemap
   varying vec3 vSrcNormal;
@@ -121,13 +124,14 @@ const vertexShader = /* glsl */ `
       src = mat3(instanceMatrix);
       srcPos = (instanceMatrix * vec4(position, 1.0)).xyz;
     #endif
-    vUv = (uTexTransform * vec3(uv, 1.0)).xy;
-    vUv2 = (uTexTransform2 * vec3(uv, 1.0)).xy;
+    vUvs = vec4((uTexTransform * vec3(uv, 1.0)).xy, (uTexTransform2 * vec3(uv, 1.0)).xy);
     vBumpUv = (uBumpTransform * vec3(uv, 1.0)).xy;
     vSrcNormal = normalize(src * normal);
     vSrcPos = srcPos;
     #ifdef PROP
-      vAmb0 = amb0; vAmb1 = amb1; vAmb2 = amb2; vAmb3 = amb3; vAmb4 = amb4; vAmb5 = amb5;
+      #ifndef STATIC_LIGHT
+        vAmb0 = amb0; vAmb1 = amb1; vAmb2 = amb2; vAmb3 = amb3; vAmb4 = amb4; vAmb5 = amb5;
+      #endif
       vKeyDir = keyDir; vKeyColor = keyColor;
       vTangent = vec4(normalize(src * propTangent.xyz), propTangent.w);
       #ifdef STATIC_LIGHT
@@ -194,23 +198,27 @@ const fragmentShader = /* glsl */ `
   uniform bool uRimMask;
   uniform bool uHalfLambert;
   uniform bool uSelfIllum;
-  varying vec2 vUv;
-  varying vec2 vUv2;
+  varying vec4 vUvs;
+  #define vUv (vUvs.xy)
+  #define vUv2 (vUvs.zw)
   varying vec2 vBumpUv;
   varying vec3 vSrcNormal;
   varying vec3 vSrcPos;
   varying vec3 vWorld;
   varying vec3 vWorldNormal;
   #ifdef PROP
-    varying vec3 vAmb0; varying vec3 vAmb1; varying vec3 vAmb2; varying vec3 vAmb3; varying vec3 vAmb4; varying vec3 vAmb5;
     varying vec3 vKeyDir; varying vec3 vKeyColor; varying vec4 vTangent;
     #ifdef STATIC_LIGHT
       varying vec3 vStatic;
+      // (its rim light takes the baked light instead of the cube)
+      vec3 ambientCube(vec3 n) { return vStatic; }
+    #else
+      varying vec3 vAmb0; varying vec3 vAmb1; varying vec3 vAmb2; varying vec3 vAmb3; varying vec3 vAmb4; varying vec3 vAmb5;
+      vec3 ambientCube(vec3 n) {
+        vec3 n2 = n * n;
+        return n2.x * (n.x >= 0.0 ? vAmb0 : vAmb1) + n2.y * (n.y >= 0.0 ? vAmb2 : vAmb3) + n2.z * (n.z >= 0.0 ? vAmb4 : vAmb5);
+      }
     #endif
-    vec3 ambientCube(vec3 n) {
-      vec3 n2 = n * n;
-      return n2.x * (n.x >= 0.0 ? vAmb0 : vAmb1) + n2.y * (n.y >= 0.0 ? vAmb2 : vAmb3) + n2.z * (n.z >= 0.0 ? vAmb4 : vAmb5);
-    }
   #else
     varying vec2 vLm;
     varying float vBlend;
