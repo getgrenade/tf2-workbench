@@ -8717,12 +8717,13 @@ export function createViewTab(els: Els) {
   function mapLabel(name: string): string { return name.split("/").pop() ?? name; }
   /** Where a map comes from: the game's, a custom one (a server's download, a custom folder's) or the workshop's. */
   function mapKind(name: string): "game" | "custom" | "workshop" {
-    return name.startsWith("maps/workshop/") || name.startsWith("steam-workshop/") ? "workshop" : name.includes("/") ? "custom" : "game";
+    return name.startsWith("maps/workshop/") || name.startsWith("steam-workshop/") || name.startsWith("sfm") ? "workshop" : name.includes("/") ? "custom" : "game";
   }
   /** A short note of where a custom or workshop map is (the custom folder, "download", the workshop item). */
   function mapSource(name: string): string | undefined {
     const p = name.split("/");
     if (p[0] === "download") return "download";
+    if (p[0] === "sfm" || p[0] === "sfm-workshop") return "SFM";
     if (p[0] === "custom") return p[1];
     if (p[0] === "steam-workshop" || (p[0] === "maps" && p.length > 3)) return p[p.length - 2];
     return undefined;

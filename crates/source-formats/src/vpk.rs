@@ -602,6 +602,9 @@ impl VpkSet {
                 Some(p.join(format!("{}.bsp", rest[rest.len() - 1])))
             }
             ["steam-workshop", id, map] => Some(steam_workshop(root)?.join(id).join(format!("{map}.bsp"))),
+            // Source Filmmaker's workshop: the maps of the items it unpacked, and of those Steam keeps (in their maps folder or not)
+            ["sfm", map] => crate::steam::sfm_workshop_dirs(root).into_iter().map(|d| d.join("maps").join(format!("{map}.bsp"))).find(|p| p.is_file()),
+            ["sfm-workshop", id, map] => crate::steam::sfm_workshop_dirs(root).into_iter().flat_map(|d| [d.join(id).join("maps").join(format!("{map}.bsp")), d.join(id).join(format!("{map}.bsp"))]).find(|p| p.is_file()),
             _ => None,
         }
     }

@@ -261,6 +261,8 @@ pub async fn index_tf2(app: tauri::AppHandle, state: State<'_, AppState>, tf_dir
     let _ = cubemaps_folder(&app); // the user's cubemaps (a scene can name one before the list is asked for)
     // the addons of the game's own custom folder, and the folders the user mounted earlier
     let _ = vpk.mount_custom(&PathBuf::from(&tf_dir).join("custom"), true);
+    // and the workshop items Source Filmmaker downloaded (each item a folder of models and materials, like an addon)
+    for dir in source_formats::steam::sfm_workshop_dirs(&PathBuf::from(&tf_dir)) { let _ = vpk.mount_custom(&dir, true); }
     for saved in saved_custom_content(&app) { let _ = vpk.mount_custom(&saved, false); }
     state.set_vpk(vpk);
     Ok(IndexDto {

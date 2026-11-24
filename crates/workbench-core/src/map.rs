@@ -37,6 +37,13 @@ pub fn list_maps(state: &AppState) -> Result<Vec<String>, String> {
     for id in subdirs(&workshop) {
         out.extend(bsps(&workshop.join(&id)).into_iter().map(|n| format!("maps/workshop/{id}/{n}")));
     }
+    // Source Filmmaker's workshop items' maps: the items it unpacked (one folder of maps) and those Steam keeps (one folder per item)
+    for dir in source_formats::steam::sfm_workshop_dirs(root) {
+        out.extend(bsps(&dir.join("maps")).into_iter().map(|n| format!("sfm/{n}")));
+        for id in subdirs(&dir) {
+            out.extend(bsps(&dir.join(&id).join("maps")).into_iter().chain(bsps(&dir.join(&id))).map(|n| format!("sfm-workshop/{id}/{n}")));
+        }
+    }
     if let Some(steam) = source_formats::vpk::steam_workshop(root) {
         for id in subdirs(&steam) {
             out.extend(bsps(&steam.join(&id)).into_iter().map(|n| format!("steam-workshop/{id}/{n}")));
