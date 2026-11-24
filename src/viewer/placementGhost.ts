@@ -15,6 +15,8 @@ export class PlacementGhost {
   private token = 0;
 
   constructor() {
+    // (it casts no shadow)
+    this.material.userData.noShadow = true;
     this.group.name = "placementGhost";
     this.group.visible = false;
     this.group.renderOrder = 10;
