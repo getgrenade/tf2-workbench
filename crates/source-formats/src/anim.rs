@@ -318,7 +318,7 @@ fn parse_group_header(data: Vec<u8>) -> Result<(Group, Vec<String>)> {
     let version = i32at(&data, 4);
     // (44 to 47 keep 48's animation layout: Studio_ConvertStudioHdrToNewVersion only clears data this reader does not use, the zero
     // frame cache; older props, such as the resupply locker, are 45)
-    if !(44..=48).contains(&version) {
+    if !(44..=crate::mdl::MDL_READ_VERSION).contains(&version) {
         return fail(format!("unsupported MDL version {version}"));
     }
     let num_bones = i32at(&data, 156).clamp(0, 1024) as usize;
