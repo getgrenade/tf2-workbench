@@ -8679,7 +8679,7 @@ export function createViewTab(els: Els) {
           ...(["hatman", "monoculus", "merasmus", "skeleton", "skeletonKing", "ghost", "ghostNoHat"] as const).map((key, i) => ({ label: BOSSES[key].label, separator: i === 0, drag: { type: ADD_DRAG_TYPE, data: `boss:${key}` }, run: () => void addBoss(key) })),
           ...(["saxton", "santaHale", "hellHale", "krampus"] as const).map((key, i) => ({ label: BOSSES[key].label, separator: i === 0, drag: { type: ADD_DRAG_TYPE, data: `boss:${key}` }, run: () => void addBoss(key) })),
           // the creatures of the maps
-          ...(["toastmaster", "botler", "salmann", "seal", "sealSmall", "chicken"] as const).map((key, i) => ({ label: BOSSES[key].label, separator: i === 0, drag: { type: ADD_DRAG_TYPE, data: `boss:${key}` }, run: () => void addBoss(key) })),
+          ...(["toastmaster", "botler", "botlerMedkit", "salmann", "seal", "sealSmall", "chicken"] as const).map((key, i) => ({ label: BOSSES[key].label, separator: i === 0, drag: { type: ADD_DRAG_TYPE, data: `boss:${key}` }, run: () => void addBoss(key) })),
           // Half-Life 2's characters, from the HL2 content that comes with TF2
           {
             label: "HL2",
