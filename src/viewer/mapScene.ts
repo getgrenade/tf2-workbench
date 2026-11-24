@@ -81,9 +81,9 @@ export interface MapProp { index: number | null; model: string; origin: V3; angl
 
 const vertexShader = /* glsl */ `
   #ifdef PROP
-    attribute vec3 amb0; attribute vec3 amb1; attribute vec3 amb2; attribute vec3 amb3; attribute vec3 amb4; attribute vec3 amb5;
-    // (a prop with baked light has no ambient cube: the GPU passes only so many values on to the pixels)
+    // (a prop with baked light has no ambient cube: a GPU takes only so many attributes, 16, and passes only so many values on)
     #ifndef STATIC_LIGHT
+      attribute vec3 amb0; attribute vec3 amb1; attribute vec3 amb2; attribute vec3 amb3; attribute vec3 amb4; attribute vec3 amb5;
       varying vec3 vAmb0; varying vec3 vAmb1; varying vec3 vAmb2; varying vec3 vAmb3; varying vec3 vAmb4; varying vec3 vAmb5;
     #endif
     // the strongest light on it (toward it, the map's axes) and its colour; the model's tangents
@@ -783,8 +783,8 @@ export class MapScene {
           geo.setAttribute("propTangent", tangent);
           geo.setIndex(index);
           if (light) geo.setAttribute("vlight", new THREE.BufferAttribute(light.slice(vertexStart[mi] * 4, (vertexStart[mi] + count) * 4), 4, true));
-          // the light of each one: its ambient cube (an attribute per face) and its strongest light
-          for (let face = 0; face < 6; face++) {
+          // the light of each one: its ambient cube (an attribute per face; not for baked light) and its strongest light
+          if (!light) for (let face = 0; face < 6; face++) {
             const a = new Float32Array(placed.length * 3);
             placed.forEach((n, i) => a.set(props[n].ambient[face] ?? [0.3, 0.3, 0.3], i * 3));
             geo.setAttribute(`amb${face}`, new THREE.InstancedBufferAttribute(a, 3));
