@@ -1204,6 +1204,13 @@ fn parse3(s: &str) -> [f32; 3] {
 }
 
 /// The entities lump: `{ "key" "value" ... }` blocks.
+/// A map's entities (keys in lower case; a key given more than once has its values joined by new lines).
+pub fn entities(file: &[u8]) -> Result<Vec<HashMap<String, String>>> {
+    let bsp = Bsp::new(file)?;
+    let lump = bsp.lump(LUMP_ENTITIES);
+    Ok(parse_entities(&String::from_utf8_lossy(&lump.data)))
+}
+
 fn parse_entities(text: &str) -> Vec<HashMap<String, String>> {
     let mut out = Vec::new();
     let mut current: Option<HashMap<String, String>> = None;

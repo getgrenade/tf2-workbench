@@ -38,6 +38,11 @@ impl VoiceData {
         Self { image, sounds, sentences, expressions: Mutex::new(HashMap::new()) }
     }
 
+    /// A sound script entry by name (`Ambient.Waterfall`, any case).
+    pub fn sound(&self, name: &str) -> Option<&soundscript::SoundEntry> {
+        self.sounds.get(&name.to_ascii_lowercase())
+    }
+
     fn expression_file(&self, vpk: &VpkSet, path: &str) -> Option<Arc<vfe::ExpressionFile>> {
         let key = path.replace('\\', "/").to_ascii_lowercase();
         let key = key.strip_suffix(".vfe").unwrap_or(&key).to_string();

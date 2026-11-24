@@ -1,7 +1,7 @@
 //! Maps for the scene: the list of the game's maps, a map's geometry, lightmap and props as one binary payload, and its materials.
 
 use crate::state::AppState;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
 
 /// The light of the map loaded last, to ask it where the characters stand.
@@ -290,4 +290,139 @@ pub fn load_map_model(state: &AppState, path: &str) -> Result<Vec<u8>, String> {
         }
     }
     Ok(crate::payload::encode(&model))
+}
+
+/// The sounds of a map, as the game plays them around the listener: its `ambient_generic`s (where each is, the waves it plays, its
+/// radius, volume and pitch, whether it is heard everywhere, loops, starts silent) and its soundscapes (`env_soundscape`: where each zone
+/// is, its radius, the soundscape it plays; and each soundscape played, flattened: its looping waves and its random ones, with their
+/// volumes, pitches and times). Positions in the map's units.
+pub fn map_sounds(state: &AppState, name: &str) -> Result<Value, String> {
+    use source_formats::kv::{self, Node};
+    let vpk = state.vpk()?;
+    vpk.mount_map(name).map_err(|e| e.to_string())?;
+    let root = vpk.game_root().ok_or("no game folder")?;
+    let bytes = std::fs::read(root.join("maps").join(format!("{name}.bsp"))).map_err(|e| e.to_string())?;
+    let ents = source_formats::bsp::entities(&bytes).map_err(|e| e.to_string())?;
+    let voice = state.voice().ok();
+    // a wave, or a sound script's waves (and its volume / pitch when it gives them)
+    let waves_of = |message: &str| -> Vec<String> {
+        let m = message.trim();
+        if m.to_ascii_lowercase().ends_with(".wav") || m.to_ascii_lowercase().ends_with(".mp3") {
+            return vec![source_formats::soundscript::clean_wave(m)];
+        }
+        voice.as_ref().and_then(|v| v.sound(m)).map(|e| e.waves.clone()).unwrap_or_default()
+    };
+    let num = |e: &std::collections::HashMap<String, String>, k: &str, d: f32| e.get(k).and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(d);
+    let origin = |e: &std::collections::HashMap<String, String>| -> [f32; 3] {
+        let v: Vec<f32> = e.get("origin").map(|o| o.split_whitespace().filter_map(|x| x.parse().ok()).collect()).unwrap_or_default();
+        if v.len() >= 3 { [v[0], v[1], v[2]] } else { [0.0; 3] }
+    };
+    let mut ambients = Vec::new();
+    let mut zones = Vec::new();
+    for e in &ents {
+        match e.get("classname").map(|s| s.as_str()) {
+            Some("ambient_generic") => {
+                let Some(message) = e.get("message") else { continue };
+                let waves = waves_of(message);
+                if waves.is_empty() {
+                    continue;
+                }
+                let flags = num(e, "spawnflags", 0.0) as i32;
+                ambients.push(json!({
+                    "origin": origin(e), "waves": waves, "radius": num(e, "radius", 1250.0), "volume": (num(e, "health", 10.0) / 10.0).clamp(0.0, 1.0),
+                    "pitch": num(e, "pitch", 100.0) / 100.0, "everywhere": flags & 1 != 0, "silent": flags & 16 != 0, "looped": flags & 32 == 0,
+                }));
+            }
+            Some("env_soundscape" | "env_soundscape_triggerable" | "env_soundscape_proxy") => {
+                let Some(scape) = e.get("soundscape").or_else(|| e.get("mainsoundscapename")) else { continue };
+                if e.get("startdisabled").is_some_and(|d| d.trim() == "1") {
+                    continue;
+                }
+                zones.push(json!({ "origin": origin(e), "radius": num(e, "radius", -1.0), "soundscape": scape.to_ascii_lowercase() }));
+            }
+            _ => {}
+        }
+    }
+    // the soundscapes: the manifest's files, then the map's own (scripts/soundscapes_<map>.txt, in the game or packed in the map)
+    let mut defs: std::collections::HashMap<String, Vec<Node>> = std::collections::HashMap::new();
+    let mut files: Vec<String> = Vec::new();
+    if let Ok(manifest) = vpk.read("scripts/soundscapes_manifest.txt") {
+        if let Ok(nodes) = kv::parse(&String::from_utf8_lossy(&manifest)) {
+            files.extend(nodes.first().and_then(Node::block).unwrap_or(&[]).iter().filter_map(|n| n.as_str()).map(|p| p.replace('\\', "/").to_ascii_lowercase()));
+        }
+    }
+    files.push(format!("scripts/soundscapes_{}.txt", name.to_ascii_lowercase()));
+    for file in files {
+        let Ok(b) = vpk.read(&file) else { continue };
+        let Ok(nodes) = kv::parse(&String::from_utf8_lossy(&b)) else { continue };
+        for n in nodes {
+            if let Some(body) = n.block() {
+                defs.insert(n.key.to_ascii_lowercase(), body.to_vec());
+            }
+        }
+    }
+    let range = |s: Option<&str>, d: [f32; 2]| -> [f32; 2] {
+        let Some(s) = s else { return d };
+        let v: Vec<f32> = s.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+        match v.len() {
+            0 => d,
+            1 => [v[0], v[0]],
+            _ => [v[0], v[1]],
+        }
+    };
+    // a soundscape, flattened: its looping and random sounds (a played soundscape's, at its volume, as well)
+    fn flatten(
+        name: &str, scale: f32, depth: u32, defs: &std::collections::HashMap<String, Vec<Node>>, waves_of: &dyn Fn(&str) -> Vec<String>,
+        range: &dyn Fn(Option<&str>, [f32; 2]) -> [f32; 2], looping: &mut Vec<Value>, random: &mut Vec<Value>,
+    ) {
+        let Some(body) = defs.get(&name.to_ascii_lowercase()) else { return };
+        if depth > 4 {
+            return;
+        }
+        let get = |b: &[Node], k: &str| kv::find(b, k).and_then(|n| n.as_str()).map(|s| s.to_string());
+        for n in body {
+            let Some(b) = n.block() else { continue };
+            let volume = range(get(b, "volume").as_deref(), [1.0, 1.0]).map(|v| v * scale);
+            let pitch = range(get(b, "pitch").as_deref(), [100.0, 100.0]).map(|p| p / 100.0);
+            match n.key.to_ascii_lowercase().as_str() {
+                "playlooping" => {
+                    let waves: Vec<String> = get(b, "wave").map(|w| waves_of(&w)).or_else(|| get(b, "soundname").map(|w| waves_of(&w))).unwrap_or_default();
+                    if let Some(wave) = waves.first() {
+                        looping.push(json!({ "wave": wave, "volume": volume[0], "pitch": pitch[0] }));
+                    }
+                }
+                "playrandom" => {
+                    let mut waves = Vec::new();
+                    if let Some(r) = kv::find(b, "rndwave").and_then(Node::block) {
+                        for w in r.iter().filter_map(|w| w.as_str()) {
+                            waves.extend(waves_of(w));
+                        }
+                    }
+                    if let Some(w) = get(b, "wave") {
+                        waves.extend(waves_of(&w));
+                    }
+                    if !waves.is_empty() {
+                        random.push(json!({ "waves": waves, "time": range(get(b, "time").as_deref(), [10.0, 20.0]), "volume": volume, "pitch": pitch }));
+                    }
+                }
+                "playsoundscape" => {
+                    if let Some(inner) = get(b, "name") {
+                        flatten(&inner, volume[0], depth + 1, defs, waves_of, range, looping, random);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut soundscapes = serde_json::Map::new();
+    for z in &zones {
+        let name = z["soundscape"].as_str().unwrap_or_default().to_string();
+        if soundscapes.contains_key(&name) {
+            continue;
+        }
+        let (mut looping, mut random) = (Vec::new(), Vec::new());
+        flatten(&name, 1.0, 0, &defs, &waves_of, &range, &mut looping, &mut random);
+        soundscapes.insert(name, json!({ "looping": looping, "random": random }));
+    }
+    Ok(json!({ "ambients": ambients, "zones": zones, "soundscapes": soundscapes }))
 }

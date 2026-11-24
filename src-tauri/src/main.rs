@@ -99,6 +99,7 @@ fn main() {
             commands::map_light_at,
             commands::load_map_model,
             commands::load_map_prop_light,
+            commands::map_sounds,
             commands::workshop_stamp,
             commands::list_poses,
             commands::read_poses,

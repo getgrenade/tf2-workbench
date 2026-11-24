@@ -338,7 +338,7 @@ const fragmentShader = /* glsl */ `
             float d = texture2D(tShadowDepth, sc.xy + vec2(float(i), float(j)) * uShadowTexel).r;
             // how far behind what casts it, in units: within its distance, fading toward it
             float behind = (sc.z - d) * uShadowRange;
-            sum += behind > 2.0 ? 1.0 - smoothstep(uShadowMaxDist * 0.5, uShadowMaxDist, behind) : 0.0;
+            sum += behind > 1.0 ? 1.0 - smoothstep(uShadowMaxDist * 0.75, uShadowMaxDist, behind) : 0.0;
           }
         }
         light *= mix(vec3(1.0), uShadowColor, sum / 25.0 * facing);
@@ -513,10 +513,14 @@ export class MapScene {
    * picture fitted around `bounds`, where they are), which the map's surfaces behind them, within its distance, take in its colour.
    * `draw` draws them (only them) with that camera into that target. Null bounds (no character), or off: no shadows.
    */
-  renderShadow(bounds: THREE.Sphere | null, draw: (camera: THREE.Camera, target: THREE.WebGLRenderTarget) => void) {
+  renderShadow(casters: { sphere: THREE.Sphere; height: number } | null, draw: (camera: THREE.Camera, target: THREE.WebGLRenderTarget) => void) {
     const u = this.shared;
     const style = this.shadowStyle;
-    if (!style || !bounds || bounds.radius <= 0) { u.uShadowOn.value = false; return; }
+    const bounds = casters?.sphere;
+    if (!style || !casters || !bounds || bounds.radius <= 0) { u.uShadowOn.value = false; return; }
+    // how far a shadow reaches: the map's distance beyond the whole character (as the game measures it), so a long shadow of a low
+    // sun reaches from the head down to the floor
+    const reach = style.distance + casters.height / Math.max(Math.abs(style.dir.y), 0.25);
     if (!this.shadowTarget) {
       this.shadowTarget = new THREE.WebGLRenderTarget(SHADOW_SIZE, SHADOW_SIZE, { depthBuffer: true, depthTexture: new THREE.DepthTexture(SHADOW_SIZE, SHADOW_SIZE) });
       u.tShadowDepth.value = this.shadowTarget.depthTexture;
@@ -526,7 +530,7 @@ export class MapScene {
     const cam = this.shadowCamera;
     cam.left = -r; cam.right = r; cam.top = r; cam.bottom = -r;
     cam.near = 0;
-    cam.far = back + r + style.distance + 32;
+    cam.far = back + r + reach + 32;
     cam.position.copy(bounds.center).addScaledVector(style.dir, -back);
     cam.up.set(0, 1, 0);
     if (Math.abs(style.dir.y) > 0.99) cam.up.set(1, 0, 0);
@@ -537,11 +541,12 @@ export class MapScene {
     // the view's positions to the depth picture (0..1)
     u.uShadowMatrix.value.set(0.5, 0, 0, 0.5, 0, 0.5, 0, 0.5, 0, 0, 0.5, 0.5, 0, 0, 0, 1).multiply(cam.projectionMatrix).multiply(cam.matrixWorldInverse);
     u.uShadowRange.value = cam.far - cam.near;
-    u.uShadowMaxDist.value = style.distance;
+    u.uShadowMaxDist.value = reach;
     u.uShadowColor.value.copy(style.color);
     u.uShadowDir.value.copy(style.dir);
-    // the blur: about two of the game's shadow texels (its shadows are soft), at least one of the picture's
-    u.uShadowTexel.value = Math.max(1 / SHADOW_SIZE, 0.6 / (2 * r));
+    // the blur: steps of about three quarters of a unit, never more than a texel and a half apart (wider steps stamp the
+    // silhouette several times over: squares)
+    u.uShadowTexel.value = Math.min(1.5 / SHADOW_SIZE, Math.max(1 / SHADOW_SIZE, 0.75 / (2 * r)));
     u.uShadowOn.value = true;
   }
 

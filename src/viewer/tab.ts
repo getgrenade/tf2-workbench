@@ -20,6 +20,7 @@ import { FaceDriver, type FaceLine } from "./faceDriver";
 import type { FlexGlobals } from "./flex";
 import type { LipSync, PhonemeClasses, SceneData } from "./faceScene";
 import { loadVoice, setVoiceMuted, stopAll as stopVoices, voiceMuted } from "./voicePlayer";
+import { MapSounds } from "./mapSounds";
 import { materialFromText, readMaterialText, readTextureFile } from "../api";
 import { VmtEdits } from "./vmtEdits";
 import { editsFor, loadMaterialEdits, saveMaterialEdits } from "./materialEditsStore";
@@ -3281,6 +3282,8 @@ export function createViewTab(els: Els) {
     mapOff: (off) => {
       if (!worldMap) return;
       worldMap.group.visible = !off;
+      // (a hidden map is silent)
+      if (off && viewer) worldSounds?.update(viewer.camera, false);
       syncMapRow();
     },
     mapRemove: () => removeWorldMap(),
@@ -8569,6 +8572,8 @@ export function createViewTab(els: Els) {
     hierarchy().setMap(worldMap ? { name: worldMap.name, off: !worldMap.group.visible, ...(mapStatus ? { status: mapStatus } : {}) } : null);
   }
   /** Loads a map into the scene in place of the one there (its sky with it); a spawn point of it is where the characters stand. */
+  /** The sounds of the map in the scene (null: none). */
+  let worldSounds: MapSounds | null = null;
   async function loadWorldMap(name: string, moved: number[] = []) {
     const v = viewer;
     if (!v) return;
@@ -8580,6 +8585,16 @@ export function createViewTab(els: Els) {
     removeWorldMap();
     const map = new MapScene(name);
     worldMap = map;
+    // its sounds around the camera, while the sound is on
+    worldSounds?.dispose();
+    const sounds = new MapSounds(name, (p) => new THREE.Vector3(...p).applyMatrix4(map.group.matrix), (from, to) => {
+      const d = to.clone().sub(from);
+      const len = d.length();
+      if (len < 1) return false;
+      const hit = map.raycast(from, d.normalize(), len);
+      return !!hit && hit.distance < len - 16;
+    });
+    worldSounds = sounds;
     v.setWorld(map.group, 1e5);
     v.worldRaycast = (o, d, max) => map.raycast(o, d, max);
     // every frame: the eye for its reflections, the characters' shadow on its floors, and (now and then) its light where each stands
@@ -8589,6 +8604,7 @@ export function createViewTab(els: Els) {
       if (worldMap !== map) return;
       map.setEye(camera);
       map.tick(performance.now());
+      sounds.update(camera, !voiceMuted());
       map.renderShadow(shadows ? v.shadowCasterBounds() : null, (c, t) => v.drawShadowCasters(c, t));
       const now = performance.now();
       if (now - lightAsked < 250 || !map.exposure) return;
@@ -8649,6 +8665,8 @@ export function createViewTab(els: Els) {
   /** Takes the map out of the scene (and gives back the sky from before it). */
   function removeWorldMap() {
     if (!worldMap) return;
+    worldSounds?.dispose();
+    worldSounds = null;
     worldMap.dispose();
     worldMap = null;
     mapStatus = "";

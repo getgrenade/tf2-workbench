@@ -208,6 +208,12 @@ pub async fn map_light_at(name: String, points: Vec<[f32; 3]>) -> Result<serde_j
     workbench_core::map::light_at(&name, &points)
 }
 
+/// A map's sounds (see `workbench_core::map::map_sounds`).
+#[tauri::command]
+pub async fn map_sounds(state: State<'_, AppState>, name: String) -> Result<serde_json::Value, String> {
+    workbench_core::map::map_sounds(&state, &name)
+}
+
 /// The lighting a map baked into its static props (see `workbench_core::map::load_map_prop_light`).
 #[tauri::command]
 pub async fn load_map_prop_light(state: State<'_, AppState>, map: String, path: String, indices: Vec<u32>) -> Result<tauri::ipc::Response, String> {

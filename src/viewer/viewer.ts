@@ -3161,16 +3161,18 @@ void main() {
   /** Called every frame while a map is shown, before it is drawn: the camera, and whether the characters cast shadows (Ground shadows). */
   onWorldFrame: (camera: THREE.Camera, shadows: boolean) => void = () => {};
 
-  /** Where the characters that are shown are (a sphere around them all), for their shadows on a map; null: none. */
-  shadowCasterBounds(): THREE.Sphere | null {
+  /** Where the characters that are shown are (a sphere around them all) and the tallest one's height, for their shadows on a map; null: none. */
+  shadowCasterBounds(): { sphere: THREE.Sphere; height: number } | null {
     const box = new THREE.Box3();
+    let height = 0;
     for (const a of this.actorList) {
       if (!a.meshes().some((m) => m.visible)) continue;
       const h = Math.max(a.bindHeight, 16);
+      height = Math.max(height, h);
       box.expandByPoint(a.offset.clone().add(new THREE.Vector3(-h * 0.5, 0, -h * 0.5)));
       box.expandByPoint(a.offset.clone().add(new THREE.Vector3(h * 0.5, h * 1.1, h * 0.5)));
     }
-    return box.isEmpty() ? null : box.getBoundingSphere(new THREE.Sphere());
+    return box.isEmpty() ? null : { sphere: box.getBoundingSphere(new THREE.Sphere()), height };
   }
 
   /** Draws the characters alone (their depth) with `camera` into `target`: the picture their shadows on a map are made from. */
@@ -3189,6 +3191,17 @@ void main() {
     const hidden: THREE.Object3D[] = [];
     for (const child of scene.children) {
       if (!keep.has(child) && child.visible) { child.visible = false; hidden.push(child); }
+    }
+    // within a character, only its solid models cast (its body, items and props: skinned meshes); its particle sprites, see-through
+    // layers and helpers would cast squares
+    for (const root of keep) {
+      root.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh || !o.visible) return;
+        const mat = (Array.isArray(m.material) ? m.material[0] : m.material) as THREE.Material | undefined;
+        const solid = (o as THREE.SkinnedMesh).isSkinnedMesh && !!mat && !mat.transparent && mat.blending === THREE.NormalBlending && mat.depthWrite && !mat.userData.noShadow;
+        if (!solid) { o.visible = false; hidden.push(o); }
+      });
     }
     const background = scene.background, override = scene.overrideMaterial, before = this.renderer.getRenderTarget();
     scene.background = null;

@@ -268,6 +268,13 @@ export const mapLightAt = (name: string, points: [number, number, number][]) => 
 /** A model as a map places it: posed by its first sequence (binary, as loadModel). */
 export const loadMapModel = (path: string) => invoke<ArrayBuffer>("load_map_model", { path });
 /** The light a map baked into its static props of a model (`indices`: their numbers): RGBA per vertex of the model's meshes, all zero for none. */
+/** A map's sounds: its ambient_generics, its soundscape zones and the soundscapes they play (see `workbench_core::map::map_sounds`). */
+export interface MapSoundsJson {
+  ambients: { origin: [number, number, number]; waves: string[]; radius: number; volume: number; pitch: number; everywhere: boolean; silent: boolean; looped: boolean }[];
+  zones: { origin: [number, number, number]; radius: number; soundscape: string }[];
+  soundscapes: Record<string, { looping: { wave: string; volume: number; pitch: number }[]; random: { waves: string[]; time: [number, number]; volume: [number, number]; pitch: [number, number] }[] }>;
+}
+export const mapSounds = (name: string) => invoke<MapSoundsJson>("map_sounds", { name });
 export const loadMapPropLight = (map: string, path: string, indices: number[]) => invoke<ArrayBuffer>("load_map_prop_light", { map, path, indices });
 /** A map material's shader, parameters and base textures no bigger than `maxSize` (binary; see mapScene.ts). */
 export const loadMapMaterial = (name: string, maxSize: number) => invoke<ArrayBuffer>("load_map_material", { name, maxSize });
