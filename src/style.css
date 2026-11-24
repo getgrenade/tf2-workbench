@@ -1312,6 +1312,7 @@ body.dndActive.dndRefused * { cursor: no-drop !important; }
 .promoLayerActions { display: contents; }
 .promoLayerActions .sep { width: 1px; height: 16px; margin: 0 var(--ui-1); background: var(--ui-divider); }
 .promoLayerActions .iconBtn { width: 26px; padding: 0; display: inline-grid; place-items: center; margin-left: auto; }
+.promoLayerActions .iconBtn.syncPages + .iconBtn { margin-left: 0; }
 .promoLayerActions .iconBtn svg { width: 14px; height: 14px; }
 .promoLayerActions button:disabled { opacity: .4; cursor: default; }
 .promoLinkNote:empty { display: none; }
@@ -1385,6 +1386,13 @@ body.dndActive.dndRefused * { cursor: no-drop !important; }
 .promoCharsPop .del svg { width: 14px; height: 14px; }
 .promoCharsPop .more { align-self: flex-start; }
 .promoCharsPop .hint { margin: 0; }
+.headsPop { width: 260px; }
+.headsPop label.slider { display: grid; grid-template-columns: 64px minmax(0, 1fr) 28px; align-items: center; column-gap: var(--ui-4); font-size: var(--ui-fs-label); color: var(--dim); }
+.headsPop label.slider input { grid-column: 2; grid-row: 1; min-width: 0; }
+.headsPop label.slider output { grid-column: 3; grid-row: 1; text-align: right; color: var(--fg); font-variant-numeric: tabular-nums; }
+.headsPop .seg { flex: 1; }
+.headsPop .seg button { flex: 1; }
+.headsPop .primary { align-self: flex-end; }
 .promoHistory { position: absolute; left: 8px; top: 8px; z-index: 2; display: flex; gap: 2px; padding: var(--ui-1); background: var(--ui-float); border-radius: var(--ui-radius-xl); backdrop-filter: blur(6px); box-shadow: 0 4px 16px var(--ui-shade-2); }
 .promoHistory button { width: var(--ui-h-float); height: var(--ui-h-float); padding: 0; display: grid; place-items: center; border: 0; border-radius: var(--ui-radius-l); background: transparent; color: var(--ui-text); cursor: pointer; }
 .promoHistory button:hover:not(:disabled) { background: var(--ui-wash-2); color: var(--ui-text-hi); }

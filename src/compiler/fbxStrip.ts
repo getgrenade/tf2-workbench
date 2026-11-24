@@ -226,8 +226,16 @@ export function stripArmatures(buffer: ArrayBuffer): { bytes: Uint8Array; remove
   }
 
   // the armature nodes go, with what hangs on them that is not a model (their attributes) and every connection that names them
+  // (by any connection: an attribute hangs on it object to object, the curve nodes of an animation of it object to property; and what
+  // hangs on those goes too, the curves of a curve node: a curve node left with no node to move stops the loader)
   const attributes = new Set<number>();
-  for (const l of links) if (dropped.has(l.parent) && !byId.has(l.child)) attributes.add(l.child);
+  const all = connections.children.filter((c) => c.name === "C").map((c) => ({ child: num(c.props[1]), parent: num(c.props[2]) }));
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const l of all) {
+      if ((dropped.has(l.parent) || attributes.has(l.parent)) && !byId.has(l.child) && !attributes.has(l.child)) { attributes.add(l.child); grew = true; }
+    }
+  }
   const gone = new Set<number>([...dropped, ...attributes]);
   const removedByType = new Map<string, number>();
   objects.children = objects.children.filter((n) => {

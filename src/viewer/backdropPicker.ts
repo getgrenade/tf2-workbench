@@ -11,6 +11,7 @@ import { colourBackdrop, customBackdrop, deleteGradient, fadeBackdrop, gradientP
 import { openMenu } from "./popMenu";
 import type { GradientStop } from "./gradientStops";
 import { stopsEditor } from "./gradientBar";
+import { rollBackdrop } from "./backdropRoll";
 
 export interface BackdropPickerHost {
   /** The background now (null: none). */
@@ -104,12 +105,15 @@ function choosePicture(): Promise<string | null> {
 /** The icons of the buttons that are not a colour: the toolbar's line icons (see #viewToolbar), on a 24 grid. */
 const IMAGE_ICON: IconName = "image";
 const TUNE_ICON: IconName = "slidersHorizontal";
+const ROLL_ICON: IconName = "dices";
 
 export function createBackdropPicker(host: BackdropPickerHost): { el: HTMLElement; refresh: () => void } {
   const el = document.createElement("div");
   el.className = "bdPicker";
   /** The custom gradient last made, to come back to. */
   let lastCustom: Backdrop | null = null;
+  /** The gradient last rolled (its button is lit while it is the background, untouched). */
+  let rolled: Backdrop | null = null;
   /** The solid colour last used (the solid thumbnail shows it). */
   let lastSolid = "#404040";
   /** The picture last used (the image thumbnail shows it). */
@@ -245,7 +249,10 @@ export function createBackdropPicker(host: BackdropPickerHost): { el: HTMLElemen
     // the custom gradient (its editor), then the gradients saved and shipped
     const editing = value.kind === "gradient" && !value.preset;
     const custom = editing ? value : lastCustom ?? customBackdrop(value);
-    grid.append(iconButton(TUNE_ICON, editing, () => { lastCustom = customBackdrop(value.kind === "gradient" ? value : custom); pick(lastCustom); }, "Custom gradient"));
+    const isRolled = editing && !!rolled && JSON.stringify(rolled.stops) === JSON.stringify(value.stops) && rolled.angle === value.angle && rolled.shape === value.shape;
+    grid.append(iconButton(TUNE_ICON, editing && !isRolled, () => { lastCustom = customBackdrop(value.kind === "gradient" ? value : custom); pick(lastCustom); }, "Custom gradient"));
+    // a random ambient gradient (by the rules of backdropRoll.ts); again: another one. It is a custom gradient: its editor opens to tweak it
+    grid.append(iconButton(ROLL_ICON, isRolled, () => { rolled = rollBackdrop(); lastCustom = rolled; pick(rolled); }, isRolled ? "Random gradient (click for another)" : "Random gradient"));
     const preset = value.kind === "gradient" ? value.preset : undefined;
     for (const p of gradientPresets()) {
       const t = thumb((ctx, w, h) => paintBackdrop(ctx, w, h, p.backdrop), preset === p.id, () => pick(p.backdrop), p.label);

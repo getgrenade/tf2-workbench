@@ -128,6 +128,13 @@ const MENU_SLOT: Record<string, string> = { engineer: "melee", spy: "melee", med
 /** How far behind the characters already in the scene the row of Add > All classes stands (Source units). */
 const ROW_BEHIND = 90;
 const ALL_CLASSES_ORDER = ["pyro", "engineer", "spy", "heavy", "sniper", "scout", "soldier", "demo", "medic"];
+/** The classes of Add > Heads in the game's order (as the class picker has them): five in the top row, four below. */
+const HEADS_ORDER = ["scout", "sniper", "soldier", "demo", "medic", "heavy", "pyro", "spy", "engineer"];
+/** The body groups a head of Add > Heads shows: the head (its eyes, a Pyro's mask), and the Medic's and the Sniper's glasses; no hat. */
+const HEAD_PARTS = ["head", "glasses"];
+/** How Add > Heads lays its heads out (remembered): the gap between two in a row, between the rows (Source units), and the order. */
+interface HeadsLayout { spacing: number; rowGap: number; random: boolean }
+const HEADS_KEY = "tf2workbench.headsLayout";
 
 /** Label, model file name under models/player, and the class name items_game.txt uses. */
 const CLASSES: [label: string, mdl: string, gameClass: string][] = [
@@ -3546,15 +3553,15 @@ export function createViewTab(els: Els) {
   async function addAllClasses(start: ClassesStart) {
     const v = ensureViewer();
     if (selected) saveUi(selected);
+    const allGroup = spawnGroup("All classes");
     // (the competitive win and loss idles are made for a weapon of each class: see COMPETITIVE_SLOT)
     const slot = (mdl: string) => (start === "ref" ? null : start === "menu" ? MENU_SLOT[mdl] ?? "primary" : start === "winner" || start === "loser" ? COMPETITIVE_SLOT[mdl] ?? "primary" : start);
     const db = start !== "ref" ? await loadItemDb().catch(() => null) : null;
     const team = selected && !isBuildingCls(selected.cls) ? selected.team : 0;
-    const folder = hierarchy().activeGroup();
     const made: Entity[] = [];
     for (const mdl of ALL_CLASSES_ORDER) {
       const e = newEntity(v.addActor(), mdl, team);
-      if (folder) e.group = folder;
+      e.group = allGroup;
       const game = gameClassOf(mdl);
       const want = slot(mdl);
       if (db && want) e.held = db.weapons.find((w) => w.baseItem && itemUsableBy(w, game) && slotForClass(w, game) === want) ?? null;
@@ -3578,6 +3585,154 @@ export function createViewTab(els: Els) {
     // the camera on all of them (not when the view looks through a camera of the scene)
     if (!v.cameras.active) v.focusAll(true);
     else v.charactersChanged();
+  }
+
+  /** A new folder in the outliner for what one command adds (inside the folder being worked in, if any); its id. */
+  function spawnGroup(name: string): string {
+    const parent = hierarchy().activeGroup();
+    const id = crypto.randomUUID();
+    const taken = new Set(groups.map((g) => g.name));
+    let label = name;
+    for (let n = 2; taken.has(label); n++) label = `${name} ${n}`;
+    groups = [...groups, { id, name: label, ...(parent ? { parent } : {}) }];
+    return id;
+  }
+
+  /** The layout of Add > Heads (as last set). */
+  function headsLayout(): HeadsLayout {
+    const fallback: HeadsLayout = { spacing: 15, rowGap: 13, random: false };
+    try { return { ...fallback, ...JSON.parse(localStorage.getItem(HEADS_KEY) ?? "{}") }; } catch { return fallback; }
+  }
+
+  /**
+   * Adds the nine classes as heads only (the rest of each body hidden; the Medic and the Sniper keep their glasses, no class hat), five
+   * in a row with four below between them, in the game's order or a random one, in a folder of their own; then a panel to space them.
+   */
+  async function addHeads() {
+    const v = ensureViewer();
+    if (selected) saveUi(selected);
+    const team = selected && !isBuildingCls(selected.cls) ? selected.team : 0;
+    const folder = spawnGroup("Heads");
+    const made: Entity[] = [];
+    for (const mdl of HEADS_ORDER) {
+      const e = newEntity(v.addActor(), mdl, team);
+      e.group = folder;
+      entities.push(e);
+      made.push(e);
+    }
+    markTeams();
+    renderEntities();
+    recordAdd("Add heads", made.map((e) => ({ kind: "character" as const, id: String(e.id) })));
+    for (const e of made) {
+      await show(e, e.cls, { seqName: "ref" });
+      e.actor.setVisibleRegions(e.actor.bodyGroups.filter((g) => HEAD_PARTS.includes(g.id)).map((g) => g.id));
+      // (the Spy's cigarette is hidden: its smoke goes out too)
+      if (e.actor.conditions.cig) { v.setConditions(e.actor, { ...e.actor.conditions, cig: false }); void syncConditions(e); void applyUnusuals(e); }
+    }
+    const live = made.filter((e) => entities.includes(e));
+    if (!live.length) return;
+    // behind the characters already there; each head's middle (where it is over its feet) measured once, to line the heads up by
+    const others = entities.filter((e) => !made.includes(e));
+    const depth = others.length ? Math.min(0, ...others.map((e) => e.actor.offset.z)) - ROW_BEHIND : 0;
+    const heads = new Map<Entity, THREE.Vector3>();
+    for (const e of live) {
+      v.placeActor(e.actor, 0, 0, depth, 0);
+      const face = e.actor.facePoint();
+      heads.set(e, face ? face.sub(e.actor.offset.clone()) : new THREE.Vector3(0, 70, 0));
+    }
+    let order = live.slice();
+    const lay = (o: HeadsLayout) => {
+      order.forEach((e, i) => {
+        const top = i < 5, k = top ? i : i - 5;
+        // (the top row's middle head is in the middle; the four below sit between them, a little nearer the camera)
+        const x = top ? (k - 2) * o.spacing : (k - 1.5) * o.spacing;
+        const y = 72 + (top ? o.rowGap : 0), z = depth + (top ? 0 : 8);
+        const d = heads.get(e)!;
+        v.placeActor(e.actor, x - d.x, y - d.y, z - d.z, 0);
+      });
+      v.charactersChanged();
+    };
+    const shuffle = () => {
+      order = live.slice();
+      for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
+    };
+    let o = headsLayout();
+    if (o.random) shuffle();
+    lay(o);
+    if (!selected || !entities.includes(selected)) selectEntity(live[0]);
+    if (!v.cameras.active) v.focusAll(true);
+    headsPanel(o, (next, reshuffle) => {
+      o = next;
+      try { localStorage.setItem(HEADS_KEY, JSON.stringify(o)); } catch { /* not remembered */ }
+      if (reshuffle) { if (o.random) shuffle(); else order = live.slice(); }
+      order = order.filter((e) => entities.includes(e));
+      lay(o);
+    });
+  }
+
+  /** The panel over the view after Add > Heads: the spacing, the gap between the rows, the order (and another random one). */
+  function headsPanel(start: HeadsLayout, changed: (o: HeadsLayout, reshuffle: boolean) => void) {
+    document.querySelector(".headsPop")?.remove();
+    const o = { ...start };
+    const pop = document.createElement("div");
+    pop.className = "promoCharsPop headsPop";
+    const wrap = els.wrap.getBoundingClientRect();
+    pop.style.left = `${Math.round(wrap.left + 12)}px`;
+    pop.style.top = `${Math.round(wrap.top + 12)}px`;
+    const title = document.createElement("h4");
+    title.textContent = "Heads";
+    const slider = (label: string, min: number, max: number, get: () => number, set: (v: number) => void, tip: string) => {
+      const row = document.createElement("label");
+      row.className = "slider";
+      row.title = tip;
+      const out = document.createElement("output");
+      const input = document.createElement("input");
+      input.type = "range";
+      input.min = String(min); input.max = String(max); input.step = "1";
+      input.value = String(get());
+      out.textContent = input.value;
+      input.oninput = () => { set(+input.value); out.textContent = input.value; changed({ ...o }, false); };
+      row.append(label, out, input);
+      return row;
+    };
+    const orderRow = document.createElement("div");
+    orderRow.className = "row";
+    const seg = document.createElement("div");
+    seg.className = "seg";
+    const again = document.createElement("button");
+    again.type = "button";
+    again.textContent = "Shuffle";
+    again.title = "Another random order";
+    again.onclick = () => changed({ ...o }, true);
+    const drawSeg = () => {
+      seg.replaceChildren(...([[false, "Game order"], [true, "Random"]] as const).map(([v, text]) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = text;
+        b.className = o.random === v ? "on" : "";
+        b.onclick = () => { if (o.random === v) return; o.random = v; drawSeg(); changed({ ...o }, true); };
+        return b;
+      }));
+      again.hidden = !o.random;
+    };
+    drawSeg();
+    orderRow.append(seg, again);
+    const done = document.createElement("button");
+    done.type = "button";
+    done.className = "primary";
+    done.textContent = "Done";
+    const close = () => { pop.remove(); window.removeEventListener("keydown", esc, true); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape" && document.body.contains(pop)) { e.stopPropagation(); close(); } };
+    done.onclick = close;
+    pop.append(
+      title,
+      slider("Spacing", 8, 80, () => o.spacing, (v) => (o.spacing = v), "How far apart the heads of a row are"),
+      slider("Row gap", 0, 80, () => o.rowGap, (v) => (o.rowGap = v), "How far above the bottom row the top row is"),
+      orderRow,
+      done,
+    );
+    document.body.append(pop);
+    window.addEventListener("keydown", esc, true);
   }
 
   function removeEntity(e: Entity) {
@@ -3842,7 +3997,8 @@ export function createViewTab(els: Els) {
     v?.setConditionsPaused(false);
     const e = selected;
     if (!v || !e || play?.active || !e.anim.info) return;
-    v.cameras.stopEditing(); v.cameras.leave();
+    // (a scene camera looked through stays the view: play mode does not move the camera, so the shot can be watched as it is played)
+    v.cameras.stopEditing();
     v.resetHitReactions();v.clearWeaponEffects(e.actor);renderEntities();
     if (e.actor.isPosing) exitPosing();
     const db = await loadItemDb();
@@ -4440,7 +4596,7 @@ export function createViewTab(els: Els) {
     const d = new Date();
     const p2 = (n: number) => String(n).padStart(2, "0");
     const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
-    const base = `${options.source === "turntable" ? "turntable" : "loadout"}-${stamp}`;
+    const base = `${options.source === "turntable" ? "turntable" : options.source === "play" ? "play" : "loadout"}-${stamp}`;
     // a PNG sequence goes into a folder, as <base>_0001.png, <base>_0002.png, …
     const sequence = options.format === "png";
     const picked = sequence
@@ -4452,19 +4608,29 @@ export function createViewTab(els: Els) {
     const framePath = (i: number) => `${path.replace(/[\\/]+$/, "")}${sep}${base}_${String(i + 1).padStart(4, "0")}.png`;
     const buttons = [els.capture.shot, els.capture.psd];
     buttons.forEach((b) => (b.disabled = true));
-    const started = performance.now();
+    const playing = options.source === "play";
     try {
+      // play mode: armed until play mode starts (the video starts with play, nothing before it)
+      if (playing && !play?.active) {
+        report("Ready: recording starts when you enter play mode (the gamepad button).");
+        while (!play?.active) {
+          if (signal.aborted) throw new Error("Cancelled");
+          await new Promise((r) => requestAnimationFrame(r));
+        }
+      }
+      const started = performance.now();
       const result = await recordVideo(v, options, (p) => {
         const seconds = (performance.now() - started) / 1000;
-        report(p.phase === "rendering" ? `Rendering frame ${p.done} of ${p.total}… ${seconds.toFixed(0)} s` : options.format === "gif" ? "Optimizing the GIF…" : "Finishing the file…");
-      }, signal, sequence ? (i, png) => writeBinaryFile(framePath(i), png) : undefined);
+        report(p.phase !== "rendering" ? (options.format === "gif" ? "Optimizing the GIF…" : "Finishing the file…")
+          : playing ? `● Recording ${(p.done / options.fps).toFixed(1)} of ${options.seconds} s (leave play mode to stop)` : `Rendering frame ${p.done} of ${p.total}… ${seconds.toFixed(0)} s`);
+      }, signal, sequence ? (i, png) => writeBinaryFile(framePath(i), png) : undefined, playing ? () => !play?.active : undefined, report);
       if (sequence) {
         report(`Saved ${result.frames} frames, ${result.width}×${result.height}: ${framePath(0)} …`);
         return;
       }
       await writeBinaryFile(path, result.bytes);
       const mb = result.bytes.length / 1048576;
-      report(`Saved ${result.width}×${result.height}, ${result.frames} frames, ${mb >= 1 ? mb.toFixed(1) + " MB" : Math.round(result.bytes.length / 1024) + " KB"}: ${path}`);
+      report(`Saved ${result.width}×${result.height}, ${result.frames} frames, ${mb >= 1 ? mb.toFixed(2) + " MB" : Math.round(result.bytes.length / 1024) + " KB"}${result.note ? ` (to fit 2 MB: ${result.note})` : ""}: ${path}`);
     } finally {
       buttons.forEach((b) => (b.disabled = false));
     }
@@ -5568,6 +5734,15 @@ export function createViewTab(els: Els) {
       // the bodygroups set by hand in this shot, over what its cosmetics set (as the Bodygroups of the character's properties)
       e.bodyManual = new Map(Object.entries(spec.bodygroups ?? {}));
       await promoDress(e, loadout, spec.weapon !== null ? byId.get(spec.weapon) ?? null : null, spec.regions, teamOf(spec), spec.hiddenRegions);
+      // the triangles hidden by hand in 3D, of the body and of what it wears; a Spy's smoke as it was set there
+      e.actor.setHandMaskState(spec.bodyTris);
+      e.actor.setItemMaskState(spec.itemTris);
+      if (spec.cig !== undefined && gameClassOf(e.cls) === "spy" && e.actor.conditions.cig !== spec.cig) {
+        ensureViewer().setConditions(e.actor, { ...e.actor.conditions, cig: spec.cig });
+        void syncConditions(e);
+        // (the smoke is one of the character's particle effects: they are made again without it, or with it)
+        await applyUnusuals(e);
+      }
       // the pose it holds, when it is not the weapon's idle
       if (spec.pose) {
         e.actor.usePose({ pos: Float32Array.from(spec.pose.pos), quat: Float32Array.from(spec.pose.quat), scale: spec.pose.scale ? Float32Array.from(spec.pose.scale) : undefined });
@@ -5650,7 +5825,7 @@ export function createViewTab(els: Els) {
   const teamOf = (spec: ShotSpec) => spec.team ?? (spec.role === 1 ? 1 : 0);
   /** What a shot's character wears, holds, its team and how it stands, as a key (the character is dressed again only when it changes). */
   const dressKey = (spec: ShotSpec) =>
-    JSON.stringify([spec.cls ?? null, spec.loadout.map((x) => [x.item, x.paint, x.style]), spec.weapon, spec.regions, spec.hiddenRegions ?? null, spec.bodygroups ?? null, teamOf(spec), spec.pose ? spec.pose.quat.slice(0, 64).map((q) => Math.round(q * 1e4)) : null, spec.flex ?? null]);
+    JSON.stringify([spec.cls ?? null, spec.loadout.map((x) => [x.item, x.paint, x.style]), spec.weapon, spec.regions, spec.hiddenRegions ?? null, spec.bodyTris ?? null, spec.itemTris ?? null, spec.cig ?? null, spec.bodygroups ?? null, teamOf(spec), spec.pose ? spec.pose.quat.slice(0, 64).map((q) => Math.round(q * 1e4)) : null, spec.flex ?? null]);
 
   /**
    * Gives a shot a random pose, as the random loadouts do: a taunt (held) or an animation, half the time each, stopped on a frame where
@@ -6172,6 +6347,20 @@ export function createViewTab(els: Els) {
   }
 
   /** A character of a shot as it is in the view now: its class, team, loadout, weapon, bodygroups, pose and face. */
+  /** The parts of a character's body hidden by hand: those a shot of it would show (`regions`, or all of it) that are not shown now. */
+  function hiddenRegionsOf(e: Entity, regions: string[] | null): string[] | undefined {
+    const all = e.actor.bodyGroups.map((g) => g.id), now = e.actor.visibleRegions;
+    const hidden = now.has("*") ? [] : (regions ?? all).filter((id) => id !== "*" && all.includes(id) && !now.has(id));
+    return hidden.length ? hidden : undefined;
+  }
+
+  /** What was done to a character by hand in 3D that a shot of it keeps: the triangles hidden (body, items), a Spy's smoke on or off. */
+  function keepHandMade(part: ShotSpec, e: Entity) {
+    part.bodyTris = e.actor.handMaskState;
+    part.itemTris = e.actor.itemMaskState;
+    part.cig = gameClassOf(e.cls) === "spy" ? !!e.actor.conditions.cig : undefined;
+  }
+
   function takePart(part: ShotSpec, e: Entity) {
     const game = gameClassOf(e.cls);
     part.loadout = e.items.loadout.filter((x) => itemUsableBy(x.item, game)).map((x) => ({ item: x.item.id, name: x.item.displayName, paintable: x.item.paintable, paint: x.paint?.id ?? null, style: x.style }));
@@ -6179,11 +6368,8 @@ export function createViewTab(els: Els) {
     part.team = e.team;
     part.cls = e.cls === promo().cls ? undefined : e.cls; // a class picked in 3D
     part.bodygroups = e.bodyManual.size ? Object.fromEntries(e.bodyManual) : undefined;
-    // the parts of the body hidden by hand: those it would show (its regions, or all of it) that are not shown now
-    const all = e.actor.bodyGroups.map((g) => g.id), now = e.actor.visibleRegions;
-    const would = part.regions ?? all;
-    const hidden = now.has("*") ? [] : would.filter((id) => id !== "*" && all.includes(id) && !now.has(id));
-    part.hiddenRegions = hidden.length ? hidden : undefined;
+    part.hiddenRegions = hiddenRegionsOf(e, part.regions);
+    keepHandMade(part, e);
     // the pose it shows now: a custom one, or the frame of what it plays (and that, as its source: the board's Pose list and timeline)
     part.poseOf = poseSourceAfterEdit(part, e);
     if (e.actor.isPosing) e.actor.endPose(true);
@@ -6272,12 +6458,22 @@ export function createViewTab(els: Els) {
     const v = ensureViewer();
     return structuredClone({ light: v.getLight(), pointLight: v.getPointLight(), post: capturePost() as Record<string, unknown> });
   }
+  /** The lights and effects of the scene you look at in the 3D view (while a promo scene is open, the one you came from). */
+  function viewEnv(): ShotEnv {
+    const home = isPromoTab(activeTab) ? promoHome?.scene : null;
+    if (!home) return currentEnv();
+    return structuredClone({ light: home.light, pointLight: home.pointLight, post: viewPost() });
+  }
   /** Each promo scene's lights and effects as it was made (what a shot without its own has). */
   const baseEnv = new WeakMap<SceneTab, ShotEnv>();
   /** The lights and effects a shot is taken in (its scene is the open one): its own, else its scene's first ones, with the board's look. */
   function envFor(spec: ShotSpec): ShotEnv | null {
+    return envOf(spec, activeTab);
+  }
+  /** The lights and effects a shot is taken in, its scene being `tab` (see {@link envFor}). */
+  function envOf(spec: ShotSpec, tab: SceneTab | null | undefined): ShotEnv | null {
     if (spec.env) return spec.env;
-    const base = activeTab ? baseEnv.get(activeTab) : undefined;
+    const base = tab ? baseEnv.get(tab) : undefined;
     const look = spec.effects?.look ? spec.effects.post : undefined;
     if (!base) return look ? { ...currentEnv(), post: look } : null;
     return look ? { ...base, post: look } : base;
@@ -6597,6 +6793,10 @@ export function createViewTab(els: Els) {
       return `Saved ${pictures.length} ${format === "psd" ? "Photoshop files" : format.toUpperCase()} (${size}${o.render > o.out ? `, drawn at ${drawnAt}` : ""}) to ${dir}.`;
     },
     viewLook: () => viewPost(),
+    shotEnv: (spec) => {
+      const env = envOf(spec, promo().roles.get(spec.role));
+      return env ? structuredClone(env) : null;
+    },
     retake: (l, live) => inPromoScene(async () => {
       if (l.shot) l.image = await takeShot(l.shot, live);
       else if (l.chart) {
@@ -6824,6 +7024,8 @@ export function createViewTab(els: Els) {
         loadout: e.items.loadout.filter((x) => !x.hidden && itemUsableBy(x.item, game)).map((x) => ({ item: x.item.id, name: x.item.displayName, paintable: x.item.paintable, paint: x.paint?.id ?? null, style: x.style })),
       };
       if (e.bodyManual.size) p.bodygroups = Object.fromEntries(e.bodyManual);
+      p.hiddenRegions = hiddenRegionsOf(e, null); // (the parts of the body hidden in the view: a head alone, say)
+      keepHandMade(p, e);
       p.poseOf = poseSourceAfterEdit(p, e);
       const pose = e.actor.snapshotCustomPose() ?? e.actor.snapshotPose();
       if (pose) p.pose = { pos: Array.from(pose.pos), quat: Array.from(pose.quat), scale: pose.scale ? Array.from(pose.scale) : undefined };
@@ -6852,6 +7054,8 @@ export function createViewTab(els: Els) {
     const ents = sendTargets();
     if (!ents.length) return;
     const { spec, aspect: camAspect } = shotOfView(ents);
+    // the lights and effects of the scene it is sent from (its promo scene has the ones it was made with)
+    spec.env = viewEnv();
     const aspect = camAspect ?? Math.max(0.3, ensureViewer().camera.aspect);
     const mine = target ?? newBlankBoard(false);
     const tab = mine?.board;
@@ -6899,6 +7103,7 @@ export function createViewTab(els: Els) {
     if (!cls) return;
     const on = e?.items.loadout.find((x) => x.item.id === item.id);
     const team = e?.team ?? 0;
+    const env = viewEnv();
     const mine = target ?? newBlankBoard(false);
     const tab = mine?.board;
     if (!mine || !tab?.board) return;
@@ -6913,6 +7118,7 @@ export function createViewTab(els: Els) {
         weapon: null, regions: defaultBodyGroupsFor(cls, item.equipRegions), yaw: 24, pitch: 13, fill: 1, w, h,
         // the lens of the 3D view as you see it (its horizontal angle, which the board's slider shows, the same over the shot's width)
         fov: viewFovFor(w / h),
+        env,
       };
       return inPromoScene(async () => {
         // (centred on what is seen of it, as the promo's own Item alone pictures are)
@@ -6933,6 +7139,14 @@ export function createViewTab(els: Els) {
         hint: ents.length ? undefined : "select characters first",
         disabled: !ents.length,
         children: ents.length ? boardChoices((target) => void sendToBoard(target)) : undefined,
+      },
+      {
+        label: ents.length > 1 ? `Random face for ${ents.length} characters` : "Random face",
+        icon: "dices",
+        hint: ents.length ? undefined : "select characters first",
+        disabled: !ents.length,
+        // (as Roll random loadouts gives a face: a random one on the flex sliders, each character its own)
+        run: () => void Promise.all(ents.map((e) => rollFlexes(e))),
       },
     ]);
   }
@@ -7171,6 +7385,7 @@ export function createViewTab(els: Els) {
         bodyShown: e.actor.partsHidden ? [...e.actor.visibleRegions] : undefined,
         bodyMaskVersion: 1,
         bodyTris: e.actor.handMaskState,
+        itemTris: e.actor.itemMaskState,
         fogged: e.actor.fogged ? undefined : false,
         eyesFollowCamera: e.actor.followsCamera || undefined,
       };
@@ -7216,6 +7431,7 @@ export function createViewTab(els: Els) {
       e.unusuals = parseUnusualSettings(s.unusuals);
       e.actor.setInspectOnly(s.inspectOnly === true);
       e.actor.setHandMaskState(s.bodyTris);
+      e.actor.setItemMaskState(s.itemTris);
       e.actor.fogged = s.fogged !== false;
       e.actor.setEyesFollowCamera(s.eyesFollowCamera === true);
       if (s.bodyShown) e.actor.setVisibleRegions(s.bodyShown, s.bodyMaskVersion !== 1);
@@ -8303,7 +8519,7 @@ export function createViewTab(els: Els) {
   // The Add menu of the outliner: a character, a buildable, a light or a camera
   const ICON = {
     character: "userRound", buildable: "wrench", prop: "box", light: "lightbulb", camera: "video", sun: "sun", point: "circleDot", spot: "flashlight",
-    area: "rectangleHorizontal", folder: "folder", classes: "users",
+    area: "rectangleHorizontal", folder: "folder", classes: "users", heads: "scanFace",
   } as const satisfies Record<string, IconName>;
   const propsRoot = document.getElementById("propsPane");
   if (propsRoot) createPropPanel(propsRoot, { add: (path, at) => void addProp(path, at) });
@@ -8328,6 +8544,7 @@ export function createViewTab(els: Els) {
         icon: ICON.classes,
         children: ALL_CLASSES_STARTS.map(([start, label], i) => ({ label, separator: i === 4, run: () => void addAllClasses(start) })),
       },
+      { label: "Heads", icon: ICON.heads, hint: "all nine classes, heads only", run: () => void addHeads() },
       {
         label: "Buildable",
         icon: ICON.buildable,

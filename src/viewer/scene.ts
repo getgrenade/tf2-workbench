@@ -61,6 +61,8 @@ export interface SceneEntity {
   eyesFollowCamera?: boolean;
   /** Triangles hidden by hand with the view tools: bit-packed base64 per mesh. */
   bodyTris?: Record<string, string>;
+  /** The worn items' triangles hidden by hand, as bodyTris (keyed by the item). */
+  itemTris?: Record<string, string>;
   /** Buildings only: what the building is doing (damage, metal, firing ...); see buildingFx.ts. */
   building?: BuildingFx;
 }
@@ -155,6 +157,7 @@ export function parseScene(text: string): SceneFile {
       held: isNum(e.held) ? e.held : null,
       inspectOnly: e.inspectOnly === true ? true : undefined,
       bodyTris: e.bodyTris && typeof e.bodyTris === "object" ? Object.fromEntries(Object.entries(e.bodyTris).filter(([, v]) => typeof v === "string")) : undefined,
+      itemTris: e.itemTris && typeof e.itemTris === "object" ? Object.fromEntries(Object.entries(e.itemTris).filter(([, v]) => typeof v === "string")) : undefined,
       fogged: e.fogged === false ? false : undefined,
       eyesFollowCamera: e.eyesFollowCamera === true ? true : undefined,
       building: e.building && typeof e.building === "object" ? readFx(e.building) : undefined,
