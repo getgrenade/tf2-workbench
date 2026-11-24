@@ -4088,6 +4088,14 @@ export function createViewTab(els: Els) {
     if (document.getElementById("view")?.hidden || play?.active) return;
     if (viewer?.focusAtPointer()) ev.preventDefault();
   });
+  // . (Frame selected): the camera zoomed in on the selected character, following it
+  window.addEventListener("keydown", ev => {
+    const target = ev.target as HTMLElement | null;
+    if (!hotkeyMatches("view.focusSelected", ev) || ev.repeat || ev.defaultPrevented || target?.isContentEditable || (target && /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(target.tagName))) return;
+    if (document.getElementById("view")?.hidden || play?.active || !selected || !viewer) return;
+    viewer.focusActor(selected.actor);
+    ev.preventDefault();
+  });
   // A: the camera back on all the characters (when the pointer is over the view)
   window.addEventListener("keydown", ev => {
     const target = ev.target as HTMLElement | null;

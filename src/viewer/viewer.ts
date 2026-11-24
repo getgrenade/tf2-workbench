@@ -861,6 +861,7 @@ void main() {
       if (this.rig.active) this.rig.update();
       if (this.blenderRig.active) this.blenderRig.update();
       this.mats.updateDynamic(now / 1000);
+      this.followActor();
       if (!this.cameras.active) this.controls.update();
       this.aimEyesAt(this.camera);
       this.updateLight();
@@ -2143,6 +2144,13 @@ void main() {
       const hit = this.pickAt(e.clientX, e.clientY);
       this.onPick(hit?.actor ?? null, hit ? { item: hit.item, x: e.clientX, y: e.clientY } : undefined, d.shift);
     });
+    // a double click on something frames it and keeps the view on it (it follows it as it moves); on nothing, lets go
+    el.addEventListener("dblclick", (e) => {
+      if (this.blenderRig.active || this.rig.active || this.gizmoHot || e.button !== 0) return;
+      const hit = this.pickAt(e.clientX, e.clientY);
+      if (hit) this.focusActor(hit.actor);
+      else this.followed = null;
+    });
     el.addEventListener("pointermove", (e) => {
       if (this.blenderRig.active && e.buttons === 0) { const id = this.blenderRig.pick(e.clientX, e.clientY); if (this.blenderRig.hover(id)) el.style.cursor = id ? "pointer" : ""; return; }
       if (!this.rig.active || e.buttons !== 0) return;
@@ -3287,8 +3295,36 @@ void main() {
     this.controls.zoomSpeed = Number.isFinite(strength) ? Math.max(.1, Math.min(10, strength)) : 1;
   }
 
+  /** The character the view follows since it was double-clicked, and where it was then (the view moves as much as it moves). */
+  private followed: { actor: Actor; at: THREE.Vector3 } | null = null;
+
+  /** Frames a character (zoomed in on it, from where the camera looks now) and keeps the view on it until something else moves the view. */
+  focusActor(actor: Actor) {
+    if (!actor.hasModel) return;
+    const box = actor.computeBounds(new THREE.Box3());
+    if (box.isEmpty()) return;
+    this.cameras.prepareNavigation();
+    this.followed = { actor, at: actor.offset.clone() };
+    this.frameCamera(box, true, undefined, true);
+    const center = box.getCenter(new THREE.Vector3());
+    window.setTimeout(() => this.ping(center), this.controls.enableDamping ? 250 : 0);
+  }
+
+  /** While the view follows a character: moves the camera and what it looks at by as much as the character moved. */
+  private followActor() {
+    const f = this.followed;
+    if (!f) return;
+    if (!this.actorList.includes(f.actor) || this.cameras.active) { this.followed = null; return; }
+    const moved = f.actor.offset.clone().sub(f.at);
+    if (moved.lengthSq() < 1e-8) return;
+    f.at.copy(f.actor.offset);
+    this.camera.position.add(moved);
+    this.controls.target.add(moved);
+  }
+
   /** Center the actual posed surface under the pointer and orbit around that point. */
   focusAtPointer(): boolean {
+    this.followed = null;
     if (!this.entityPointer.inside || this.entityModal || this.cameras.hot || this.rig.gizmoHot) return false;
     const rect = this.renderer.domElement.getBoundingClientRect();
     const { x, y } = this.entityPointer;
@@ -3521,6 +3557,7 @@ void main() {
 
   /** Camera back on all the characters, from where it looks now. */
   focusAll(navigated = false) {
+    this.followed = null;
     if (navigated && this.cameras.navigatingView) {
       const box = new THREE.Box3();
       for (const a of this.actorList) if (a.hasModel) box.union(a.computeBounds(this.tmpBox));
