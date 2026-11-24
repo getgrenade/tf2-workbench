@@ -3271,6 +3271,12 @@ export function createViewTab(els: Els) {
       renderEntities();
     },
     selectRig: (id) => selectRig(id),
+    mapOff: (off) => {
+      if (!worldMap) return;
+      worldMap.group.visible = !off;
+      syncMapRow();
+    },
+    mapRemove: () => removeWorldMap(),
     newGroup: (parent) => {
       const id = crypto.randomUUID();
       groups = [...groups, { id, name: newGroupName(groups), ...(parent ? { parent } : {}) }];
@@ -8334,6 +8340,11 @@ export function createViewTab(els: Els) {
     e.preventDefault();
     viewMenu(e.clientX, e.clientY);
   });
+  /** The map's row in the outliner (its name, whether it is hidden, what it is loading). */
+  let mapStatus = "";
+  function syncMapRow() {
+    hierarchy().setMap(worldMap ? { name: worldMap.name, off: !worldMap.group.visible, ...(mapStatus ? { status: mapStatus } : {}) } : null);
+  }
   /** Loads a map into the scene in place of the one there (its sky with it); a spawn point of it is where the characters stand. */
   async function loadWorldMap(name: string) {
     const v = viewer;
@@ -8343,8 +8354,17 @@ export function createViewTab(els: Els) {
     const map = new MapScene(name);
     worldMap = map;
     v.setWorld(map.group, 1e5);
+    mapStatus = "loading";
+    syncMapRow();
     try {
-      await map.load((text) => { if (worldMap === map) els.info.textContent = text; });
+      await map.load((text) => {
+        if (worldMap !== map) return;
+        els.info.textContent = text;
+        mapStatus = text ? text.replace(`${name}: `, "").replace(/^Reading .*/, "reading") : "";
+        syncMapRow();
+      });
+      mapStatus = "";
+      syncMapRow();
       if (worldMap !== map) return;
       v.setWorld(map.group, Math.max(20000, map.extent * 1.5));
       if (map.sky) {
@@ -8363,7 +8383,9 @@ export function createViewTab(els: Els) {
     if (!worldMap) return;
     worldMap.dispose();
     worldMap = null;
+    mapStatus = "";
     viewer?.setWorld(null);
+    syncMapRow();
     if (skyBeforeMap) {
       const before = skyBeforeMap;
       skyBeforeMap = null;
