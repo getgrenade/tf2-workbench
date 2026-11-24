@@ -1041,26 +1041,76 @@ pub fn read(file: &[u8]) -> Result<Map> {
             [p[0] + normal[0] * 0.25, p[1] + normal[1] * 0.25, p[2] + normal[2] * 0.25]
         }).collect();
         let uvs = [[u[0], v[0]], [u[0], v[1]], [u[1], v[1]], [u[1], v[0]]];
-        let lit = faces.get(face.max(0) as usize).filter(|_| face >= 0).and_then(|f| texinfos.get(f.texinfo as usize).map(|ft| (f, ft)));
         let mesh = by_material.entry(format!("{OVERLAY_PREFIX}{material}")).or_insert_with(|| MapMesh { material: format!("{OVERLAY_PREFIX}{material}"), ..Default::default() });
-        let base = (mesh.positions.len() / 3) as u32;
         let ts = bu;
         let tt = bv.map(|c| -c);
-        for (k, p) in corners.iter().enumerate() {
-            mesh.positions.extend_from_slice(p);
-            mesh.normals.extend_from_slice(&normal);
-            mesh.uvs.extend_from_slice(&uvs[k]);
-            mesh.lightmap_uvs.extend_from_slice(&lit.map_or([-1.0, -1.0], |(f, ft)| lightmap_uv(face as usize, f, ft, *p)));
-            mesh.blend.push(0.0);
-            mesh.tangents_s.extend_from_slice(&ts);
-            mesh.tangents_t.extend_from_slice(&tt);
-        }
         // wound to face along the normal
         let n = cross(sub(corners[1], corners[0]), sub(corners[2], corners[0]));
-        if dot(n, normal) >= 0.0 {
-            mesh.indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        let along = dot(n, normal) >= 0.0;
+        // the faces it lies on (as many as 64: a long stripe crosses several): each piece of it on a face, lit by that face's lightmap
+        let count = (u16_at(o, 6).unwrap_or(0) & 0x3fff).min(64) as usize;
+        let on: Vec<usize> = (0..count).filter_map(|k| i32_at(o, 8 + k * 4)).filter(|&f| f >= 0 && (f as usize) < faces.len()).map(|f| f as usize).collect();
+        let quad: Vec<([f32; 3], [f32; 2])> = corners.iter().copied().zip(uvs).collect();
+        let mut pieces: Vec<(Vec<([f32; 3], [f32; 2])>, Option<usize>)> = Vec::new();
+        if on.len() <= 1 {
+            pieces.push((quad.clone(), on.first().copied().or((face >= 0).then_some(face as usize))));
         } else {
-            mesh.indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
+            for &fi in &on {
+                let poly = face_vertices(&faces[fi]);
+                if poly.len() < 3 {
+                    continue;
+                }
+                let c = poly.iter().fold([0.0; 3], |a, v| [a[0] + v[0], a[1] + v[1], a[2] + v[2]]).map(|v| v / poly.len() as f32);
+                // the face's edges, each a plane the piece must be inside of (toward the face's middle)
+                let mut piece = quad.clone();
+                for k in 0..poly.len() {
+                    let (a, b) = (poly[k], poly[(k + 1) % poly.len()]);
+                    let mut en = cross(sub(b, a), normal);
+                    if dot(en, sub(c, a)) < 0.0 {
+                        en = en.map(|x| -x);
+                    }
+                    let side = |p: [f32; 3]| dot(en, sub(p, a));
+                    let mut out = Vec::new();
+                    for j in 0..piece.len() {
+                        let (p, q) = (piece[j], piece[(j + 1) % piece.len()]);
+                        let (dp, dq) = (side(p.0), side(q.0));
+                        if dp >= 0.0 {
+                            out.push(p);
+                        }
+                        if (dp >= 0.0) != (dq >= 0.0) {
+                            let t = dp / (dp - dq);
+                            out.push(([p.0[0] + (q.0[0] - p.0[0]) * t, p.0[1] + (q.0[1] - p.0[1]) * t, p.0[2] + (q.0[2] - p.0[2]) * t], [p.1[0] + (q.1[0] - p.1[0]) * t, p.1[1] + (q.1[1] - p.1[1]) * t]));
+                        }
+                    }
+                    piece = out;
+                    if piece.len() < 3 {
+                        break;
+                    }
+                }
+                if piece.len() >= 3 {
+                    pieces.push((piece, Some(fi)));
+                }
+            }
+        }
+        for (piece, fi) in pieces {
+            let lit = fi.and_then(|fi| faces.get(fi).and_then(|f| texinfos.get(f.texinfo as usize).map(|ft| (fi, f, ft))));
+            let base = (mesh.positions.len() / 3) as u32;
+            for (p, uv) in &piece {
+                mesh.positions.extend_from_slice(p);
+                mesh.normals.extend_from_slice(&normal);
+                mesh.uvs.extend_from_slice(uv);
+                mesh.lightmap_uvs.extend_from_slice(&lit.map_or([-1.0, -1.0], |(fi, f, ft)| lightmap_uv(fi, f, ft, *p)));
+                mesh.blend.push(0.0);
+                mesh.tangents_s.extend_from_slice(&ts);
+                mesh.tangents_t.extend_from_slice(&tt);
+            }
+            for k in 1..piece.len() as u32 - 1 {
+                if along {
+                    mesh.indices.extend_from_slice(&[base, base + k, base + k + 1]);
+                } else {
+                    mesh.indices.extend_from_slice(&[base, base + k + 1, base + k]);
+                }
+            }
         }
     }
     let mut meshes: Vec<MapMesh> = by_material.into_values().filter(|m| !m.indices.is_empty()).collect();
@@ -1382,5 +1432,29 @@ mod overlay_tests {
         // an outdoor map's sky has faces
         let Ok(bytes) = std::fs::read(std::path::Path::new(&dir).join("maps/vsh_maul.bsp")) else { return };
         assert!(super::read(&bytes).unwrap().meshes.iter().any(|m| m.material == super::SKY_MATERIAL));
+    }
+}
+
+#[cfg(test)]
+mod overlay_light_tests {
+    /// itemtest (TF2_TF_DIR): its long floor stripe crosses several faces; every piece of it reads a lit part of the lightmap.
+    #[test]
+    fn itemtests_stripe_is_lit_all_along() {
+        let Some(dir) = std::env::var_os("TF2_TF_DIR") else { return };
+        let Ok(bytes) = std::fs::read(std::path::Path::new(&dir).join("maps/itemtest.bsp")) else { return };
+        let map = super::read(&bytes).unwrap();
+        let (w, h) = (map.lightmap_width as usize, map.lightmap_height as usize);
+        let (mut dark, mut total) = (0, 0);
+        for m in map.meshes.iter().filter(|m| m.material.starts_with(super::OVERLAY_PREFIX)) {
+            for uv in m.lightmap_uvs.chunks_exact(2) {
+                total += 1;
+                let (x, y) = ((uv[0] * w as f32) as usize, (uv[1] * h as f32) as usize);
+                let px = map.lightmap.get((y.min(h - 1) * w + x.min(w - 1)) * 4..).map_or(0, |p| p[0] as u32 + p[1] as u32 + p[2] as u32);
+                if uv[0] < 0.0 || px == 0 {
+                    dark += 1;
+                }
+            }
+        }
+        assert!(total > 4 && dark == 0, "{dark} of {total} overlay corners unlit");
     }
 }
