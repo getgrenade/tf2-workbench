@@ -61,7 +61,7 @@ pub fn load_map(state: &AppState, name: &str) -> Result<Vec<u8>, String> {
         .collect();
     let lightmap = blob.len();
     blob.extend_from_slice(&map.lightmap);
-    let props: Vec<_> = map.props.iter().map(|p| json!({ "index": p.static_index, "model": p.model, "origin": p.origin, "angles": p.angles, "skin": p.skin, "scale": p.scale, "ambient": p.ambient, "sunlit": p.sunlit, "key": p.key.map(|(dir, color)| json!({ "dir": dir, "color": color })) })).collect();
+    let props: Vec<_> = map.props.iter().map(|p| json!({ "index": p.static_index, "model": p.model, "origin": p.origin, "angles": p.angles, "skin": p.skin, "scale": p.scale, "ambient": p.ambient, "sunlit": p.sunlit, "key": p.key.map(|(dir, color)| json!({ "dir": dir, "color": color })), "animation": p.animation })).collect();
     // the average light of the lit faces (linear), to set the exposure by, as the game's auto exposure does
     let page = (map.lightmap_width * map.lightmap_height * 4) as usize;
     let (mut sum, mut n) = (0.0f64, 0usize);
@@ -84,6 +84,7 @@ pub fn load_map(state: &AppState, name: &str) -> Result<Vec<u8>, String> {
         "sun": map.sun.map(|s| json!({ "dir": s.dir, "color": s.color })),
         "exposureMin": map.exposure_min,
         "cubemaps": map.cubemaps,
+        "shadow": map.shadow.map(|s| json!({ "dir": s.dir, "color": s.color, "distance": s.distance })),
         "exposureMax": map.exposure_max,
         "sky": map.sky,
         "bounds": map.bounds,
@@ -134,7 +135,8 @@ pub fn map_material(state: &AppState, name: &str, max_size: u32) -> Result<Vec<u
             json!({ "slot": slot, "width": img.width, "height": img.height, "offset": offset })
         })
         .collect();
-    let header = serde_json::to_vec(&json!({ "shader": m.shader, "params": m.params, "textures": textures })).map_err(|e| e.to_string())?;
+    let proxies: Vec<_> = m.proxies.iter().map(|p| json!({ "name": p.name, "params": p.params })).collect();
+    let header = serde_json::to_vec(&json!({ "shader": m.shader, "params": m.params, "textures": textures, "proxies": proxies })).map_err(|e| e.to_string())?;
     let mut out = Vec::with_capacity(8 + header.len() + blob.len());
     out.extend_from_slice(&(header.len() as u32).to_le_bytes());
     out.extend_from_slice(&header);

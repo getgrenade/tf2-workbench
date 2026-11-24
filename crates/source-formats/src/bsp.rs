@@ -126,6 +126,17 @@ pub struct MapProp {
     pub key: Option<([f32; 3], [f32; 3])>,
     /// Where the game lights it from, when the map says (a static prop's lighting origin).
     pub lighting_origin: Option<[f32; 3]>,
+    /// The sequence a prop entity plays (its DefaultAnim; none: its first). Static props do not move.
+    pub animation: Option<String>,
+}
+
+/// How the map's characters cast their shadows (its `shadow_control`): the way the shadows fall (a direction, the map's axes), their
+/// colour (0..1) and how far they reach from what casts them.
+#[derive(Debug, Clone, Copy)]
+pub struct MapShadow {
+    pub dir: [f32; 3],
+    pub color: [f32; 3],
+    pub distance: f32,
 }
 
 /// The sun of the map (`light_environment`): the direction toward it and its colour (linear).
@@ -162,6 +173,8 @@ pub struct Map {
     /// The limits the map gives the game's auto exposure (`env_tonemap_controller`'s SetAutoExposureMin / Max, when it sets them).
     pub exposure_min: Option<f32>,
     pub exposure_max: Option<f32>,
+    /// How its characters cast their shadows (its shadow_control; the game's default without one); none when it turns them off.
+    pub shadow: Option<MapShadow>,
     /// Where the map's cubemaps were taken (`env_cubemap`s): their pictures are `materials/maps/<map>/c<x>_<y>_<z>.vtf` in its files.
     pub cubemaps: Vec<[i32; 3]>,
     /// The map's light where something stands (for the characters).
@@ -778,6 +791,7 @@ pub fn read(file: &[u8]) -> Result<Map> {
                 sunlit: false,
                 key: None,
                 lighting_origin: None,
+                animation: e.get("defaultanim").map(|a| a.trim().to_string()).filter(|a| !a.is_empty()),
             });
         }
     }
@@ -1121,7 +1135,22 @@ pub fn read(file: &[u8]) -> Result<Map> {
         bounds = [0.0; 6];
     }
     let cubemaps = bsp.lump(LUMP_CUBEMAPS).data.chunks_exact(16).map(|c| [i32_at(c, 0).unwrap_or(0), i32_at(c, 4).unwrap_or(0), i32_at(c, 8).unwrap_or(0)]).collect();
-    Ok(Map { meshes, props, spawns, lightmap_width: width, lightmap_height: height, lightmap, sky, bounds, sun, light, exposure_min, exposure_max, cubemaps })
+    // shadow_control: its angles (the default 80 30 0 without one), colour (64 64 64) and distance (75)
+    let control = entities.iter().find(|e| e.get("classname").is_some_and(|c| c == "shadow_control"));
+    let number3 = |s: Option<&String>| -> Option<[f32; 3]> {
+        let v: Vec<f32> = s?.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+        (v.len() >= 3).then(|| [v[0], v[1], v[2]])
+    };
+    let shadow = if control.and_then(|c| c.get("disableallshadows")).is_some_and(|d| d.trim() == "1") {
+        None
+    } else {
+        let [pitch, yaw, _] = number3(control.and_then(|c| c.get("angles"))).unwrap_or([80.0, 30.0, 0.0]);
+        let (p, y) = (pitch.to_radians(), yaw.to_radians());
+        let color = number3(control.and_then(|c| c.get("color"))).unwrap_or([64.0, 64.0, 64.0]).map(|c| (c / 255.0).clamp(0.0, 1.0));
+        let distance = control.and_then(|c| c.get("distance")).and_then(|d| d.trim().parse().ok()).filter(|d: &f32| *d > 0.0).unwrap_or(75.0);
+        Some(MapShadow { dir: [p.cos() * y.cos(), p.cos() * y.sin(), -p.sin()], color, distance })
+    };
+    Ok(Map { meshes, props, spawns, lightmap_width: width, lightmap_height: height, lightmap, sky, bounds, sun, light, exposure_min, exposure_max, cubemaps, shadow })
 }
 
 fn grow(b: &mut [f32; 6], p: [f32; 3]) {
@@ -1249,7 +1278,7 @@ fn static_props(bsp: &Bsp) -> Vec<MapProp> {
             let scale = if version >= 11 { f32_at(p, stride - 4).filter(|s| *s > 0.0 && s.is_finite()).unwrap_or(1.0) } else { 1.0 };
             out.push(MapProp { static_index: Some(k as u32), model: model.clone(), origin: vec3(p, 0), angles: vec3(p, 12), skin: i32_at(p, 32).unwrap_or(0), scale, ambient: [[0.0; 3]; 6], sunlit: false, key: None,
                 // (flag 2: STATIC_PROP_USE_LIGHTING_ORIGIN)
-                lighting_origin: (p[31] & 2 != 0).then(|| vec3(p, 44)) });
+                lighting_origin: (p[31] & 2 != 0).then(|| vec3(p, 44)), animation: None });
         }
     }
     out
@@ -1333,9 +1362,14 @@ mod game_tests {
 pub struct MapMaterial {
     pub shader: String,
     pub params: HashMap<String, String>,
-    /// `base` and, for a blend (WorldVertexTransition), `base2`.
+    /// `base` and, for a blend (WorldVertexTransition), `base2`; an animated texture's other frames as `base_f<N>` / `bump_f<N>`.
     pub textures: Vec<(String, crate::vtf::Image)>,
+    /// Its proxies (an animated texture, a scrolling one: the renderer runs them on its clock).
+    pub proxies: Vec<crate::vmt::Proxy>,
 }
+
+/// The most frames of an animated map texture kept.
+const MAP_ANIMATION_FRAMES: usize = 64;
 
 /// The parameters of a map material the viewer reads.
 const MAP_MATERIAL_PARAMS: &[&str] = &[
@@ -1378,6 +1412,14 @@ pub fn map_material(vpk: &crate::VpkSet, name: &str, max_size: u32) -> std::resu
         if let Ok(img) = crate::vtf::decode(&bytes, mip) {
             textures.push((slot.to_string(), img));
         }
+        // its other frames, when an AnimatedTexture proxy cycles it
+        let var = keys[0];
+        let animated = vmt.proxies.iter().any(|p| p.name == "animatedtexture" && p.params.get("animatedtexturevar").is_some_and(|v| v.eq_ignore_ascii_case(var)));
+        if animated && info.frames > 1 && (slot == "base" || slot == "bump") {
+            if let Ok(frames) = crate::vtf::decode_frames(&bytes, mip, MAP_ANIMATION_FRAMES) {
+                textures.extend(frames.into_iter().enumerate().skip(1).map(|(i, img)| (format!("{slot}_f{i}"), img)));
+            }
+        }
     }
     // the cubemap it reflects: its own, or the map's nearest (a patch material of the map names that one in place of env_cubemap)
     if let Some(env) = vmt.get("$envmap").filter(|e| !e.eq_ignore_ascii_case("env_cubemap")) {
@@ -1397,7 +1439,7 @@ pub fn map_material(vpk: &crate::VpkSet, name: &str, max_size: u32) -> std::resu
         }
     }
     let params = MAP_MATERIAL_PARAMS.iter().filter_map(|k| vmt.get(k).map(|v| (k.to_string(), v.to_string()))).collect();
-    Ok(MapMaterial { shader: vmt.shader.clone(), params, textures })
+    Ok(MapMaterial { shader: vmt.shader.clone(), params, textures, proxies: vmt.proxies.clone() })
 }
 
 #[cfg(test)]
@@ -1493,5 +1535,21 @@ mod disp_lightmap_tests {
         let shared: Vec<i32> = at.values().filter(|v| v.len() > 1).map(|v| v.iter().max().unwrap() - v.iter().min().unwrap()).collect();
         let mean = shared.iter().sum::<i32>() as f32 / shared.len().max(1) as f32;
         assert!(shared.len() > 1000 && mean < 7.0, "{} shared points, mean light difference {mean}", shared.len());
+    }
+}
+
+#[cfg(test)]
+mod shadow_control_tests {
+    /// koth_camp_saxton (TF2_TF_DIR): its shadow_control says how its characters' shadows fall; its lanterns play an animation.
+    #[test]
+    fn camp_saxtons_shadows_and_animated_props() {
+        let Some(dir) = std::env::var_os("TF2_TF_DIR") else { return };
+        let Ok(bytes) = std::fs::read(std::path::Path::new(&dir).join("maps/koth_camp_saxton.bsp")) else { return };
+        let map = super::read(&bytes).unwrap();
+        let s = map.shadow.expect("its shadows");
+        let len = (s.dir[0] * s.dir[0] + s.dir[1] * s.dir[1] + s.dir[2] * s.dir[2]).sqrt();
+        assert!((len - 1.0).abs() < 1e-3 && s.dir[2] < 0.0 && s.distance > 0.0, "{s:?}");
+        assert!(map.props.iter().any(|p| p.static_index.is_none() && p.model.contains("lantern")));
+        assert!(map.props.iter().any(|p| p.animation.as_deref() == Some("ref")));
     }
 }

@@ -8366,32 +8366,43 @@ export function createViewTab(els: Els) {
     worldMap = map;
     v.setWorld(map.group, 1e5);
     v.worldRaycast = (o, d, max) => map.raycast(o, d, max);
-    // every frame: the eye for its reflections, the characters' shadow on its floors, and (now and then) its light where they stand
+    // every frame: the eye for its reflections, the characters' shadow on its floors, and (now and then) its light where each stands
     let lightAsked = 0;
-    let lightAt: THREE.Vector3 | null = null;
-    v.onWorldFrame = (camera, shadow) => {
+    const lightAt = new Map<Actor, THREE.Vector3>();
+    v.onWorldFrame = (camera, shadows) => {
       if (worldMap !== map) return;
       map.setEye(camera);
-      map.setShadow(shadow);
+      map.tick(performance.now());
+      map.renderShadow(shadows ? v.shadowCasterBounds() : null, (c, t) => v.drawShadowCasters(c, t));
       const now = performance.now();
       if (now - lightAsked < 250 || !map.exposure) return;
-      const shown = entities.filter((e) => !e.hidden);
-      if (!shown.length) return;
-      const mid = shown.reduce((s, e) => s.add(e.actor.offset), new THREE.Vector3()).divideScalar(shown.length);
-      mid.y += Math.max(...shown.map((e) => e.actor.bindHeight)) * 0.5;
-      if (lightAt && lightAt.distanceTo(mid) < 4) return;
+      // each character lit where it stands (at its middle), as the game lights each model: asked again when it has moved
+      const asked: { actor: Actor; at: THREE.Vector3 }[] = [];
+      for (const e of entities) {
+        const at = e.actor.offset.clone();
+        at.y += e.actor.bindHeight * 0.5;
+        const before = lightAt.get(e.actor);
+        if (before && before.distanceTo(at) < 4) continue;
+        asked.push({ actor: e.actor, at });
+      }
+      if (!asked.length) return;
       lightAsked = now;
-      lightAt = mid.clone();
-      const p = map.toMap(mid);
-      void mapLightAt(name, [[p.x, p.y, p.z]]).then((r) => {
-        const at = r?.[0];
-        if (worldMap !== map || !at) return;
+      for (const { actor, at } of asked) lightAt.set(actor, at);
+      void mapLightAt(name, asked.map(({ at }) => { const p = map.toMap(at); return [p.x, p.y, p.z] as [number, number, number]; })).then((r) => {
+        if (worldMap !== map || !r) return;
         // the map's cube faces (+X -X +Y -Y +Z -Z, z up) as the view's (+X -X +Y -Y +Z -Z, y up)
         const order = [2, 3, 4, 5, 0, 1];
-        const cube = order.map((i) => new THREE.Vector3(...(at.cube[i] ?? [0, 0, 0])).multiplyScalar(map.exposure));
-        const keyDir = at.key ? MapScene.toView(at.key.dir).normalize() : null;
-        const keyColor = at.key ? new THREE.Vector3(...at.key.color).multiplyScalar(map.exposure) : new THREE.Vector3();
-        v.setWorldLight({ cube, keyDir, keyColor });
+        asked.forEach(({ actor }, k) => {
+          const at = r[k];
+          if (!at) return;
+          const cube = order.map((i) => new THREE.Vector3(...(at.cube[i] ?? [0, 0, 0])).multiplyScalar(map.exposure));
+          const keyDir = at.key ? MapScene.toView(at.key.dir).normalize() : null;
+          const keyColor = at.key ? new THREE.Vector3(...at.key.color).multiplyScalar(map.exposure) : new THREE.Vector3();
+          const light = { cube, keyDir, keyColor };
+          v.setActorWorldLight(actor, light);
+          // (and the light of what is not a character, the selected one's)
+          if (actor === (selected?.actor ?? asked[0].actor)) v.setWorldLight(light);
+        });
       }).catch(() => undefined);
     };
     mapStatus = "loading";

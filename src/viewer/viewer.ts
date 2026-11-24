@@ -167,6 +167,9 @@ function halton(i: number, base: number): number {
   return x;
 }
 
+/** A map's light at a place: its ambient cube (+X -X +Y -Y +Z -Z of the view) and its strongest light (direction toward it, colour). */
+export interface WorldLight { cube: THREE.Vector3[]; keyDir: THREE.Vector3 | null; keyColor: THREE.Vector3 }
+
 export class Viewer {
   readonly cameras: CameraRig;
   readonly cameraOverlay: CameraOverlay;
@@ -888,8 +891,9 @@ void main() {
         // the map's floors take the characters' shadow themselves (the decal would lie flat at the characters' feet, through the map)
         const shadow = this.groundShadows.find((s) => s.cast);
         for (const s of this.groundShadows) s.quad.visible = false;
-        this.onWorldFrame(this.camera, shadow?.cast ? { texture: shadow.texture, ...shadow.cast } : null);
+        this.onWorldFrame(this.camera, !!shadow?.cast);
       }
+      this.applyActorWorldLights();
       if (!world) this.updateReflection(floorY);
       else this.reflection.mesh.visible = false;
       this.renderLightShadows(moved);
@@ -3046,15 +3050,14 @@ void main() {
     // Same conversion as the light colour: the picker value is a display colour, converted to linear, times the level.
     const [ar, ag, ab] = [1, 3, 5].map((i) => Math.pow(parseInt(ambientColor.slice(i, i + 2), 16) / 255, 2.2) * ambient);
     for (const a of this.shared.uAmbient.value) a.set(ar, ag, ab);
-    // a map's own light where the characters stand, in place of the main light and the ambient (the light rig and point lights stay)
-    const wl = this.world?.visible ? this.worldLight : null;
-    if (wl) {
-      (this.shared.uAmbient.value as THREE.Vector3[]).forEach((a, i) => a.copy(wl.cube[i]));
-      if (wl.keyDir) this.shared.uLightDir.value.copy(wl.keyDir);
-      this.shared.uLightColor.value.copy(wl.keyDir ? wl.keyColor : new THREE.Vector3());
-    }
     const avg = (this.shared.uAmbient.value as THREE.Vector3[]).reduce((s, a) => s + 0.2126 * a.x + 0.7152 * a.y + 0.0722 * a.z, 0) / 6;
     this.shared.uAverageAmbient.value = Math.max(0, Math.min(avg, 1));
+    // the light settings' (each character's light of a map is set as its meshes are drawn: see applyActorWorldLights)
+    this.baseLight.dir.copy(this.shared.uLightDir.value);
+    this.baseLight.color.copy(this.shared.uLightColor.value);
+    (this.shared.uAmbient.value as THREE.Vector3[]).forEach((a, i) => this.baseLight.ambient[i].copy(a));
+    this.baseLight.average = this.shared.uAverageAmbient.value;
+    this.appliedLight = null;
 
     const bulb = this.gizmo.getObjectByName("bulb") as THREE.Mesh;
     const ray = this.gizmo.getObjectByName("ray") as THREE.Line;
@@ -3155,15 +3158,108 @@ void main() {
   }
 
   /** The plane at the floor (see groundPlane.ts). */
-  /** Called every frame while a map is shown, before it is drawn: the camera, and the characters' ground shadow for its floors. */
-  onWorldFrame: (camera: THREE.Camera, shadow: { texture: THREE.Texture; centerX: number; centerZ: number; half: number; floorY: number; opacity: number } | null) => void = () => {};
+  /** Called every frame while a map is shown, before it is drawn: the camera, and whether the characters cast shadows (Ground shadows). */
+  onWorldFrame: (camera: THREE.Camera, shadows: boolean) => void = () => {};
+
+  /** Where the characters that are shown are (a sphere around them all), for their shadows on a map; null: none. */
+  shadowCasterBounds(): THREE.Sphere | null {
+    const box = new THREE.Box3();
+    for (const a of this.actorList) {
+      if (!a.meshes().some((m) => m.visible)) continue;
+      const h = Math.max(a.bindHeight, 16);
+      box.expandByPoint(a.offset.clone().add(new THREE.Vector3(-h * 0.5, 0, -h * 0.5)));
+      box.expandByPoint(a.offset.clone().add(new THREE.Vector3(h * 0.5, h * 1.1, h * 0.5)));
+    }
+    return box.isEmpty() ? null : box.getBoundingSphere(new THREE.Sphere());
+  }
+
+  /** Draws the characters alone (their depth) with `camera` into `target`: the picture their shadows on a map are made from. */
+  private readonly casterMaterial = new THREE.MeshBasicMaterial({ colorWrite: false });
+  drawShadowCasters(camera: THREE.Camera, target: THREE.WebGLRenderTarget) {
+    const scene = this.scene;
+    // the top-level objects that hold a character's meshes stay; the rest (the map, the floor, the gizmos) is hidden meanwhile
+    const keep = new Set<THREE.Object3D>();
+    for (const a of this.actorList) {
+      for (const m of a.meshes()) {
+        let o: THREE.Object3D = m;
+        while (o.parent && o.parent !== scene) o = o.parent;
+        keep.add(o);
+      }
+    }
+    const hidden: THREE.Object3D[] = [];
+    for (const child of scene.children) {
+      if (!keep.has(child) && child.visible) { child.visible = false; hidden.push(child); }
+    }
+    const background = scene.background, override = scene.overrideMaterial, before = this.renderer.getRenderTarget();
+    scene.background = null;
+    scene.overrideMaterial = this.casterMaterial;
+    this.renderer.setRenderTarget(target);
+    this.renderer.clear(true, true, false);
+    this.renderer.render(scene, camera);
+    this.renderer.setRenderTarget(before);
+    scene.overrideMaterial = override;
+    scene.background = background;
+    for (const o of hidden) o.visible = true;
+  }
   /**
    * The map's light where the characters are (in place of the light settings' ambient and main light, as the game lights a model):
    * the ambient cube (+X -X +Y -Y +Z -Z of the view) and the key light (direction toward it, colour); null: the light settings.
    */
-  private worldLight: { cube: THREE.Vector3[]; keyDir: THREE.Vector3 | null; keyColor: THREE.Vector3 } | null = null;
-  setWorldLight(light: { cube: THREE.Vector3[]; keyDir: THREE.Vector3 | null; keyColor: THREE.Vector3 } | null) {
+  private worldLight: WorldLight | null = null;
+  setWorldLight(light: WorldLight | null) {
     this.worldLight = light;
+  }
+
+  /**
+   * Each character's own light of the map, where it stands (as the game lights each model by the light where it is): the light of one
+   * moved with the others before (hiding one, the light of the rest changed). Its meshes take it as they are drawn; one without takes the
+   * map's light of setWorldLight.
+   */
+  private readonly actorWorldLights = new Map<Actor, WorldLight>();
+  setActorWorldLight(actor: Actor, light: WorldLight | null) {
+    if (light) this.actorWorldLights.set(actor, light);
+    else this.actorWorldLights.delete(actor);
+  }
+  /** The light the shared uniforms hold now (null: the light settings'): a mesh with another sets its own before it is drawn. */
+  private appliedLight: WorldLight | null = null;
+  private baseLight = { dir: new THREE.Vector3(), color: new THREE.Vector3(), ambient: Array.from({ length: 6 }, () => new THREE.Vector3()), average: 0 };
+  private useLight(light: WorldLight | null): boolean {
+    if (light === this.appliedLight) return false;
+    this.appliedLight = light;
+    const u = this.shared;
+    if (!light) {
+      u.uLightDir.value.copy(this.baseLight.dir);
+      u.uLightColor.value.copy(this.baseLight.color);
+      (u.uAmbient.value as THREE.Vector3[]).forEach((a, i) => a.copy(this.baseLight.ambient[i]));
+      u.uAverageAmbient.value = this.baseLight.average;
+      return true;
+    }
+    (u.uAmbient.value as THREE.Vector3[]).forEach((a, i) => a.copy(light.cube[i]));
+    if (light.keyDir) u.uLightDir.value.copy(light.keyDir);
+    else u.uLightDir.value.copy(this.baseLight.dir);
+    u.uLightColor.value.copy(light.keyDir ? light.keyColor : new THREE.Vector3());
+    const avg = light.cube.reduce((s, a) => s + 0.2126 * a.x + 0.7152 * a.y + 0.0722 * a.z, 0) / 6;
+    u.uAverageAmbient.value = Math.max(0, Math.min(avg, 1));
+    return true;
+  }
+  /** Gives every character's meshes their light for this frame (with a map shown; without, the light settings'). */
+  private applyActorWorldLights() {
+    const shown = !!this.world?.visible;
+    for (const actor of this.actorList) {
+      const light = shown ? this.actorWorldLights.get(actor) ?? this.worldLight : null;
+      for (const mesh of actor.meshes()) {
+        mesh.userData.worldLight = light;
+        if (!mesh.userData.worldLightHooked) {
+          mesh.userData.worldLightHooked = true;
+          const viewer = this;
+          mesh.onBeforeRender = function (this: THREE.Mesh, _r, _s, _c, _g, material) {
+            if (viewer.useLight((this.userData.worldLight as WorldLight | null) ?? null) && (material as THREE.ShaderMaterial).isShaderMaterial) {
+              (material as THREE.ShaderMaterial).uniformsNeedUpdate = true;
+            }
+          };
+        }
+      }
+    }
   }
 
   /** The map in the scene (one at a time; null: none) and how far the camera must see to take it in. */

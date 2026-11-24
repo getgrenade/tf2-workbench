@@ -1,7 +1,10 @@
 import * as THREE from "three";
-import { loadMap, loadMapMaterial, loadMapModel, loadMapPropLight } from "../api";
-import { SOURCE_TO_VIEWER } from "./animator";
-import { parsePayload, type ModelData } from "./payload";
+import { listSequences, loadMap, loadMapMaterial, loadMapModel, loadMapPropLight, loadModel } from "../api";
+import { Playback, Rig, SOURCE_TO_VIEWER } from "./animator";
+import { bakeClip } from "./animUi";
+import { buildGeometry } from "./geometryCache";
+import { parseAnimInfo, parsePayload, type ClipData, type ModelData } from "./payload";
+import { animationFrame, baseTextureAnimation, evaluateMaterialVars, hasTimeProxies, textureTransform as proxyTransform, type FrameAnimation, type ProxyDef } from "./proxies";
 
 /**
  * A map of the game in the scene, drawn the way the game's world shaders draw it:
@@ -49,6 +52,8 @@ interface MapJson {
   sun: { dir: V3; color: V3 } | null;
   exposureMin: number | null;
   exposureMax: number | null;
+  /** How its characters cast shadows (its shadow_control): the way they fall (the map's axes), their colour, their reach. */
+  shadow?: { dir: V3; color: V3; distance: number } | null;
   sky: string | null;
   bounds: [number, number, number, number, number, number];
 }
@@ -57,18 +62,11 @@ interface MaterialJson {
   shader: string;
   params: Record<string, string>;
   textures: { slot: string; width: number; height: number; offset: number }[];
+  proxies?: ProxyDef[];
 }
 
-/** A ground shadow of the characters, as the map's floors receive it. */
-export interface WorldShadow {
-  texture: THREE.Texture;
-  /** Middle of its square (x, z), half its side, its strength, the floor it was made for. */
-  centerX: number;
-  centerZ: number;
-  half: number;
-  opacity: number;
-  floorY: number;
-}
+/** The size of the characters' shadow map (its side, texels). */
+const SHADOW_SIZE = 2048;
 
 function split(buf: ArrayBuffer) {
   const len = new DataView(buf).getUint32(0, true);
@@ -77,7 +75,7 @@ function split(buf: ArrayBuffer) {
 }
 
 /** A model the map places: its static number (what its baked light is named by), model, place, turn, skin, size and light. */
-export interface MapProp { index: number | null; model: string; origin: V3; angles: V3; skin: number; scale: number; ambient: V3[]; sunlit: boolean; key: { dir: V3; color: V3 } | null }
+export interface MapProp { index: number | null; model: string; origin: V3; angles: V3; skin: number; scale: number; ambient: V3[]; sunlit: boolean; key: { dir: V3; color: V3 } | null; animation?: string | null }
 
 const vertexShader = /* glsl */ `
   #ifdef PROP
@@ -107,6 +105,9 @@ const vertexShader = /* glsl */ `
   uniform mat3 uTexTransform;
   uniform mat3 uTexTransform2;
   uniform mat3 uBumpTransform;
+  // the view's axes to the map's (a skinned prop is placed by its mesh's matrix, not by an instance's)
+  uniform mat4 uViewToSrc;
+  #include <skinning_pars_vertex>
   // the base texture's uv and the second's, together (the GPU passes only so many values on)
   varying vec4 vUvs;
   varying vec2 vBumpUv;
@@ -116,24 +117,42 @@ const vertexShader = /* glsl */ `
   varying vec3 vWorld;
   varying vec3 vWorldNormal;
   void main() {
+    vec3 objectNormal = vec3(normal);
+    vec3 transformed = vec3(position);
+    #ifdef PROP
+      vec3 objectTangent = propTangent.xyz;
+    #endif
+    // an animated prop: posed by its bones
+    #ifdef USE_SKINNING
+      #include <skinbase_vertex>
+      #include <skinnormal_vertex>
+      #include <skinning_vertex>
+      #ifdef PROP
+        objectTangent = (skinMatrix * vec4(objectTangent, 0.0)).xyz;
+      #endif
+    #endif
     mat4 m = modelMatrix;
     mat3 src = mat3(1.0);
-    vec3 srcPos = position;
+    vec3 srcPos = transformed;
     #ifdef USE_INSTANCING
       m = modelMatrix * instanceMatrix;
       src = mat3(instanceMatrix);
-      srcPos = (instanceMatrix * vec4(position, 1.0)).xyz;
+      srcPos = (instanceMatrix * vec4(transformed, 1.0)).xyz;
+    #endif
+    #ifdef USE_SKINNING
+      src = mat3(uViewToSrc) * mat3(modelMatrix);
+      srcPos = (uViewToSrc * modelMatrix * vec4(transformed, 1.0)).xyz;
     #endif
     vUvs = vec4((uTexTransform * vec3(uv, 1.0)).xy, (uTexTransform2 * vec3(uv, 1.0)).xy);
     vBumpUv = (uBumpTransform * vec3(uv, 1.0)).xy;
-    vSrcNormal = normalize(src * normal);
+    vSrcNormal = normalize(src * objectNormal);
     vSrcPos = srcPos;
     #ifdef PROP
       #ifndef STATIC_LIGHT
         vAmb0 = amb0; vAmb1 = amb1; vAmb2 = amb2; vAmb3 = amb3; vAmb4 = amb4; vAmb5 = amb5;
       #endif
       vKeyDir = keyDir; vKeyColor = keyColor;
-      vTangent = vec4(normalize(src * propTangent.xyz), propTangent.w);
+      vTangent = vec4(normalize(src * objectTangent), propTangent.w);
       #ifdef STATIC_LIGHT
         vStatic = 2.0 * pow(vlight.rgb, vec3(2.2));
       #endif
@@ -143,9 +162,9 @@ const vertexShader = /* glsl */ `
       vTs = tangentS;
       vTt = tangentT;
     #endif
-    vec4 world = m * vec4(position, 1.0);
+    vec4 world = m * vec4(transformed, 1.0);
     vWorld = world.xyz;
-    vWorldNormal = normalize(mat3(m) * normal);
+    vWorldNormal = normalize(mat3(m) * objectNormal);
     gl_Position = projectionMatrix * viewMatrix * world;
   }`;
 
@@ -162,7 +181,7 @@ const fragmentShader = /* glsl */ `
   uniform int uDetailMode;
   uniform samplerCube tCube;
   uniform sampler2D tLightmap;
-  uniform sampler2D tShadow;
+  uniform sampler2D tShadowDepth;
   uniform bool uHasBase;
   uniform bool uHasBase2;
   uniform bool uHasBump;
@@ -180,9 +199,15 @@ const fragmentShader = /* glsl */ `
   uniform float uAlpha;
   uniform vec3 uColor;
   uniform vec3 uSrcEye;
-  uniform vec4 uShadow;
-  uniform float uShadowFloor;
+  // the characters' shadows (as the game casts them, its shadow_control: their silhouettes seen along the way the shadows fall,
+  // on what lies behind them within its distance, in its colour)
   uniform bool uShadowOn;
+  uniform mat4 uShadowMatrix;
+  uniform float uShadowRange;
+  uniform float uShadowMaxDist;
+  uniform vec3 uShadowColor;
+  uniform vec3 uShadowDir;
+  uniform float uShadowTexel;
   uniform bool uPhong;
   uniform float uPhongExponent;
   uniform float uPhongBoost;
@@ -302,12 +327,21 @@ const fragmentShader = /* glsl */ `
       #endif
     }
 
-    // the characters' shadow on the floor under them
-    if (uShadowOn && vWorldNormal.y > 0.3) {
-      vec2 suv = vec2((vWorld.x - uShadow.x) / (2.0 * uShadow.z) + 0.5, 0.5 - (vWorld.z - uShadow.y) / (2.0 * uShadow.z));
-      if (suv.x > 0.0 && suv.x < 1.0 && suv.y > 0.0 && suv.y < 1.0) {
-        float near = 1.0 - smoothstep(24.0, 120.0, abs(vWorld.y - uShadowFloor));
-        light *= 1.0 - texture2D(tShadow, suv).r * uShadow.w * near;
+    // the characters' shadows on it
+    if (uShadowOn) {
+      vec3 sc = (uShadowMatrix * vec4(vWorld, 1.0)).xyz;
+      float facing = clamp(-dot(normalize(vWorldNormal), uShadowDir) * 4.0, 0.0, 1.0);
+      if (facing > 0.0 && sc.x > 0.0 && sc.x < 1.0 && sc.y > 0.0 && sc.y < 1.0 && sc.z < 1.0) {
+        float sum = 0.0;
+        for (int i = -2; i <= 2; i++) {
+          for (int j = -2; j <= 2; j++) {
+            float d = texture2D(tShadowDepth, sc.xy + vec2(float(i), float(j)) * uShadowTexel).r;
+            // how far behind what casts it, in units: within its distance, fading toward it
+            float behind = (sc.z - d) * uShadowRange;
+            sum += behind > 2.0 ? 1.0 - smoothstep(uShadowMaxDist * 0.5, uShadowMaxDist, behind) : 0.0;
+          }
+        }
+        light *= mix(vec3(1.0), uShadowColor, sum / 25.0 * facing);
       }
     }
 
@@ -347,6 +381,17 @@ const fragmentShader = /* glsl */ `
     gl_FragColor = vec4(color * uExposure, albedo.a * uAlpha);
     #include <colorspace_fragment>
   }`;
+
+/** Whether a clip moves (some bone is elsewhere in some frame than in its first). */
+function clipMoves(c: ClipData): boolean {
+  if (c.frames < 2) return false;
+  const per = c.numBones;
+  for (let f = 1; f < c.frames; f++) {
+    for (let k = 0; k < per * 3; k++) if (Math.abs(c.pos[f * per * 3 + k] - c.pos[k]) > 0.01) return true;
+    for (let k = 0; k < per * 4; k++) if (Math.abs(c.quat[f * per * 4 + k] - c.quat[k]) > 1e-4) return true;
+  }
+  return false;
+}
 
 /** `center .5 .5 scale 2 2 rotate 0 translate 0 0` as a 3x3 uv matrix. */
 function textureTransform(value: string | undefined): THREE.Matrix3 {
@@ -422,10 +467,15 @@ export class MapScene {
     uPages: { value: 4 },
     tLightmap: { value: null as THREE.Texture | null },
     uSrcEye: { value: new THREE.Vector3() },
-    tShadow: { value: null as THREE.Texture | null },
-    uShadow: { value: new THREE.Vector4(0, 0, 1, 0) },
-    uShadowFloor: { value: 0 },
     uShadowOn: { value: false },
+    tShadowDepth: { value: null as THREE.Texture | null },
+    uShadowMatrix: { value: new THREE.Matrix4() },
+    uShadowRange: { value: 1 },
+    uShadowMaxDist: { value: 75 },
+    uShadowColor: { value: new THREE.Vector3(0.25, 0.25, 0.25) },
+    uShadowDir: { value: new THREE.Vector3(0, -1, 0) },
+    uShadowTexel: { value: 1 / SHADOW_SIZE },
+    uViewToSrc: { value: new THREE.Matrix4() },
   };
   private readonly inverse = new THREE.Matrix4();
   /** The meshes of each material (their draw order follows the material's). */
@@ -453,15 +503,78 @@ export class MapScene {
     return new THREE.Vector3(v[1], v[2], v[0]);
   }
 
-  /** The characters' ground shadow, cast on the map's floors (null: none). */
-  setShadow(s: WorldShadow | null) {
+  /** How the characters cast shadows on it (its shadow_control, in the view's axes); null: they cast none. */
+  private shadowStyle: { dir: THREE.Vector3; color: THREE.Vector3; distance: number } | null = null;
+  private shadowTarget: THREE.WebGLRenderTarget | null = null;
+  private readonly shadowCamera = new THREE.OrthographicCamera();
+
+  /**
+   * The characters' shadows on the map, as the game casts them: their silhouettes seen along the way the map's shadows fall (a depth
+   * picture fitted around `bounds`, where they are), which the map's surfaces behind them, within its distance, take in its colour.
+   * `draw` draws them (only them) with that camera into that target. Null bounds (no character), or off: no shadows.
+   */
+  renderShadow(bounds: THREE.Sphere | null, draw: (camera: THREE.Camera, target: THREE.WebGLRenderTarget) => void) {
     const u = this.shared;
-    u.uShadowOn.value = !!s;
-    if (!s) return;
-    u.tShadow.value = s.texture;
-    u.uShadow.value.set(s.centerX, s.centerZ, s.half, s.opacity);
-    u.uShadowFloor.value = s.floorY;
+    const style = this.shadowStyle;
+    if (!style || !bounds || bounds.radius <= 0) { u.uShadowOn.value = false; return; }
+    if (!this.shadowTarget) {
+      this.shadowTarget = new THREE.WebGLRenderTarget(SHADOW_SIZE, SHADOW_SIZE, { depthBuffer: true, depthTexture: new THREE.DepthTexture(SHADOW_SIZE, SHADOW_SIZE) });
+      u.tShadowDepth.value = this.shadowTarget.depthTexture;
+    }
+    const r = bounds.radius + 8;
+    const back = r + 32;
+    const cam = this.shadowCamera;
+    cam.left = -r; cam.right = r; cam.top = r; cam.bottom = -r;
+    cam.near = 0;
+    cam.far = back + r + style.distance + 32;
+    cam.position.copy(bounds.center).addScaledVector(style.dir, -back);
+    cam.up.set(0, 1, 0);
+    if (Math.abs(style.dir.y) > 0.99) cam.up.set(1, 0, 0);
+    cam.lookAt(bounds.center);
+    cam.updateMatrixWorld();
+    cam.updateProjectionMatrix();
+    draw(cam, this.shadowTarget);
+    // the view's positions to the depth picture (0..1)
+    u.uShadowMatrix.value.set(0.5, 0, 0, 0.5, 0, 0.5, 0, 0.5, 0, 0, 0.5, 0.5, 0, 0, 0, 1).multiply(cam.projectionMatrix).multiply(cam.matrixWorldInverse);
+    u.uShadowRange.value = cam.far - cam.near;
+    u.uShadowMaxDist.value = style.distance;
+    u.uShadowColor.value.copy(style.color);
+    u.uShadowDir.value.copy(style.dir);
+    // the blur: about two of the game's shadow texels (its shadows are soft), at least one of the picture's
+    u.uShadowTexel.value = Math.max(1 / SHADOW_SIZE, 0.6 / (2 * r));
+    u.uShadowOn.value = true;
   }
+
+  /** Every frame: its animated textures and scrolling ones, and its animated props (`now`: ms). */
+  tick(now: number) {
+    const t = now / 1000;
+    const dt = this.lastTick ? Math.min(0.1, t - this.lastTick) : 0;
+    this.lastTick = t;
+    for (const d of this.dynamicMaterials) {
+      const u = d.material.uniforms;
+      if (d.anim && d.frames.length > 1) u.tBase.value = d.frames[animationFrame(d.anim, t, d.frames.length)];
+      if (d.bumpAnim && d.bumpFrames.length > 1) u.tBump.value = d.bumpFrames[animationFrame(d.bumpAnim, t, d.bumpFrames.length)];
+      if (d.timed) {
+        const vars = evaluateMaterialVars(d.params, d.proxies, { paint: null, time: t });
+        const set = (key: string, uniform: string) => {
+          const m = proxyTransform(vars, key);
+          if (m) (u[uniform].value as THREE.Matrix3).set(m[0], m[1], m[2], m[3], m[4], m[5], 0, 0, 1);
+        };
+        set("$basetexturetransform", "uTexTransform");
+        set("$bumptransform", "uBumpTransform");
+      }
+    }
+    for (const a of this.animated) {
+      a.playback.advance(dt);
+      a.rig.poseFromClip(a.clip, a.playback.frame());
+      a.rig.boneWorld.forEach((m, i) => a.bones[i].matrixWorld.copy(m));
+    }
+  }
+  private lastTick = 0;
+  /** The materials that change with the clock: their frames, their proxies. */
+  private readonly dynamicMaterials: { material: THREE.ShaderMaterial; frames: THREE.Texture[]; anim: FrameAnimation | null; bumpFrames: THREE.Texture[]; bumpAnim: FrameAnimation | null; timed: boolean; params: Record<string, string>; proxies: ProxyDef[] }[] = [];
+  /** The props that play an animation (prop entities whose sequence moves): their bones and clip. */
+  private readonly animated: { rig: Rig; bones: THREE.Bone[]; clip: ClipData; playback: Playback }[] = [];
 
   /** Loads the map: its geometry first (shown at once, grey), then its textures and props (`progress` says how far). */
   async load(progress: (text: string) => void = () => undefined) {
@@ -478,6 +591,7 @@ export class MapScene {
     const auto = lm.average > 0 ? EXPOSURE_TARGET / (TYPICAL_ALBEDO * lm.average) : 1;
     this.exposure = EXPOSURE_SCALE * Math.min(Math.max(auto, Math.min(lo, hi)), Math.max(lo, hi));
     this.shared.uExposure.value = this.exposure;
+    this.shadowStyle = json.shadow ? { dir: MapScene.toView(json.shadow.dir).normalize(), color: new THREE.Vector3(...json.shadow.color), distance: json.shadow.distance } : null;
     this.shared.uRange.value = lm.range;
     this.shared.uPages.value = lm.pages;
     // the characters stand at the origin: put a RED spawn point there (else any, else the middle of the map's floor)
@@ -486,6 +600,7 @@ export class MapScene {
     this.group.matrix.copy(SOURCE_TO_VIEWER).multiply(new THREE.Matrix4().makeTranslation(-anchor.x, -anchor.y, -anchor.z));
     this.group.matrixWorldNeedsUpdate = true;
     this.inverse.copy(this.group.matrix).invert();
+    this.shared.uViewToSrc.value.copy(this.inverse);
 
     const data = new Uint8Array(buf, blob + lm.offset, lm.width * lm.height * lm.pages * 4).slice();
     this.lightmap = new THREE.DataTexture(data, lm.width, lm.height * lm.pages, THREE.RGBAFormat);
@@ -620,7 +735,15 @@ export class MapScene {
     const flag = (k: string) => Number(p[k] ?? 0) !== 0;
     const u = m.uniforms;
     const faces: THREE.DataTexture[] = [];
+    const frames: THREE.Texture[] = [], bumpFrames: THREE.Texture[] = [];
     for (const t of json.textures) {
+      // an animated texture's other frames
+      const frame = /^(base|bump)_f(\d+)$/.exec(t.slot);
+      if (frame) {
+        const tex = this.dataTexture(buf, blob + t.offset, t.width, t.height, frame[1] === "base");
+        (frame[1] === "base" ? frames : bumpFrames)[Number(frame[2])] = tex;
+        continue;
+      }
       const env = /^env(\d)$/.exec(t.slot);
       if (env) {
         const tex = new THREE.DataTexture(new Uint8Array(buf, blob + t.offset, t.width * t.height * 4).slice(), t.width, t.height, THREE.RGBAFormat);
@@ -715,12 +838,21 @@ export class MapScene {
       m.userData.renderOrder = 0.5;
     }
     for (const mesh of this.meshesOf.get(key) ?? []) mesh.renderOrder = m.userData.renderOrder ?? 0;
+    // its animated textures and scrolling ones run on the clock (see tick)
+    const proxies = json.proxies ?? [];
+    const anim = baseTextureAnimation(proxies), bumpAnim = baseTextureAnimation(proxies, "$bumpmap");
+    if (u.tBase.value) frames[0] = u.tBase.value as THREE.Texture;
+    if (u.tBump.value) bumpFrames[0] = u.tBump.value as THREE.Texture;
+    const timed = hasTimeProxies(proxies);
+    if ((anim && frames.filter(Boolean).length > 1) || (bumpAnim && bumpFrames.filter(Boolean).length > 1) || timed) {
+      this.dynamicMaterials.push({ material: m, frames: frames.filter(Boolean), anim, bumpFrames: bumpFrames.filter(Boolean), bumpAnim, timed, params: p, proxies });
+    }
     m.needsUpdate = true;
   }
 
   /** The map's props, by their number in `props`: what draws them (a mesh and its instance per part), and which are hidden. */
   private props: MapProp[] = [];
-  private readonly propParts = new Map<number, { inst: THREE.InstancedMesh; i: number; collider: { matrices: THREE.Matrix4[] | null } }[]>();
+  private readonly propParts = new Map<number, { inst: THREE.InstancedMesh | null; mesh?: THREE.Object3D; i: number; collider: { matrices: THREE.Matrix4[] | null } | null }[]>();
   private readonly hiddenProps = new Set<number>();
 
   /**
@@ -745,6 +877,8 @@ export class MapScene {
         progress(`${this.name}: props ${++done}/${models.length}`);
       }
       if (this.disposed) return;
+      // the prop entities whose sequence moves (a swaying lantern, a flag): drawn posed by their bones, playing it (static props stay)
+      const moving = await this.loadAnimated(path, list.filter((n) => props[n].index === null));
       const meshes = data.bodyParts.flatMap((part) => part.models[0]?.meshes ?? []);
       const vertexStart: number[] = [];
       let per = 0;
@@ -762,6 +896,7 @@ export class MapScene {
       const batches: { skin: number; placed: number[]; light: Uint8Array | null }[] = [];
       const bySkin = new Map<number, number[]>();
       for (const n of list) {
+        if (moving.has(n)) continue;
         const light = lightOf.get(n);
         if (light) batches.push({ skin: skinOf(n), placed: [n], light });
         else bySkin.set(skinOf(n), [...(bySkin.get(skinOf(n)) ?? []), n]);
@@ -825,7 +960,100 @@ export class MapScene {
       this.world.updateMatrixWorld(true);
       await Promise.all(fills);
     }, () => this.disposed);
+    this.world.updateMatrixWorld(true);
     this.buildColliders();
+  }
+
+  /**
+   * The props of `list` (prop entities of the model at `path`) whose sequence moves (their DefaultAnim, else their first, as the game
+   * plays them): each drawn by its bones, posed every frame (see tick). Returns which they are.
+   */
+  private async loadAnimated(path: string, list: number[]): Promise<Set<number>> {
+    const out = new Set<number>();
+    if (!list.length) return out;
+    let info: ReturnType<typeof parseAnimInfo>;
+    try {
+      info = parseAnimInfo(await listSequences(path));
+    } catch {
+      return out;
+    }
+    const defaults = info.poseParams.map((p) => p.default);
+    const clips = new Map<number, ClipData | null>();
+    const clipOf = async (n: number) => {
+      const want = this.props[n].animation?.toLowerCase();
+      const seq = want ? info.sequences.find((q) => q.name.toLowerCase() === want) : info.sequences[0];
+      if (!seq) return null;
+      if (!clips.has(seq.index)) clips.set(seq.index, await bakeClip(path, seq.index, defaults).then((c) => (clipMoves(c) ? c : null)).catch(() => null));
+      return clips.get(seq.index) ?? null;
+    };
+    const playing: { n: number; clip: ClipData }[] = [];
+    for (const n of list) {
+      const clip = await clipOf(n);
+      if (clip) playing.push({ n, clip });
+    }
+    if (!playing.length || this.disposed) return out;
+    let data: ModelData;
+    try {
+      data = parsePayload(await loadModel(path));
+    } catch {
+      return out;
+    }
+    if (this.disposed) return out;
+    const fills: Promise<void>[] = [];
+    for (const { n, clip } of playing) {
+      const p = this.props[n];
+      const rig = new Rig(data.bones);
+      if (clip.numBones !== data.bones.length) continue;
+      const bones = data.bones.map((b) => {
+        const bone = new THREE.Bone();
+        bone.name = b.name;
+        bone.matrixAutoUpdate = false;
+        bone.matrixWorldAutoUpdate = false;
+        return bone;
+      });
+      const skeleton = new THREE.Skeleton(bones, rig.poseToBone);
+      const skin = p.skin >= 0 && p.skin < Math.max(1, data.skinCount) ? p.skin : 0;
+      const meshes: THREE.SkinnedMesh[] = [];
+      for (const md of data.bodyParts.flatMap((part) => part.models[0]?.meshes ?? [])) {
+        if (!md.indices.length) continue;
+        const { geo } = buildGeometry(md, false);
+        const count = md.positions.length / 3;
+        geo.setAttribute("propTangent", geo.getAttribute("tangent"));
+        // its light where it stands, the same at every vertex
+        const fill = (v: V3) => { const a = new Float32Array(count * 3); for (let i = 0; i < count; i++) a.set(v, i * 3); return new THREE.BufferAttribute(a, 3); };
+        for (let face = 0; face < 6; face++) geo.setAttribute(`amb${face}`, fill(p.ambient[face] ?? [0.3, 0.3, 0.3]));
+        geo.setAttribute("keyDir", fill(p.key?.dir ?? [0, 0, 0]));
+        geo.setAttribute("keyColor", fill(p.key?.color ?? [0, 0, 0]));
+        this.geometries.push(geo);
+        const name = (md.materials[skin] ?? md.material).replace(/^materials\//, "").replace(/\.vmt$/, "");
+        const key = `p:${name}`;
+        const fresh = !this.materials.has(key);
+        const material = this.material(name, "p");
+        if (fresh) fills.push(this.fill(key).catch(() => undefined));
+        const mesh = new THREE.SkinnedMesh(geo, material);
+        // (skinned in the model's own space, as a character's: its matrix places it in the map)
+        mesh.bindMode = THREE.DetachedBindMode;
+        mesh.bind(skeleton, new THREE.Matrix4());
+        mesh.frustumCulled = false;
+        mesh.matrixAutoUpdate = false;
+        mesh.matrix.copy(MapScene.propMatrix(p));
+        mesh.name = path;
+        mesh.userData.props = [n];
+        this.world.add(mesh);
+        this.meshesOf.set(key, [...(this.meshesOf.get(key) ?? []), mesh]);
+        meshes.push(mesh);
+      }
+      if (!meshes.length) continue;
+      const playback = new Playback();
+      playback.clip = clip;
+      this.animated.push({ rig, bones, clip, playback });
+      rig.poseFromClip(clip, 0);
+      rig.boneWorld.forEach((m, i) => bones[i].matrixWorld.copy(m));
+      this.propParts.set(n, meshes.map((mesh) => ({ mesh, inst: null, i: 0, collider: null })));
+      out.add(n);
+    }
+    await Promise.all(fills);
+    return out;
   }
 
   /** Where a prop is in the map: its place, turn and size (map units). */
@@ -870,10 +1098,12 @@ export class MapScene {
     else this.hiddenProps.delete(n);
     const m = hidden ? new THREE.Matrix4().makeScale(0, 0, 0) : MapScene.propMatrix(this.props[n]);
     for (const part of this.propParts.get(n) ?? []) {
+      if (part.mesh) part.mesh.visible = !hidden;
+      if (!part.inst) continue;
       part.inst.setMatrixAt(part.i, m);
       part.inst.instanceMatrix.needsUpdate = true;
       part.inst.computeBoundingSphere();
-      if (part.collider.matrices) part.collider.matrices[part.i] = m.clone();
+      if (part.collider?.matrices) part.collider.matrices[part.i] = m.clone();
     }
     this.buildColliders();
   }
@@ -996,6 +1226,7 @@ export class MapScene {
     for (const t of this.textures) t.dispose();
     for (const m of this.materials.values()) m.dispose();
     this.lightmap?.dispose();
+    this.shadowTarget?.dispose();
     this.materials.clear();
   }
 }
