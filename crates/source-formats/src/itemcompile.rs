@@ -561,9 +561,14 @@ pub fn build(vpk: &VpkSet, spec: &ItemSpec, out_dir: &Path, work_root: &Path) ->
     }
     let mut model_files: Vec<(String, Vec<u8>)> = Vec::new();
     for (model, _, _) in &qcs {
-        for ext in ["mdl", "dx80.vtx", "dx90.vtx", "sw.vtx", "vvd"] {
+        // (the DX8 and software meshes are gone from TF2's studiomdl since the 2026 update: packed only when an older one made them)
+        for (ext, needed) in [("mdl", true), ("dx80.vtx", false), ("dx90.vtx", true), ("sw.vtx", false), ("vvd", true)] {
             let rel = format!("models/{item_dir}/{model}.{ext}");
-            model_files.push((format!("game/{rel}"), fs::read(game.join(&rel)).map_err(|_| format!("The compiler did not make {rel}"))?));
+            match fs::read(game.join(&rel)) {
+                Ok(bytes) => model_files.push((format!("game/{rel}"), bytes)),
+                Err(_) if !needed => {}
+                Err(_) => return Err(format!("The compiler did not make {rel}")),
+            }
         }
     }
 

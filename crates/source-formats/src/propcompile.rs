@@ -164,12 +164,17 @@ pub fn build(vpk: &VpkSet, spec: &PropSpec, out_dir: &Path, work_root: &Path) ->
     let qc_path = content.join(format!("{}.qc", spec.name));
     fs::write(&qc_path, crlf(&qc_text)).map_err(|e| e.to_string())?;
     run_studiomdl(&exe, &plain_absolute(&game)?, &plain_absolute(&qc_path)?, &mut log)?;
-    let mut extensions = vec!["mdl", "dx80.vtx", "dx90.vtx", "sw.vtx", "vvd"];
-    if spec.collision.is_some() { extensions.push("phy"); }
+    // (the DX8 and software meshes are gone from TF2's studiomdl since the 2026 update: kept only when an older one made them)
+    let mut extensions = vec![("mdl", true), ("dx80.vtx", false), ("dx90.vtx", true), ("sw.vtx", false), ("vvd", true)];
+    if spec.collision.is_some() { extensions.push(("phy", true)); }
     let mut model_files: Vec<(String, Vec<u8>)> = Vec::new();
-    for ext in extensions {
+    for (ext, needed) in extensions {
         let rel = format!("{models}/{}.{ext}", spec.name);
-        model_files.push((rel.clone(), fs::read(game.join(&rel)).map_err(|_| format!("The compiler did not make {rel}"))?));
+        match fs::read(game.join(&rel)) {
+            Ok(bytes) => model_files.push((rel, bytes)),
+            Err(_) if !needed => {}
+            Err(_) => return Err(format!("The compiler did not make {rel}")),
+        }
     }
 
     // --- the folder --------------------------------------------------------------------------------------------------------------------
