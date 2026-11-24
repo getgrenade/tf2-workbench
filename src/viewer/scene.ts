@@ -90,8 +90,10 @@ export interface SceneFile {
   aos?: AoState[];
   /** The look effects (vignette, chromatic aberration, grain, colour grading, bloom), by name; read with `parseLook`. */
   look?: Record<string, unknown>;
-  /** The skybox behind the scene. */
+  /** The skybox behind the scene (the one from before a map brought its own). */
   sky?: SkyState;
+  /** The map in the scene (`ctf_2fort`, from the game's maps folder). */
+  map?: string;
   /** The cubemap the shiny materials reflect. */
   reflection?: ReflectionState;
   /** The plane at the floor. */

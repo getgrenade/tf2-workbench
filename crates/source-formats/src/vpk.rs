@@ -105,6 +105,9 @@ pub struct VpkSet {
     custom: RwLock<Vec<CustomMount>>,
     /// Item zips the user dropped onto the view, mounted in place for this session (read-only; nothing is copied into the game folder).
     extra_item_zips: RwLock<Vec<PathBuf>>,
+    /// The files packed in maps (`tf/maps/<name>.bsp`), mounted when a model only a map has is wanted (Versus Saxton Hale's bosses): read
+    /// after everything else, so a map cannot change the game's own files.
+    maps: RwLock<Vec<(String, ZipFile)>>,
 }
 
 /// A folder of loose files with a `models/` and a `materials/` folder in it, indexed by the paths the game would ask for.
@@ -365,7 +368,7 @@ impl VpkSet {
     }
 
     pub fn open_dirs(paths: &[PathBuf]) -> Result<Self, VpkError> {
-        let mut set = VpkSet { loose_root: None, dirs: Vec::new(), files: HashMap::new(), sorted: Vec::new(), workshop: RwLock::new(Mount::default()), workshop_dir: None, effects_dir: RwLock::new(None), custom: RwLock::new(Vec::new()), extra_item_zips: RwLock::new(Vec::new()) };
+        let mut set = VpkSet { loose_root: None, dirs: Vec::new(), files: HashMap::new(), sorted: Vec::new(), workshop: RwLock::new(Mount::default()), workshop_dir: None, effects_dir: RwLock::new(None), custom: RwLock::new(Vec::new()), extra_item_zips: RwLock::new(Vec::new()), maps: RwLock::new(Vec::new()) };
         for p in paths {
             set.add_dir(p, false)?;
         }
@@ -551,6 +554,43 @@ impl VpkSet {
         out
     }
 
+    /// Mounts the files a map packs (`tf/maps/<name>.bsp`), once. Errors when the game folder has no such map.
+    pub fn mount_map(&self, name: &str) -> std::io::Result<()> {
+        let name = name.trim_end_matches(".bsp").to_ascii_lowercase();
+        let bad = || std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a map name");
+        if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') { return Err(bad()); }
+        if self.maps.read().unwrap().iter().any(|(n, _)| *n == name) { return Ok(()); }
+        let root = self.loose_root.as_ref().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no game folder"))?;
+        let path = root.join("maps").join(format!("{name}.bsp"));
+        if !path.is_file() { return Err(std::io::Error::new(std::io::ErrorKind::NotFound, format!("maps/{name}.bsp is not in the game folder"))); }
+        let zip = ZipFile::open_bsp(&path)?;
+        let mut maps = self.maps.write().unwrap();
+        if !maps.iter().any(|(n, _)| *n == name) { maps.push((name, zip)); }
+        Ok(())
+    }
+
+    /// The paths (lower case) of the game's files and of the mounted maps' packed files that start with `prefix`, sorted.
+    pub fn files_with_prefix(&self, prefix: &str) -> Vec<String> {
+        let prefix = Self::norm(prefix);
+        let start = self.sorted.partition_point(|p| p.as_str() < prefix.as_str());
+        let mut out: Vec<String> = self.sorted[start..].iter().take_while(|p| p.starts_with(&prefix)).cloned().collect();
+        for (_, zip) in self.maps.read().unwrap().iter() {
+            out.extend(zip.paths().filter(|p| p.starts_with(&prefix)).map(str::to_string));
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// A file of a mounted map's pakfile.
+    fn map_read(&self, key: &str) -> Option<Vec<u8>> {
+        self.maps.read().unwrap().iter().find(|(_, z)| z.contains(key)).and_then(|(_, z)| z.read(key))
+    }
+
+    fn map_size(&self, key: &str) -> Option<u64> {
+        self.maps.read().unwrap().iter().find_map(|(_, z)| z.size_of(key))
+    }
+
     fn custom_path(&self, key: &str) -> Option<PathBuf> {
         self.custom.read().unwrap().iter().find_map(|m| m.files.get(key).cloned())
     }
@@ -575,7 +615,7 @@ impl VpkSet {
     }
 
     pub fn contains(&self, path: &str) -> bool {
-        self.compiled_path(path).is_some() || self.files.contains_key(&Self::norm(path)) || self.loose_path(path).is_some() || self.workshop.read().unwrap().files.contains_key(&Self::norm(path)) || self.custom_path(&Self::norm(path)).is_some()
+        self.compiled_path(path).is_some() || self.files.contains_key(&Self::norm(path)) || self.loose_path(path).is_some() || self.workshop.read().unwrap().files.contains_key(&Self::norm(path)) || self.custom_path(&Self::norm(path)).is_some() || self.map_size(&Self::norm(path)).is_some()
     }
 
     pub fn size_of(&self, path: &str) -> Option<u64> {
@@ -589,7 +629,7 @@ impl VpkSet {
                 return mount.zips[z].size_of(&key);
             }
         }
-        self.files.get(&key).map(Entry::size).or_else(|| self.custom_path(&key).and_then(|p| std::fs::metadata(p).ok()).map(|m| m.len()))
+        self.files.get(&key).map(Entry::size).or_else(|| self.custom_path(&key).and_then(|p| std::fs::metadata(p).ok()).map(|m| m.len())).or_else(|| self.map_size(&key))
     }
 
     /// Lists the immediate children of `dir` ("" for the root).
@@ -675,6 +715,10 @@ impl VpkSet {
                 let mut out = Vec::new();
                 File::open(&p).map_err(io_err(&p))?.take(max as u64).read_to_end(&mut out).map_err(io_err(&p))?;
                 return Ok(out);
+            }
+            if let Some(mut bytes) = self.map_read(&key) {
+                bytes.truncate(max);
+                return Ok(bytes);
             }
             return Err(VpkError::NotFound(path.to_string()));
         };

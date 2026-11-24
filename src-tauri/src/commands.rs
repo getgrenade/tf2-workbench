@@ -190,6 +190,24 @@ pub fn mount_item_zips(state: State<'_, AppState>, paths: Vec<String>) -> Result
     state.mount_item_zips(paths.into_iter().map(PathBuf::from).collect())
 }
 
+/// The maps in the game's `maps` folder.
+#[tauri::command]
+pub async fn list_maps(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    workbench_core::map::list_maps(&state)
+}
+
+/// A map's geometry, lightmap, props and spawn points (see `workbench_core::map::load_map`).
+#[tauri::command]
+pub async fn load_map(state: State<'_, AppState>, name: String) -> Result<tauri::ipc::Response, String> {
+    Ok(tauri::ipc::Response::new(workbench_core::map::load_map(&state, &name)?))
+}
+
+/// A map material: its shader, parameters and base textures no bigger than `max_size`.
+#[tauri::command]
+pub async fn load_map_material(state: State<'_, AppState>, name: String, max_size: u32) -> Result<tauri::ipc::Response, String> {
+    Ok(tauri::ipc::Response::new(workbench_core::map::map_material(&state, &name, max_size)?))
+}
+
 /// A value that changes when the importer's zips do, so the interface can tell when a refresh is due.
 #[tauri::command]
 pub fn workshop_stamp(state: State<'_, AppState>) -> Result<String, String> {

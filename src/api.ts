@@ -258,6 +258,12 @@ export const refreshWorkshop = () => invoke<void>("refresh_workshop");
 
 /** Takes dropped item zips to mount in place (read-only, this session only): the next workshop refresh shows them under the Workshop filter. */
 export const mountItemZips = (paths: string[]) => invoke<void>("mount_item_zips", { paths });
+/** The maps in the game's maps folder (names without .bsp). */
+export const listMaps = () => invoke<string[]>("list_maps");
+/** A map's geometry, lightmap, props and spawn points (binary; see mapScene.ts). */
+export const loadMap = (name: string) => invoke<ArrayBuffer>("load_map", { name });
+/** A map material's shader, parameters and base textures no bigger than `maxSize` (binary; see mapScene.ts). */
+export const loadMapMaterial = (name: string, maxSize: number) => invoke<ArrayBuffer>("load_map_material", { name, maxSize });
 /** A value that changes when those zips do. */
 export const workshopStamp = () => invoke<string>("workshop_stamp");
 export const listPoses = () => invoke<string[]>("list_poses");

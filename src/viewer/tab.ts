@@ -10,7 +10,7 @@ import { propLabel } from "../props/propList";
 import { forgetThumbnail } from "../props/propThumbs";
 import { decodeTga, encodeTga, iconProblem, ICON_SAFE_ROWS } from "../compiler/tga";
 import { fadeAmount, maskIcon, type IconFade } from "../compiler/iconMask";
-import { searchPaths, importSourceDir, readItemSession, readPropSession, saveItemIcon, buildItem, buildProp, loadTextureFrames, readSourceFile, revealFile, sourceSiblings, sourceStamp, mountItemZips } from "../api";
+import { searchPaths, importSourceDir, readItemSession, readPropSession, saveItemIcon, buildItem, buildProp, loadTextureFrames, readSourceFile, revealFile, sourceSiblings, sourceStamp, mountItemZips, listMaps } from "../api";
 import { FILE_DROP_EVENT, type FileDropDetail } from "../fileDrop";
 import { parseTextureFrames } from "./sourceMaterials";
 import { getWeaponProfile, importEffectZip, removeCustomEffect, type WeaponProfile, type UnusualEffectInfo } from "../api";
@@ -57,6 +57,7 @@ import { createOverlayPanel } from "./overlayPanel";
 import { createGroundUi } from "./groundUi";
 import { DEFAULT_GROUND, type GroundState } from "./groundPlane";
 import { DEFAULT_SKY, loadSkyTexture, type SkyState } from "./skybox";
+import { MapScene } from "./mapScene";
 import { countOf, newPostId, POST_KINDS, statesOf, type PostItem, type PostKind } from "./postStack";
 import { entityHidden, isInside, newGroupName, parseGroups, withDescendants, type HierarchyGroup } from "./hierarchyTree";
 import { createBodyPicker, createHideTools, type HideTool } from "./bodyPicker";
@@ -335,6 +336,13 @@ export function createViewTab(els: Els) {
   let lightingUi: ReturnType<typeof createLightingUi> | null = null;
   // the skybox behind the scene (its pictures are made when it is picked and kept while it is shown)
   let sky: SkyState = { ...DEFAULT_SKY };
+  /** The map in the scene (one at a time), and the sky from before it brought its own. */
+  let worldMap: MapScene | null = null;
+  let skyBeforeMap: SkyState | null = null;
+  /** The game's maps (asked for once). */
+  let mapNames: string[] | null = null;
+  let mapNamesLoading: Promise<void> | null = null;
+  const fetchMapNames = () => (mapNamesLoading ??= listMaps().then((m) => { mapNames = m; }).catch(() => { mapNamesLoading = null; }));
   let skyUi: ReturnType<typeof createSkyUi> | null = null;
   let skyShown: { name: string; texture: import("three").CubeTexture } | null = null;
   let skyToken = 0;
@@ -7127,7 +7135,8 @@ export function createViewTab(els: Els) {
       light: v.getLight(),
       pointLight: v.getPointLight(),
       ...capturePost(),
-      sky: { ...sky },
+      sky: { ...(skyBeforeMap ?? sky) },
+      ...(worldMap ? { map: worldMap.name } : {}),
       reflection: { ...reflection },
       ground: { ...ground },
       background: bgInput.value,
@@ -7275,7 +7284,12 @@ export function createViewTab(els: Els) {
     els.fov.oninput?.(new Event("input"));
     applyLights(scene.light, scene.pointLight);
     setPostItems(postItemsOf(scene));
-    void setSkyState(scene.sky ?? DEFAULT_SKY).catch(() => {});
+    // (the scene's sky is the one from before its map: a map that goes now does not give back the last one's)
+    skyBeforeMap = null;
+    if (!scene.map) removeWorldMap();
+    void setSkyState(scene.sky ?? DEFAULT_SKY).catch(() => {}).then(() => {
+      if (scene.map) void loadWorldMap(scene.map);
+    });
     void setReflectionState(scene.reflection ?? DEFAULT_REFLECTION).catch(() => {});
     setGroundState(scene.ground ?? DEFAULT_GROUND);
     setBackgroundColor(scene.background ?? DEFAULT_BACKGROUND);
@@ -8303,7 +8317,7 @@ export function createViewTab(els: Els) {
   // The Add menu of the outliner: a character, a buildable, a light or a camera
   const ICON = {
     character: "userRound", buildable: "wrench", prop: "box", light: "lightbulb", camera: "video", sun: "sun", point: "circleDot", spot: "flashlight",
-    area: "rectangleHorizontal", folder: "folder", classes: "users",
+    area: "rectangleHorizontal", folder: "folder", classes: "users", map: "map",
   } as const satisfies Record<string, IconName>;
   const propsRoot = document.getElementById("propsPane");
   if (propsRoot) createPropPanel(propsRoot, { add: (path, at) => void addProp(path, at) });
@@ -8320,6 +8334,63 @@ export function createViewTab(els: Els) {
     e.preventDefault();
     viewMenu(e.clientX, e.clientY);
   });
+  /** Loads a map into the scene in place of the one there (its sky with it); a spawn point of it is where the characters stand. */
+  async function loadWorldMap(name: string) {
+    const v = viewer;
+    if (!v) return;
+    if (worldMap?.name === name) return;
+    removeWorldMap();
+    const map = new MapScene(name);
+    worldMap = map;
+    v.setWorld(map.group, 1e5);
+    try {
+      await map.load((text) => { if (worldMap === map) els.info.textContent = text; });
+      if (worldMap !== map) return;
+      v.setWorld(map.group, Math.max(20000, map.extent * 1.5));
+      if (map.sky) {
+        skyBeforeMap ??= { ...sky };
+        await setSkyState({ ...sky, name: map.sky });
+      }
+    } catch (err) {
+      if (worldMap === map) {
+        removeWorldMap();
+        els.info.textContent = `Could not load ${name}: ${String(err)}`;
+      }
+    }
+  }
+  /** Takes the map out of the scene (and gives back the sky from before it). */
+  function removeWorldMap() {
+    if (!worldMap) return;
+    worldMap.dispose();
+    worldMap = null;
+    viewer?.setWorld(null);
+    if (skyBeforeMap) {
+      const before = skyBeforeMap;
+      skyBeforeMap = null;
+      void setSkyState(before).catch(() => {});
+    }
+  }
+  /** The Add menu's Map entry: the game's maps by game mode (the part of the name before the first "_"), and taking the map out. */
+  function mapMenu(): MenuItem {
+    void fetchMapNames();
+    const groups = new Map<string, string[]>();
+    for (const name of mapNames ?? []) {
+      const mode = name.includes("_") ? name.slice(0, name.indexOf("_")) : "other";
+      groups.set(mode, [...(groups.get(mode) ?? []), name]);
+    }
+    const children: MenuItem[] = mapNames
+      ? [...groups].sort(([a], [b]) => a.localeCompare(b)).map(([mode, names]) => ({
+          label: mode,
+          hint: String(names.length),
+          children: names.map((name) => ({ label: name, checked: worldMap?.name === name, run: () => void loadWorldMap(name) })),
+        }))
+      : [{ label: "Reading the maps folder…", disabled: true }];
+    if (worldMap) {
+      if (children[0]) children[0] = { ...children[0], separator: true };
+      children.unshift({ label: `Remove ${worldMap.name}`, run: () => removeWorldMap() });
+    }
+    return { label: "Map", icon: ICON.map, hint: worldMap ? worldMap.name : "one at a time", separator: true, children };
+  }
   els.entities.add.onclick = () => {
     openMenu(els.entities.add, [
       { label: "Character", icon: ICON.character, hint: "Ctrl: copy of the selected", run: ({ ctrl }) => void addEntity(ctrl) },
@@ -8353,6 +8424,7 @@ export function createViewTab(els: Els) {
       },
       { label: "Camera", icon: ICON.camera, run: () => addCameraFromView() },
       { label: "Folder", icon: ICON.folder, run: () => hierarchy().newFolder() },
+      mapMenu(),
     ]);
   };
 

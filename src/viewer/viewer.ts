@@ -867,11 +867,25 @@ void main() {
       this.updatePointLight();
       const floor = this.actorList.reduce((y, a) => Math.min(y, a.floorY), Infinity);
       const floorY = Number.isFinite(floor) ? floor : 0;
+      // a map has its own floor: no grid, ground plane or floor reflection then, and the camera sees across it
+      const world = !!this.world?.visible;
+      if (world && this.camera.far < this.worldFar) {
+        this.camera.far = this.worldFar;
+        this.camera.updateProjectionMatrix();
+      }
+      if (world && this.floorGrid.visible) {
+        this.gridHiddenForWorld = true;
+        this.floorGrid.visible = false;
+      } else if (!world && this.gridHiddenForWorld) {
+        this.gridHiddenForWorld = false;
+        this.floorGrid.visible = true;
+      }
       if (this.floorGrid.visible) this.floorGrid.update(this.center.x, this.center.z, floorY, this.radius);
       this.facingMarker.position.y = floorY + 0.14;
-      this.ground.update(this.groundState, this.center.x, this.center.z, floorY, Math.max(1, this.actorList.reduce((h, a) => Math.max(h, a.bindHeight), 0)));
+      this.ground.update(world ? { ...this.groundState, enabled: false } : this.groundState, this.center.x, this.center.z, floorY, Math.max(1, this.actorList.reduce((h, a) => Math.max(h, a.bindHeight), 0)));
       this.updateShadows(floorY, moved);
-      this.updateReflection(floorY);
+      if (!world) this.updateReflection(floorY);
+      else this.reflection.mesh.visible = false;
       this.renderLightShadows(moved);
       this.ensureSceneDepth(this.fogOn || this.ao.enabled || this.look.dof?.enabled === true);
       this.updateParticleDepth(this.camera, this.sceneTarget.width, this.sceneTarget.height);
@@ -1028,11 +1042,13 @@ void main() {
 
   /** Whether the floor grid is shown (it is not part of screenshots). */
   get gridVisible(): boolean {
-    return this.floorGrid.visible;
+    return this.floorGrid.visible || this.gridHiddenForWorld;
   }
 
   set gridVisible(v: boolean) {
-    this.floorGrid.visible = v;
+    // (while a map is shown the grid stays hidden; this is whether it comes back)
+    if (this.world?.visible) this.gridHiddenForWorld = v;
+    else this.floorGrid.visible = v;
   }
 
   get actors(): readonly Actor[] {
@@ -3085,6 +3101,18 @@ void main() {
   }
 
   /** The plane at the floor (see groundPlane.ts). */
+  /** The map in the scene (one at a time; null: none) and how far the camera must see to take it in. */
+  private world: THREE.Object3D | null = null;
+  private worldFar = 0;
+  /** The grid was on when a map came in (it comes back when the map goes). */
+  private gridHiddenForWorld = false;
+  setWorld(world: THREE.Object3D | null, far = 0) {
+    if (this.world && this.world !== world) this.scene.remove(this.world);
+    this.world = world;
+    this.worldFar = far;
+    if (world && world.parent !== this.scene) this.scene.add(world);
+  }
+
   setGround(state: GroundState) {
     this.groundState = { ...state };
   }
