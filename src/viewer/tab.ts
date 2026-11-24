@@ -8461,7 +8461,7 @@ export function createViewTab(els: Els) {
           ...(["hatman", "monoculus", "merasmus", "skeleton", "skeletonKing", "ghost", "ghostNoHat", "ghostRed"] as const).map((key, i) => ({ label: BOSSES[key].label, separator: i === 0, drag: { type: ADD_DRAG_TYPE, data: `boss:${key}` }, run: () => void addBoss(key) })),
           ...(["saxton", "santaHale", "hellHale", "krampus"] as const).map((key, i) => ({ label: BOSSES[key].label, separator: i === 0, drag: { type: ADD_DRAG_TYPE, data: `boss:${key}` }, run: () => void addBoss(key) })),
           // the creatures of the maps
-          ...(["chicken"] as const).map((key, i) => ({ label: BOSSES[key].label, separator: i === 0, drag: { type: ADD_DRAG_TYPE, data: `boss:${key}` }, run: () => void addBoss(key) })),
+          ...(["salmann", "chicken"] as const).map((key, i) => ({ label: BOSSES[key].label, separator: i === 0, drag: { type: ADD_DRAG_TYPE, data: `boss:${key}` }, run: () => void addBoss(key) })),
         ],
       },
       { label: "Prop…", icon: ICON.prop, hint: "opens the prop browser", run: () => document.dispatchEvent(new CustomEvent("workbench:reveal-panel", { detail: "props" })) },

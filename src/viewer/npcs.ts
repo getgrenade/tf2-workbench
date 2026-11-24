@@ -97,6 +97,8 @@ export const BOSSES: Record<string, Boss> = {
   ghost: { label: "Ghost", model: "props_halloween/ghost", sequence: "idle", floats: true, voice: { sounds: ["Halloween.GhostMoan", "Halloween.GhostBoo", "Halloween.Haunted"] } },
   ghostNoHat: { label: "Ghost (no hat)", model: "props_halloween/ghost_no_hat", sequence: "idle", floats: true, voice: { sounds: ["Halloween.GhostMoan", "Halloween.GhostBoo", "Halloween.Haunted"] } },
   ghostRed: { label: "Ghost (red)", model: "props_halloween/ghost_no_hat_red", sequence: "idle", floats: true, voice: { sounds: ["Halloween.GhostMoan", "Halloween.GhostBoo", "Halloween.Haunted"] } },
+  // Salmann, the gillman of koth_slime, which packs his model and his gurgles and spews
+  salmann: { label: "Salmann", model: "props_brine/salmann", sequence: "stand_MELEE", map: "koth_slime", voice: { folders: ["slime/salmann_"] } },
   // the farm's chickens of ctf_applejack, which packs their model (standing, sitting, pecking, walking and running; five feathers)
   chicken: { label: "Chicken", model: "applejack/applejack_chicken", sequence: "stand_a", map: "ctf_applejack" },
 };
