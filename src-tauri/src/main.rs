@@ -100,6 +100,7 @@ fn main() {
             commands::load_map_model,
             commands::load_map_prop_light,
             commands::map_sounds,
+            commands::refresh_custom_content,
             commands::workshop_stamp,
             commands::list_poses,
             commands::read_poses,

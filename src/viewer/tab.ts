@@ -10,7 +10,7 @@ import { propLabel } from "../props/propList";
 import { forgetThumbnail } from "../props/propThumbs";
 import { decodeTga, encodeTga, iconProblem, ICON_SAFE_ROWS } from "../compiler/tga";
 import { fadeAmount, maskIcon, type IconFade } from "../compiler/iconMask";
-import { searchPaths, importSourceDir, readItemSession, readPropSession, saveItemIcon, buildItem, buildProp, loadTextureFrames, readSourceFile, revealFile, sourceSiblings, sourceStamp, mountItemZips, listMaps, mapLightAt } from "../api";
+import { searchPaths, importSourceDir, readItemSession, readPropSession, saveItemIcon, buildItem, buildProp, loadTextureFrames, readSourceFile, revealFile, sourceSiblings, sourceStamp, mountItemZips, listMaps, mapLightAt, refreshCustomContent } from "../api";
 import { FILE_DROP_EVENT, type FileDropDetail } from "../fileDrop";
 import { parseTextureFrames } from "./sourceMaterials";
 import { getWeaponProfile, importEffectZip, removeCustomEffect, type WeaponProfile, type UnusualEffectInfo } from "../api";
@@ -351,6 +351,19 @@ export function createViewTab(els: Els) {
   let mapNames: string[] | null = null;
   let mapNamesLoading: Promise<void> | null = null;
   const fetchMapNames = () => (mapNamesLoading ??= listMaps().then((m) => { mapNames = m; }).catch(() => { mapNamesLoading = null; }));
+  // newly downloaded content (Source Filmmaker's workshop, tf/custom, the user's folders, workshop maps) is found when the window comes
+  // back (from Steam or SFM, where it was downloaded): at most every ten seconds; the prop browser and the map list then have it
+  let contentChecked = 0;
+  const checkNewContent = () => {
+    if (performance.now() - contentChecked < 10_000) return;
+    contentChecked = performance.now();
+    mapNamesLoading = null;
+    void refreshCustomContent().then((changed) => {
+      if (changed) document.dispatchEvent(new CustomEvent("workbench:custom-content-changed", { detail: {} }));
+    }).catch(() => undefined);
+  };
+  window.addEventListener("focus", checkNewContent);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") checkNewContent(); });
   let skyUi: ReturnType<typeof createSkyUi> | null = null;
   let skyShown: { name: string; texture: import("three").CubeTexture } | null = null;
   let skyToken = 0;
@@ -8708,6 +8721,8 @@ export function createViewTab(els: Els) {
           ...(sfm.size ? [{ label: "Source Filmmaker workshop", hint: count(sfm), separator: !custom.size && !workshop.size, children: modes(sfm) }] : []),
         ]
       : [{ label: "Reading the maps folder…", disabled: true }];
+    // (the list read again: a map downloaded since, from the workshop or a server, is in it)
+    if (mapNames) children.unshift({ label: "Refresh the list", hint: "new downloads", run: () => { mapNamesLoading = null; mapNames = null; void fetchMapNames(); } });
     if (worldMap) {
       if (children[0]) children[0] = { ...children[0], separator: true };
       children.unshift({ label: `Remove ${mapLabel(worldMap.name)}`, run: () => removeWorldMap() });

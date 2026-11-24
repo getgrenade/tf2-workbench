@@ -387,6 +387,26 @@ pub fn list_custom_content(state: State<'_, AppState>) -> Result<Vec<CustomDto>,
     Ok(state.vpk()?.custom_mounts().into_iter().map(custom_dto).collect())
 }
 
+/// Reads the folders of loose files again (the game's custom folder, Source Filmmaker's workshop items, the folders the user mounted): what
+/// was downloaded or built since is found. Returns whether anything changed (an item more or less, files more or less).
+#[tauri::command]
+pub async fn refresh_custom_content(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
+    let vpk = state.vpk()?;
+    let saved = saved_custom_content(&app);
+    tauri::async_runtime::spawn_blocking(move || {
+        let sum = |v: &source_formats::VpkSet| v.custom_mounts().iter().map(|m| (m.name.clone(), m.files)).collect::<Vec<_>>();
+        let before = sum(&vpk);
+        if let Some(tf) = vpk.game_root().map(|p| p.to_path_buf()) {
+            let _ = vpk.mount_custom(&tf.join("custom"), true);
+            for dir in source_formats::steam::sfm_workshop_dirs(&tf) { let _ = vpk.mount_custom_as(&dir, true, Some("Source Filmmaker workshop")); }
+        }
+        for dir in saved { let _ = vpk.mount_custom(&dir, false); }
+        sum(&vpk) != before
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 /// Mounts a folder of loose files (an addon, or a folder of them) and keeps it for the next launch; returns what was mounted.
 #[tauri::command]
 pub async fn add_custom_content(app: tauri::AppHandle, state: State<'_, AppState>, path: String) -> Result<Vec<CustomDto>, String> {

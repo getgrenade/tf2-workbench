@@ -218,6 +218,8 @@ export const readPropSession = (path: string) => invoke<string>("read_prop_sessi
 /** The folders of loose files that are mounted (the game's `tf/custom` addons, and the ones the user added). */
 export interface CustomContent { name: string; root: string; auto: boolean; files: number; models: number }
 export const listCustomContent = () => invoke<CustomContent[]>("list_custom_content");
+/** Reads the folders of loose files again (tf/custom, Source Filmmaker's workshop items, the user's folders): whether anything changed. */
+export const refreshCustomContent = () => invoke<boolean>("refresh_custom_content");
 /** Mounts a folder of loose files (or a folder of such folders); the mounts it made. */
 export const addCustomContent = (path: string) => invoke<CustomContent[]>("add_custom_content", { path });
 export const removeCustomContent = (root: string) => invoke<void>("remove_custom_content", { root });
