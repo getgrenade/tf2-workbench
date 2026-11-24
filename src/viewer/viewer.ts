@@ -429,7 +429,7 @@ export class Viewer {
     const homeSkin = actor.particleTeam;
     // only the charted item is in the cells: hide every other mesh in the scene (ground, the shadow decal, the floor reflection, the
     // backdrop, the grid, editor overlays, other characters), and with `cosmeticOnly` the parts of the character shown with it too
-    const shown = new Set<THREE.Object3D>(opts.cosmeticOnly ? meshes.map((m) => m.mesh) : actor.meshes());
+    const shown = new Set<THREE.Object3D>(opts.cosmeticOnly ? meshes.map((m) => m.mesh) : actor.meshes(true));
     const hidden: THREE.Object3D[] = [];
     this.scene.traverse((o) => { if ((o as THREE.Mesh).isMesh && !shown.has(o) && o.visible) hidden.push(o); });
     const was = hidden.map((o) => o.visible);
@@ -3797,7 +3797,7 @@ void main() {
     // (its own ground shadow can be asked for: the decals stay, drawn again with the others out of the way)
     const ownShadow = !!opts?.only && !!opts.groundShadow;
     const decals = new Set<THREE.Object3D>(this.groundShadows.map((s) => s.quad));
-    if (opts?.only) hidden.push(...this.shadowQuads().filter((o) => !ownShadow || !decals.has(o)), ...this.actorList.filter((a) => !onlyList!.includes(a)).flatMap((a) => a.meshes()));
+    if (opts?.only) hidden.push(...this.shadowQuads().filter((o) => !ownShadow || !decals.has(o)), ...this.actorList.filter((a) => !onlyList!.includes(a)).flatMap((a) => a.meshes(true)));
     const wasVisible = hidden.map((o) => o.visible);
     hidden.forEach((o) => (o.visible = false));
     const shadowsWere = this.shadowParams;
