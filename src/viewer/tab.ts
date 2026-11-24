@@ -8675,10 +8675,10 @@ export function createViewTab(els: Els) {
           },
           { label: BOSSES.buster.label, run: () => void addBoss("buster") },
           { label: BOSSES.tank.label, run: () => void addBoss("tank") },
-          ...(["hatman", "monoculus", "merasmus", "skeleton", "skeletonKing", "ghost", "ghostNoHat", "ghostRed"] as const).map((key, i) => ({ label: BOSSES[key].label, separator: i === 0, drag: { type: ADD_DRAG_TYPE, data: `boss:${key}` }, run: () => void addBoss(key) })),
+          ...(["hatman", "monoculus", "merasmus", "skeleton", "skeletonKing", "ghost", "ghostNoHat"] as const).map((key, i) => ({ label: BOSSES[key].label, separator: i === 0, drag: { type: ADD_DRAG_TYPE, data: `boss:${key}` }, run: () => void addBoss(key) })),
           ...(["saxton", "santaHale", "hellHale", "krampus"] as const).map((key, i) => ({ label: BOSSES[key].label, separator: i === 0, drag: { type: ADD_DRAG_TYPE, data: `boss:${key}` }, run: () => void addBoss(key) })),
           // the creatures of the maps
-          ...(["salmann", "chicken"] as const).map((key, i) => ({ label: BOSSES[key].label, separator: i === 0, drag: { type: ADD_DRAG_TYPE, data: `boss:${key}` }, run: () => void addBoss(key) })),
+          ...(["salmann", "seal", "sealSmall", "chicken"] as const).map((key, i) => ({ label: BOSSES[key].label, separator: i === 0, drag: { type: ADD_DRAG_TYPE, data: `boss:${key}` }, run: () => void addBoss(key) })),
         ],
       },
       { label: "Prop…", icon: ICON.prop, hint: "opens the prop browser", run: () => document.dispatchEvent(new CustomEvent("workbench:reveal-panel", { detail: "props" })) },
