@@ -98,6 +98,9 @@ export const BOSSES: Record<string, Boss> = {
   ghostNoHat: { label: "Ghost (no hat)", model: "props_halloween/ghost_no_hat", sequence: "idle", floats: true, voice: { sounds: ["Halloween.GhostMoan", "Halloween.GhostBoo", "Halloween.Haunted"] } },
   // Salmann, the gillman of koth_slime, which packs his model and his gurgles and spews
   salmann: { label: "Salmann", model: "props_brine/salmann", sequence: "stand_MELEE", map: "koth_slime", voice: { folders: ["slime/salmann_"] } },
+  // the Toastmaster of koth_synthetic_event (the botlers' boss, in its own skin), which packs his model and spawn lines, and a botler
+  toastmaster: { label: "Toastmaster", model: "bots/hwn_botler/hwn_botler_boss", sequence: "stand_MELEE", skin: 3, map: "koth_synthetic_event", voice: { folders: ["synthetic_event/toastmaster_"] } },
+  botler: { label: "Botler", model: "bots/hwn_botler/hwn_botler", sequence: "stand_MELEE", map: "koth_synthetic_event", voice: { folders: ["synthetic_event/botler"] } },
   // the seals of pd_selbyen, which packs their model and barks (napping, the small one too)
   seal: { label: "Selbyen seal", model: "props_selbyen/seal", sequence: "idlesleepy", map: "pd_selbyen", voice: { folders: ["selbyen/"] } },
   sealSmall: { label: "Selbyen seal (small)", model: "props_selbyen/seal_small", sequence: "idlesleepy", map: "pd_selbyen", voice: { folders: ["selbyen/"] } },

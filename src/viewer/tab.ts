@@ -1997,7 +1997,8 @@ export function createViewTab(els: Els) {
       if (left.includes("cig")) void applyUnusuals(e);
     }
     if (e === selected) renderConditions(); // some effects are the toggles of one class
-    if (isBuildingCls(cls)) preset = { ...preset, seqName: preset?.seqName ?? (defaultBuildingSequence(cls) || bossOf(cls)?.sequence || "") };
+    // (an NPC's own standing sequence first: the general default would put a model with an "idle" of one frame, the seal, in that)
+    if (isBuildingCls(cls)) preset = { ...preset, seqName: preset?.seqName ?? (bossOf(cls)?.sequence || defaultBuildingSequence(cls) || "") };
     if (!preset && e.actor.inspectOnly) preset = { seqName: "ref" }; // an item opened alone stays in the reference pose on every class
     const token = ++e.showToken;
     const path = classPath(cls);
@@ -8678,7 +8679,7 @@ export function createViewTab(els: Els) {
           ...(["hatman", "monoculus", "merasmus", "skeleton", "skeletonKing", "ghost", "ghostNoHat"] as const).map((key, i) => ({ label: BOSSES[key].label, separator: i === 0, drag: { type: ADD_DRAG_TYPE, data: `boss:${key}` }, run: () => void addBoss(key) })),
           ...(["saxton", "santaHale", "hellHale", "krampus"] as const).map((key, i) => ({ label: BOSSES[key].label, separator: i === 0, drag: { type: ADD_DRAG_TYPE, data: `boss:${key}` }, run: () => void addBoss(key) })),
           // the creatures of the maps
-          ...(["salmann", "seal", "sealSmall", "chicken"] as const).map((key, i) => ({ label: BOSSES[key].label, separator: i === 0, drag: { type: ADD_DRAG_TYPE, data: `boss:${key}` }, run: () => void addBoss(key) })),
+          ...(["toastmaster", "botler", "salmann", "seal", "sealSmall", "chicken"] as const).map((key, i) => ({ label: BOSSES[key].label, separator: i === 0, drag: { type: ADD_DRAG_TYPE, data: `boss:${key}` }, run: () => void addBoss(key) })),
         ],
       },
       { label: "Prop…", icon: ICON.prop, hint: "opens the prop browser", run: () => document.dispatchEvent(new CustomEvent("workbench:reveal-panel", { detail: "props" })) },
