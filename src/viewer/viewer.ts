@@ -1888,6 +1888,15 @@ void main() {
   }
 
   /** The point of the floor (the plane at height `y`) under a position of the screen, or null when that part of the view looks away from it. */
+  /** The ray of the view through a point of the page, null off the view. */
+  rayAt(clientX: number, clientY: number): THREE.Raycaster | null {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return null;
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(new THREE.Vector2((clientX - rect.left) / rect.width * 2 - 1, 1 - (clientY - rect.top) / rect.height * 2), this.camera);
+    return ray;
+  }
+
   floorPointAt(clientX: number, clientY: number, y = 0): THREE.Vector3 | null {
     const rect = this.renderer.domElement.getBoundingClientRect();
     if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return null;

@@ -68,6 +68,7 @@ const LUMP_GAME_LUMP: usize = 35;
 const LUMP_TEXDATA_STRING_DATA: usize = 43;
 const LUMP_TEXDATA_STRING_TABLE: usize = 44;
 const LUMP_OVERLAYS: usize = 45;
+const LUMP_CUBEMAPS: usize = 42;
 const LUMP_LIGHTING_HDR: usize = 53;
 const LUMP_FACES_HDR: usize = 58;
 
@@ -108,6 +109,8 @@ pub struct MapMesh {
 
 /// A model the map places: a static prop or a prop entity.
 pub struct MapProp {
+    /// A static prop's number in the map (what its baked lighting, `sp_hdr_<n>.vhv`, is named by); none for a prop entity.
+    pub static_index: Option<u32>,
     /// `models/....mdl`, in lower case with forward slashes.
     pub model: String,
     pub origin: [f32; 3],
@@ -119,6 +122,10 @@ pub struct MapProp {
     /// folded in (+X -X +Y -Y +Z -Z, linear), and whether the sun reaches it.
     pub ambient: [[f32; 3]; 6],
     pub sunlit: bool,
+    /// The strongest light that reaches it (not in `ambient`): the direction toward it and its colour.
+    pub key: Option<([f32; 3], [f32; 3])>,
+    /// Where the game lights it from, when the map says (a static prop's lighting origin).
+    pub lighting_origin: Option<[f32; 3]>,
 }
 
 /// The sun of the map (`light_environment`): the direction toward it and its colour (linear).
@@ -155,6 +162,8 @@ pub struct Map {
     /// The limits the map gives the game's auto exposure (`env_tonemap_controller`'s SetAutoExposureMin / Max, when it sets them).
     pub exposure_min: Option<f32>,
     pub exposure_max: Option<f32>,
+    /// Where the map's cubemaps were taken (`env_cubemap`s): their pictures are `materials/maps/<map>/c<x>_<y>_<z>.vtf` in its files.
+    pub cubemaps: Vec<[i32; 3]>,
     /// The map's light where something stands (for the characters).
     pub light: MapLight,
 }
@@ -240,7 +249,7 @@ impl MapLight {
     }
 
     /// The brush a point is in, when it is in a solid one: whether it has a sky side.
-    fn solid_at(&self, p: [f32; 3]) -> Option<bool> {
+    pub fn solid_at(&self, p: [f32; 3]) -> Option<bool> {
         let leaf = self.leaves.get(self.leaf_at(p)?)?;
         for &b in self.leaf_brushes.get(leaf.first_brush..leaf.first_brush + leaf.brush_count).unwrap_or(&[]) {
             let Some(&(contents, first, count, sky)) = self.brushes.get(b as usize) else { continue };
@@ -759,6 +768,7 @@ pub fn read(file: &[u8]) -> Result<Map> {
             }
         } else if model.ends_with(".mdl") && PROP_SHOWN.contains(&class) && e.get("rendermode").map_or(true, |m| m != "10") {
             props.push(MapProp {
+                static_index: None,
                 model: model.replace('\\', "/").to_ascii_lowercase(),
                 origin,
                 angles,
@@ -766,6 +776,8 @@ pub fn read(file: &[u8]) -> Result<Map> {
                 scale: e.get("modelscale").and_then(|s| s.parse().ok()).filter(|s: &f32| *s > 0.0).unwrap_or(1.0),
                 ambient: [[0.0; 3]; 6],
                 sunlit: false,
+                key: None,
+                lighting_origin: None,
             });
         }
     }
@@ -777,14 +789,28 @@ pub fn read(file: &[u8]) -> Result<Map> {
     let sky_area = sky_camera.and_then(|o| light.area_at(o)).filter(|&a| a != 0);
     let in_sky = |p: [f32; 3]| sky_area.is_some() && light.area_at(p) == sky_area;
     props.retain(|p| !in_sky(p.origin));
-    let mut lit_at: HashMap<[i32; 3], ([[f32; 3]; 6], bool)> = HashMap::new();
+    let mut lit_at: HashMap<[i32; 3], ([[f32; 3]; 6], bool, Option<([f32; 3], [f32; 3])>)> = HashMap::new();
     for p in &mut props {
-        // (lit at its middle, a little up from its origin)
-        let at = [p.origin[0], p.origin[1], p.origin[2] + 16.0];
+        // lit where the game lights it: its lighting origin when it has one, else a little up from its origin; a point in a wall (a
+        // prop set into one: a vent, a sign) moves out of it first
+        let up = [p.origin[0], p.origin[1], p.origin[2] + 16.0];
+        let rot = rotation(p.angles);
+        let fwd = [rot[0][0], rot[1][0], rot[2][0]];
+        let left = [rot[0][1], rot[1][1], rot[2][1]];
+        let at = p.lighting_origin.unwrap_or(up);
+        let at = [at, up, [up[0], up[1], up[2] + 24.0]]
+            .into_iter()
+            .chain([fwd, left].into_iter().flat_map(|d| [1.0f32, -1.0].map(|s| [up[0] + d[0] * 20.0 * s, up[1] + d[1] * 20.0 * s, up[2] + d[2] * 20.0 * s])))
+            .find(|q| light.solid_at(*q).is_none())
+            .unwrap_or(at);
         let key = at.map(|v| (v / 8.0).round() as i32);
-        let (ambient, sunlit) = *lit_at.entry(key).or_insert_with(|| (light.cube_at(at), light.sunlit(at)));
+        let (ambient, sunlit, key_light) = *lit_at.entry(key).or_insert_with(|| {
+            let l = light.light_at(at);
+            (l.cube, light.sunlit(at), l.key)
+        });
         p.ambient = ambient;
         p.sunlit = sunlit;
+        p.key = key_light;
     }
 
     // the lightmap atlas: the faces' first light style, the plain (not bumped) samples
@@ -1042,7 +1068,8 @@ pub fn read(file: &[u8]) -> Result<Map> {
     if bounds[0] > bounds[3] {
         bounds = [0.0; 6];
     }
-    Ok(Map { meshes, props, spawns, lightmap_width: width, lightmap_height: height, lightmap, sky, bounds, sun, light, exposure_min, exposure_max })
+    let cubemaps = bsp.lump(LUMP_CUBEMAPS).data.chunks_exact(16).map(|c| [i32_at(c, 0).unwrap_or(0), i32_at(c, 4).unwrap_or(0), i32_at(c, 8).unwrap_or(0)]).collect();
+    Ok(Map { meshes, props, spawns, lightmap_width: width, lightmap_height: height, lightmap, sky, bounds, sun, light, exposure_min, exposure_max, cubemaps })
 }
 
 fn grow(b: &mut [f32; 6], p: [f32; 3]) {
@@ -1168,7 +1195,9 @@ fn static_props(bsp: &Bsp) -> Vec<MapProp> {
             let Some(model) = names.get(u16_at(p, 24).unwrap_or(0) as usize) else { continue };
             // version 11 ends with a uniform scale
             let scale = if version >= 11 { f32_at(p, stride - 4).filter(|s| *s > 0.0 && s.is_finite()).unwrap_or(1.0) } else { 1.0 };
-            out.push(MapProp { model: model.clone(), origin: vec3(p, 0), angles: vec3(p, 12), skin: i32_at(p, 32).unwrap_or(0), scale, ambient: [[0.0; 3]; 6], sunlit: false });
+            out.push(MapProp { static_index: Some(k as u32), model: model.clone(), origin: vec3(p, 0), angles: vec3(p, 12), skin: i32_at(p, 32).unwrap_or(0), scale, ambient: [[0.0; 3]; 6], sunlit: false, key: None,
+                // (flag 2: STATIC_PROP_USE_LIGHTING_ORIGIN)
+                lighting_origin: (p[31] & 2 != 0).then(|| vec3(p, 44)) });
         }
     }
     out
@@ -1262,7 +1291,8 @@ const MAP_MATERIAL_PARAMS: &[&str] = &[
     "$basetexturetransform2", "$selfillum", "$alpha", "$vertexalpha", "$blendmodulatetexture", "$surfaceprop", "$ssbump", "$envmap",
     "$envmaptint", "$basealphaenvmapmask", "$normalmapalphaenvmapmask", "$envmapcontrast", "$envmapsaturation", "$fresnelreflection",
     "$bumptransform", "$nodiffusebumplighting", "$selfillumtint", "$detailscale", "$detailblendfactor", "$detailblendmode", "$decal",
-    "$detailtexturetransform",
+    "$detailtexturetransform", "$phong", "$phongexponent", "$phongboost", "$phongfresnelranges", "$phongtint", "$basemapalphaphongmask",
+    "$rimlight", "$rimlightexponent", "$rimlightboost", "$rimmask", "$selfillum", "$halflambert", "$phongalbedotint", "$invertphongmask",
 ];
 
 /// The biggest face of a material's cubemap (reflections are blurry).
@@ -1283,6 +1313,7 @@ pub fn map_material(vpk: &crate::VpkSet, name: &str, max_size: u32) -> std::resu
         ("bump2", &["$bumpmap2"][..]),
         ("envmask", &["$envmapmask"][..]),
         ("detail", &["$detail"][..]),
+        ("exponent", &["$phongexponenttexture"][..]),
     ] {
         let Some(tex) = keys.iter().find_map(|k| vmt.get(k)) else { continue };
         let vtf = vtf_of(tex);
@@ -1328,7 +1359,7 @@ mod light_tests {
         let t = std::time::Instant::now();
         let map = super::read(&bytes).unwrap();
         let sunlit = map.props.iter().filter(|p| p.sunlit).count();
-        let bright = map.props.iter().filter(|p| p.ambient.iter().flatten().sum::<f32>() > 0.05).count();
+        let bright = map.props.iter().filter(|p| p.ambient.iter().flatten().sum::<f32>() + p.key.map_or(0.0, |k| k.1.iter().sum::<f32>()) > 0.05).count();
         eprintln!("{} props, {sunlit} in the sun, {bright} with ambient light, sun {:?}, {:?}", map.props.len(), map.sun.map(|s| (s.dir, s.color)), t.elapsed());
         let p = &map.props[map.props.len() / 2];
         eprintln!("sample {} {:?} {:?}", p.model, p.origin, p.ambient);

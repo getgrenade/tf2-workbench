@@ -1,8 +1,7 @@
 import * as THREE from "three";
-import { loadMap, loadMapMaterial, loadMapModel } from "../api";
+import { loadMap, loadMapMaterial, loadMapModel, loadMapPropLight } from "../api";
 import { SOURCE_TO_VIEWER } from "./animator";
 import { parsePayload, type ModelData } from "./payload";
-import { loadSkyTexture } from "./skybox";
 
 /**
  * A map of the game in the scene, drawn the way the game's world shaders draw it:
@@ -44,7 +43,7 @@ type V3 = [number, number, number];
 interface MapJson {
   name: string;
   meshes: { material: string; vertexCount: number; indexCount: number; pos: number; normal: number; uv: number; lightmap: number; blend: number; tangentS: number; tangentT: number; index: number }[];
-  props: { model: string; origin: V3; angles: V3; skin: number; scale: number; ambient: V3[]; sunlit: boolean }[];
+  props: MapProp[];
   spawns: MapSpawn[];
   lightmap: { width: number; height: number; pages: number; offset: number; range: number; average: number };
   sun: { dir: V3; color: V3 } | null;
@@ -77,10 +76,21 @@ function split(buf: ArrayBuffer) {
   return { json, blob: (4 + len + 3) & ~3 };
 }
 
+/** A model the map places: its static number (what its baked light is named by), model, place, turn, skin, size and light. */
+export interface MapProp { index: number | null; model: string; origin: V3; angles: V3; skin: number; scale: number; ambient: V3[]; sunlit: boolean; key: { dir: V3; color: V3 } | null }
+
 const vertexShader = /* glsl */ `
   #ifdef PROP
     attribute vec3 amb0; attribute vec3 amb1; attribute vec3 amb2; attribute vec3 amb3; attribute vec3 amb4; attribute vec3 amb5;
     varying vec3 vAmb0; varying vec3 vAmb1; varying vec3 vAmb2; varying vec3 vAmb3; varying vec3 vAmb4; varying vec3 vAmb5;
+    // the strongest light on it (toward it, the map's axes) and its colour; the model's tangents
+    attribute vec3 keyDir; attribute vec3 keyColor; attribute vec4 propTangent;
+    varying vec3 vKeyDir; varying vec3 vKeyColor; varying vec4 vTangent;
+    #ifdef STATIC_LIGHT
+      // the light the map baked into its vertices (gamma, half of it)
+      attribute vec4 vlight;
+      varying vec3 vStatic;
+    #endif
   #else
     attribute vec2 lightmapUv;
     attribute float blend;
@@ -118,6 +128,11 @@ const vertexShader = /* glsl */ `
     vSrcPos = srcPos;
     #ifdef PROP
       vAmb0 = amb0; vAmb1 = amb1; vAmb2 = amb2; vAmb3 = amb3; vAmb4 = amb4; vAmb5 = amb5;
+      vKeyDir = keyDir; vKeyColor = keyColor;
+      vTangent = vec4(normalize(src * propTangent.xyz), propTangent.w);
+      #ifdef STATIC_LIGHT
+        vStatic = 2.0 * pow(vlight.rgb, vec3(2.2));
+      #endif
     #else
       vLm = lightmapUv;
       vBlend = blend;
@@ -164,6 +179,21 @@ const fragmentShader = /* glsl */ `
   uniform vec4 uShadow;
   uniform float uShadowFloor;
   uniform bool uShadowOn;
+  uniform bool uPhong;
+  uniform float uPhongExponent;
+  uniform float uPhongBoost;
+  uniform vec3 uPhongFresnel;
+  uniform vec3 uPhongTint;
+  uniform int uPhongMask;
+  uniform bool uInvertPhongMask;
+  uniform sampler2D tExponent;
+  uniform bool uHasExponent;
+  uniform bool uRim;
+  uniform float uRimExponent;
+  uniform float uRimBoost;
+  uniform bool uRimMask;
+  uniform bool uHalfLambert;
+  uniform bool uSelfIllum;
   varying vec2 vUv;
   varying vec2 vUv2;
   varying vec2 vBumpUv;
@@ -173,6 +203,14 @@ const fragmentShader = /* glsl */ `
   varying vec3 vWorldNormal;
   #ifdef PROP
     varying vec3 vAmb0; varying vec3 vAmb1; varying vec3 vAmb2; varying vec3 vAmb3; varying vec3 vAmb4; varying vec3 vAmb5;
+    varying vec3 vKeyDir; varying vec3 vKeyColor; varying vec4 vTangent;
+    #ifdef STATIC_LIGHT
+      varying vec3 vStatic;
+    #endif
+    vec3 ambientCube(vec3 n) {
+      vec3 n2 = n * n;
+      return n2.x * (n.x >= 0.0 ? vAmb0 : vAmb1) + n2.y * (n.y >= 0.0 ? vAmb2 : vAmb3) + n2.z * (n.z >= 0.0 ? vAmb4 : vAmb5);
+    }
   #else
     varying vec2 vLm;
     varying float vBlend;
@@ -212,12 +250,30 @@ const fragmentShader = /* glsl */ `
     vec3 tn = uSsbump ? vec3(0.0, 0.0, 1.0) : normalize(bumpTexel.xyz * 2.0 - 1.0);
 
     vec3 srcN = normalize(vSrcNormal);
+    // the surface's normal with its normal map
+    vec3 N = srcN;
+    #ifdef PROP
+      if (uHasBump && !uSsbump && dot(vTangent.xyz, vTangent.xyz) > 0.0) {
+        vec3 T = normalize(vTangent.xyz - srcN * dot(srcN, vTangent.xyz));
+        vec3 B = cross(srcN, T) * (vTangent.w < 0.0 ? -1.0 : 1.0);
+        N = normalize(tn.x * T + tn.y * B + tn.z * srcN);
+      }
+    #else
+      if (uHasBump && !uSsbump) N = normalize(tn.x * normalize(vTs) + tn.y * normalize(vTt) + tn.z * srcN);
+    #endif
+    vec3 V = normalize(uSrcEye - vSrcPos);
     vec3 light;
     if (uUnlit) light = vec3(1.0 / max(uExposure, 1e-4));
     else {
       #ifdef PROP
-        vec3 n2 = srcN * srcN;
-        light = n2.x * (srcN.x >= 0.0 ? vAmb0 : vAmb1) + n2.y * (srcN.y >= 0.0 ? vAmb2 : vAmb3) + n2.z * (srcN.z >= 0.0 ? vAmb4 : vAmb5);
+        #ifdef STATIC_LIGHT
+          // as the game draws a static prop: the light the map baked into it
+          light = vStatic;
+        #else
+          float nl = dot(N, vKeyDir);
+          nl = uHalfLambert ? pow(nl * 0.5 + 0.5, 2.0) : max(nl, 0.0);
+          light = ambientCube(N) + vKeyColor * nl;
+        #endif
       #else
         if (vLm.x < 0.0) light = vec3(1.0);
         else if (!uHasBump && !uHasBump2) light = lightmapPage(0.0);
@@ -247,15 +303,33 @@ const fragmentShader = /* glsl */ `
       }
     }
 
+    if (uSelfIllum) light = mix(light, vec3(1.0 / max(uExposure, 1e-4)), albedo.a);
     vec3 color = albedo.rgb * light;
+
+    #ifdef PROP
+      vec4 expTexel = uHasExponent ? texture2D(tExponent, vUv) : vec4(0.0, 1.0, 0.0, 1.0);
+      // the highlight of its strongest light (Source's phong: its exponent, boost, fresnel ranges and mask)
+      if (uPhong && dot(vKeyColor, vKeyColor) > 0.0) {
+        float mask = uPhongMask == 1 ? albedo.a : uPhongMask == 2 ? bumpTexel.a : 1.0;
+        if (uInvertPhongMask) mask = 1.0 - mask;
+        float exponent = uHasExponent ? expTexel.r * 149.0 + 1.0 : uPhongExponent;
+        float f = 1.0 - clamp(dot(N, V), 0.0, 1.0);
+        f = f * f - 0.5;
+        float fresnel = mix(uPhongFresnel.y, f > 0.0 ? uPhongFresnel.z : uPhongFresnel.x, 2.0 * abs(f));
+        vec3 R = reflect(-V, N);
+        float spec = pow(clamp(dot(R, vKeyDir), 0.0, 1.0), exponent) * clamp(dot(N, vKeyDir), 0.0, 1.0);
+        color += vKeyColor * spec * uPhongBoost * fresnel * mask * uPhongTint;
+      }
+      // the rim light: the light behind it, at its edges, from above
+      if (uRim) {
+        float rim = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), uRimExponent) * uRimBoost * clamp(N.z, 0.0, 1.0);
+        if (uRimMask) rim *= expTexel.a;
+        color += ambientCube(V) * rim;
+      }
+    #endif
 
     // the reflection of the cubemap, under its mask
     if (uHasEnv) {
-      vec3 N = srcN;
-      #ifndef PROP
-        if (uHasBump && !uSsbump) N = normalize(tn.x * normalize(vTs) + tn.y * normalize(vTt) + tn.z * srcN);
-      #endif
-      vec3 V = normalize(uSrcEye - vSrcPos);
       vec3 R = reflect(-V, N);
       float mask = uEnvMask == 1 ? texture2D(tEnvMask, vUv).r : uEnvMask == 2 ? 1.0 - albedo.a : uEnvMask == 3 ? bumpTexel.a : 1.0;
       float fresnel = mix(1.0, pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 5.0), clamp(uFresnel, 0.0, 1.0));
@@ -348,22 +422,6 @@ export class MapScene {
   private readonly inverse = new THREE.Matrix4();
   /** The meshes of each material (their draw order follows the material's). */
   private readonly meshesOf = new Map<string, THREE.Object3D[]>();
-  /**
-   * The sky's faces show the sky, as the game draws its sky brushes: the map's sky picture in the direction looked at (the same picture
-   * and turn as the scene's sky, so the two meet).
-   */
-  private readonly skyMaterial = new THREE.ShaderMaterial({
-    uniforms: { tSky: { value: null as THREE.CubeTexture | null }, uHasSky: { value: false } },
-    vertexShader: "varying vec3 vWorld; void main() { vec4 w = modelMatrix * vec4(position, 1.0); vWorld = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }",
-    fragmentShader: /* glsl */ `
-      uniform samplerCube tSky; uniform bool uHasSky; varying vec3 vWorld;
-      void main() {
-        vec3 d = normalize(vWorld - cameraPosition);
-        gl_FragColor = uHasSky ? vec4(textureCube(tSky, vec3(-d.x, d.y, d.z)).rgb, 1.0) : vec4(0.0, 0.0, 0.0, 1.0);
-        #include <colorspace_fragment>
-      }`,
-    side: THREE.DoubleSide,
-  });
   constructor(name: string) {
     this.name = name;
     this.group.name = `map:${name}`;
@@ -431,6 +489,8 @@ export class MapScene {
     this.shared.tLightmap.value = this.lightmap;
 
     for (const m of json.meshes) {
+      // the sky's faces are not drawn: the scene's sky (the World settings', made the map's) shows through them
+      if (m.material === SKY_MATERIAL) continue;
       const geo = new THREE.BufferGeometry();
       const f32 = (off: number, count: number) => new Float32Array(buf.slice(blob + off, blob + off + count * 4));
       geo.setAttribute("position", new THREE.BufferAttribute(f32(m.pos, m.vertexCount * 3), 3));
@@ -443,25 +503,15 @@ export class MapScene {
       geo.setIndex(new THREE.BufferAttribute(new Uint32Array(buf.slice(blob + m.index, blob + m.index + m.indexCount * 4)), 1));
       geo.computeBoundingSphere();
       this.geometries.push(geo);
-      const sky = m.material === SKY_MATERIAL;
-      const mesh = new THREE.Mesh(geo, sky ? this.skyMaterial : this.material(m.material, false));
+      const mesh = new THREE.Mesh(geo, this.material(m.material, "w"));
       mesh.name = m.material;
-      if (!sky) this.meshesOf.set(`w:${m.material}`, [...(this.meshesOf.get(`w:${m.material}`) ?? []), mesh]);
-      if (!sky && !m.material.startsWith(OVERLAY_PREFIX)) this.colliders.push({ geo, matrices: null, key: `w:${m.material}` });
+      this.meshesOf.set(`w:${m.material}`, [...(this.meshesOf.get(`w:${m.material}`) ?? []), mesh]);
+      if (!m.material.startsWith(OVERLAY_PREFIX)) this.colliders.push({ geo, matrices: null, key: `w:${m.material}` });
       mesh.matrixAutoUpdate = false;
       this.world.add(mesh);
     }
     this.world.updateMatrixWorld(true);
 
-    this.skyMaterial.userData.noShadow = true;
-    if (json.sky) {
-      void loadSkyTexture(json.sky).then((cube) => {
-        if (this.disposed) { cube.dispose(); return; }
-        this.textures.push(cube);
-        this.skyMaterial.uniforms.tSky.value = cube;
-        this.skyMaterial.uniforms.uHasSky.value = true;
-      }).catch(() => undefined);
-    }
     // the textures, then the props
     const keys = [...this.materials.keys()];
     let done = 0;
@@ -475,14 +525,14 @@ export class MapScene {
   }
 
   /** The material of a map (or prop) material name, made grey at first and filled when its textures come. */
-  private material(name: string, prop: boolean): THREE.ShaderMaterial {
-    const key = `${prop ? "p" : "w"}:${name}`;
+  private material(name: string, kind: "w" | "p" | "s"): THREE.ShaderMaterial {
+    const key = `${kind}:${name}`;
     let m = this.materials.get(key);
     if (m) return m;
     m = new THREE.ShaderMaterial({
       vertexShader,
       fragmentShader,
-      defines: prop ? { PROP: 1 } : {},
+      defines: kind === "s" ? { PROP: 1, STATIC_LIGHT: 1 } : kind === "p" ? { PROP: 1 } : {},
       uniforms: {
         ...this.shared,
         tBase: { value: null },
@@ -512,6 +562,21 @@ export class MapScene {
         uTexTransform: { value: new THREE.Matrix3() },
         uTexTransform2: { value: new THREE.Matrix3() },
         uBumpTransform: { value: new THREE.Matrix3() },
+        uPhong: { value: false },
+        uPhongExponent: { value: 5 },
+        uPhongBoost: { value: 1 },
+        uPhongFresnel: { value: new THREE.Vector3(0, 0.5, 1) },
+        uPhongTint: { value: new THREE.Vector3(1, 1, 1) },
+        uPhongMask: { value: 0 },
+        uInvertPhongMask: { value: false },
+        tExponent: { value: null },
+        uHasExponent: { value: false },
+        uRim: { value: false },
+        uRimExponent: { value: 4 },
+        uRimBoost: { value: 1 },
+        uRimMask: { value: false },
+        uHalfLambert: { value: false },
+        uSelfIllum: { value: false },
       },
     });
     // (the map is no character: it casts no ground shadow and no light shadow)
@@ -561,6 +626,7 @@ export class MapScene {
       if (t.slot === "bump") { u.tBump.value = tex; u.uHasBump.value = true; }
       if (t.slot === "bump2") { u.tBump2.value = tex; u.uHasBump2.value = true; }
       if (t.slot === "envmask") { u.tEnvMask.value = tex; u.uEnvMask.value = 1; }
+      if (t.slot === "exponent") { u.tExponent.value = tex; u.uHasExponent.value = true; }
       if (t.slot === "detail") {
         const mode = Number(p["$detailblendmode"] ?? 0);
         if (mode === 0 || mode === 1) {
@@ -589,6 +655,20 @@ export class MapScene {
       u.uFresnel.value = p["$fresnelreflection"] !== undefined ? 1 - Number(p["$fresnelreflection"]) : 0;
     }
     u.uSsbump.value = flag("$ssbump");
+    // a model's phong, rim light and self-illumination
+    u.uPhong.value = flag("$phong");
+    u.uPhongExponent.value = Number(p["$phongexponent"] ?? 5) || 5;
+    u.uPhongBoost.value = Number(p["$phongboost"] ?? 1);
+    (u.uPhongFresnel.value as THREE.Vector3).set(...vmtColor(p["$phongfresnelranges"], [0, 0.5, 1]));
+    (u.uPhongTint.value as THREE.Vector3).set(...vmtColor(p["$phongtint"], [1, 1, 1]));
+    u.uPhongMask.value = flag("$basemapalphaphongmask") ? 1 : u.uHasBump.value ? 2 : 0;
+    u.uInvertPhongMask.value = flag("$invertphongmask");
+    u.uRim.value = flag("$rimlight");
+    u.uRimExponent.value = Number(p["$rimlightexponent"] ?? 4) || 4;
+    u.uRimBoost.value = Number(p["$rimlightboost"] ?? 1);
+    u.uRimMask.value = flag("$rimmask");
+    u.uHalfLambert.value = flag("$halflambert");
+    u.uSelfIllum.value = flag("$selfillum");
     u.uTexTransform.value = textureTransform(p["$basetexturetransform"]);
     u.uTexTransform2.value = textureTransform(p["$basetexturetransform2"] ?? p["$basetexturetransform"]);
     u.uBumpTransform.value = textureTransform(p["$bumptransform"] ?? p["$basetexturetransform"]);
@@ -630,71 +710,169 @@ export class MapScene {
     m.needsUpdate = true;
   }
 
-  /** The props: each model once, drawn as many times as the map places it, each lit by the light where it stands. */
+  /** The map's props, by their number in `props`: what draws them (a mesh and its instance per part), and which are hidden. */
+  private props: MapProp[] = [];
+  private readonly propParts = new Map<number, { inst: THREE.InstancedMesh; i: number; collider: { matrices: THREE.Matrix4[] | null } }[]>();
+  private readonly hiddenProps = new Set<number>();
+
+  /**
+   * The props: each model once. A static prop the map baked light into is drawn on its own, by that light (as the game draws it);
+   * the others, of a model and skin, are drawn together, each lit by the light where it stands.
+   */
   private async loadProps(props: MapJson["props"], progress: (text: string) => void) {
-    const byModel = new Map<string, MapJson["props"]>();
-    for (const p of props) {
-      const list = byModel.get(p.model) ?? [];
-      list.push(p);
-      byModel.set(p.model, list);
-    }
+    this.props = props;
+    const byModel = new Map<string, number[]>();
+    props.forEach((p, n) => byModel.set(p.model, [...(byModel.get(p.model) ?? []), n]));
     const models = [...byModel.keys()];
     let done = 0;
     await pool(models, PARALLEL, async (path) => {
       let data: ModelData;
+      const list = byModel.get(path)!;
+      const statics = list.filter((n) => props[n].index !== null);
+      let baked: Uint8Array | null = null;
       try {
         data = parsePayload(await loadMapModel(path));
+        if (statics.length && !this.disposed) baked = new Uint8Array(await loadMapPropLight(this.name, path, statics.map((n) => props[n].index!)).catch(() => new ArrayBuffer(0)));
       } finally {
         progress(`${this.name}: props ${++done}/${models.length}`);
       }
       if (this.disposed) return;
-      const list = byModel.get(path)!;
-      const bySkin = new Map<number, MapJson["props"]>();
-      for (const p of list) {
-        const skin = p.skin >= 0 && p.skin < Math.max(1, data.skinCount) ? p.skin : 0;
-        bySkin.set(skin, [...(bySkin.get(skin) ?? []), p]);
-      }
       const meshes = data.bodyParts.flatMap((part) => part.models[0]?.meshes ?? []);
+      const vertexStart: number[] = [];
+      let per = 0;
+      for (const md of meshes) { vertexStart.push(per); per += md.positions.length / 3; }
+      // a static prop's baked light (null when the map baked none for it)
+      const lightOf = new Map<number, Uint8Array>();
+      if (baked && baked.length === statics.length * per * 4) {
+        statics.forEach((n, k) => {
+          const block = baked!.subarray(k * per * 4, (k + 1) * per * 4);
+          if (block.length && block[3] === 255) lightOf.set(n, block);
+        });
+      }
+      const skinOf = (n: number) => (props[n].skin >= 0 && props[n].skin < Math.max(1, data.skinCount) ? props[n].skin : 0);
+      // the batches: each baked prop alone, the others by skin
+      const batches: { skin: number; placed: number[]; light: Uint8Array | null }[] = [];
+      const bySkin = new Map<number, number[]>();
+      for (const n of list) {
+        const light = lightOf.get(n);
+        if (light) batches.push({ skin: skinOf(n), placed: [n], light });
+        else bySkin.set(skinOf(n), [...(bySkin.get(skinOf(n)) ?? []), n]);
+      }
+      for (const [skin, placed] of bySkin) batches.push({ skin, placed, light: null });
       const fills: Promise<void>[] = [];
-      for (const md of meshes) {
-        for (const [skin, placed] of bySkin) {
+      meshes.forEach((md, mi) => {
+        const position = new THREE.BufferAttribute(md.positions, 3);
+        const normal = new THREE.BufferAttribute(md.normals, 3);
+        const uv = new THREE.BufferAttribute(md.uvs, 2);
+        const tangent = new THREE.BufferAttribute(md.tangents.length ? md.tangents : new Float32Array(md.positions.length / 3 * 4), 4);
+        const index = new THREE.BufferAttribute(md.indices, 1);
+        const count = md.positions.length / 3;
+        for (const { skin, placed, light } of batches) {
           const geo = new THREE.InstancedBufferGeometry();
-          geo.setAttribute("position", new THREE.BufferAttribute(md.positions, 3));
-          geo.setAttribute("normal", new THREE.BufferAttribute(md.normals, 3));
-          geo.setAttribute("uv", new THREE.BufferAttribute(md.uvs, 2));
-          geo.setIndex(new THREE.BufferAttribute(md.indices, 1));
-          // the light of each one: its ambient cube, one attribute per face
+          geo.setAttribute("position", position);
+          geo.setAttribute("normal", normal);
+          geo.setAttribute("uv", uv);
+          geo.setAttribute("propTangent", tangent);
+          geo.setIndex(index);
+          if (light) geo.setAttribute("vlight", new THREE.BufferAttribute(light.slice(vertexStart[mi] * 4, (vertexStart[mi] + count) * 4), 4, true));
+          // the light of each one: its ambient cube (an attribute per face) and its strongest light
           for (let face = 0; face < 6; face++) {
             const a = new Float32Array(placed.length * 3);
-            placed.forEach((p, i) => a.set(p.ambient[face] ?? [0.3, 0.3, 0.3], i * 3));
+            placed.forEach((n, i) => a.set(props[n].ambient[face] ?? [0.3, 0.3, 0.3], i * 3));
             geo.setAttribute(`amb${face}`, new THREE.InstancedBufferAttribute(a, 3));
           }
+          const keyDir = new Float32Array(placed.length * 3);
+          const keyColor = new Float32Array(placed.length * 3);
+          placed.forEach((n, i) => {
+            const key = props[n].key;
+            if (!key) return;
+            keyDir.set(key.dir, i * 3);
+            keyColor.set(key.color, i * 3);
+          });
+          geo.setAttribute("keyDir", new THREE.InstancedBufferAttribute(keyDir, 3));
+          geo.setAttribute("keyColor", new THREE.InstancedBufferAttribute(keyColor, 3));
           geo.instanceCount = placed.length;
           geo.computeBoundingSphere();
           this.geometries.push(geo);
           const name = (md.materials[skin] ?? md.material).replace(/^materials\//, "").replace(/\.vmt$/, "");
-          const key = `p:${name}`;
+          const kind = light ? "s" : "p";
+          const key = `${kind}:${name}`;
           const fresh = !this.materials.has(key);
-          const material = this.material(name, true);
+          const material = this.material(name, kind);
           if (fresh) fills.push(this.fill(key).catch(() => undefined));
           const inst = new THREE.InstancedMesh(geo, material, placed.length);
-          placed.forEach((p, i) => {
-            const at = new THREE.Matrix4().makeTranslation(p.origin[0], p.origin[1], p.origin[2]).multiply(angleMatrix(p.angles)).multiply(new THREE.Matrix4().makeScale(p.scale, p.scale, p.scale));
-            inst.setMatrixAt(i, at);
-          });
+          placed.forEach((n, i) => inst.setMatrixAt(i, MapScene.propMatrix(props[n])));
           inst.instanceMatrix.needsUpdate = true;
           inst.computeBoundingSphere();
           inst.name = path;
           inst.matrixAutoUpdate = false;
+          inst.userData.props = placed;
           this.world.add(inst);
           this.meshesOf.set(key, [...(this.meshesOf.get(key) ?? []), inst]);
-          this.colliders.push({ geo, matrices: placed.map((_, i) => { const mm = new THREE.Matrix4(); inst.getMatrixAt(i, mm); return mm; }), key });
+          const collider = { geo, matrices: placed.map((n) => MapScene.propMatrix(props[n])), key };
+          this.colliders.push(collider);
+          placed.forEach((n, i) => this.propParts.set(n, [...(this.propParts.get(n) ?? []), { inst, i, collider }]));
         }
-      }
+      });
       this.world.updateMatrixWorld(true);
       await Promise.all(fills);
     }, () => this.disposed);
     this.buildColliders();
+  }
+
+  /** Where a prop is in the map: its place, turn and size (map units). */
+  private static propMatrix(p: MapProp): THREE.Matrix4 {
+    return new THREE.Matrix4().makeTranslation(p.origin[0], p.origin[1], p.origin[2]).multiply(angleMatrix(p.angles)).multiply(new THREE.Matrix4().makeScale(p.scale, p.scale, p.scale));
+  }
+
+  /** The prop under a ray of the view (its number), when it is the first thing of the map the ray meets. */
+  propAt(ray: THREE.Raycaster): number | null {
+    if (!this.group.visible) return null;
+    const hits = ray.intersectObject(this.world, true);
+    for (const hit of hits) {
+      const placed = hit.object.userData.props as number[] | undefined;
+      if (!placed) {
+        // a see-through surface (water, glass, a decal) is looked through
+        const m = (hit.object as THREE.Mesh).material as THREE.Material;
+        if (m?.transparent) continue;
+        return null;
+      }
+      const n = placed[hit.instanceId ?? 0];
+      if (n !== undefined && !this.hiddenProps.has(n)) return n;
+    }
+    return null;
+  }
+
+  /** A prop: its model and skin, and where it is in the view (place, rotation as three's "YXZ" Euler: pitch, yaw, roll; size). */
+  propPlacement(n: number): { model: string; skin: number; position: THREE.Vector3; pitch: number; yaw: number; roll: number; scale: number } | null {
+    const p = this.props[n];
+    if (!p) return null;
+    // the view's matrix of the model (its vertices are in the map's axes): the actor's root is place * turn * size * SOURCE_TO_VIEWER
+    const world = this.group.matrix.clone().multiply(MapScene.propMatrix(p)).multiply(SOURCE_TO_VIEWER.clone().invert());
+    const position = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
+    world.decompose(position, q, s);
+    const e = new THREE.Euler().setFromQuaternion(q, "YXZ");
+    return { model: p.model, skin: p.skin, position, pitch: e.x, yaw: e.y, roll: e.z, scale: p.scale };
+  }
+
+  /** Hides a prop of the map (or shows it again): a movable copy of it takes its place. */
+  setPropHidden(n: number, hidden: boolean) {
+    if (hidden === this.hiddenProps.has(n) || !this.props[n]) return;
+    if (hidden) this.hiddenProps.add(n);
+    else this.hiddenProps.delete(n);
+    const m = hidden ? new THREE.Matrix4().makeScale(0, 0, 0) : MapScene.propMatrix(this.props[n]);
+    for (const part of this.propParts.get(n) ?? []) {
+      part.inst.setMatrixAt(part.i, m);
+      part.inst.instanceMatrix.needsUpdate = true;
+      part.inst.computeBoundingSphere();
+      if (part.collider.matrices) part.collider.matrices[part.i] = m.clone();
+    }
+    this.buildColliders();
+  }
+
+  /** The props hidden (made movable). */
+  get hiddenPropList(): number[] {
+    return [...this.hiddenProps];
   }
 
   // --- what is solid: a grid of the map's triangles, to find what a ray meets (the floor under a point, a wall ahead) ---------------
@@ -721,6 +899,7 @@ export class MapScene {
       const index = c.geo.getIndex();
       if (!index) continue;
       for (const mat of c.matrices ?? [null]) {
+        if (mat && mat.determinant() === 0) continue;
         for (let i = 0; i < index.count; i++) {
           v.fromBufferAttribute(pos, index.getX(i));
           if (mat) v.applyMatrix4(mat);
@@ -809,7 +988,6 @@ export class MapScene {
     for (const t of this.textures) t.dispose();
     for (const m of this.materials.values()) m.dispose();
     this.lightmap?.dispose();
-    this.skyMaterial.dispose();
     this.materials.clear();
   }
 }

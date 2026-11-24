@@ -94,6 +94,8 @@ export interface SceneFile {
   sky?: SkyState;
   /** The map in the scene (`ctf_2fort`, from the game's maps folder). */
   map?: string;
+  /** The map's props made movable (by their number in the map): they are characters of the scene now, and the map hides its own. */
+  mapMoved?: number[];
   /** The cubemap the shiny materials reflect. */
   reflection?: ReflectionState;
   /** The plane at the floor. */
@@ -198,6 +200,8 @@ export function parseScene(text: string): SceneFile {
     aos: Array.isArray(raw.aos) ? raw.aos : undefined,
     look: raw.look && typeof raw.look === "object" && !Array.isArray(raw.look) ? raw.look : undefined,
     sky: parseSky(raw.sky),
+    map: typeof raw.map === "string" && /^\w+$/.test(raw.map) ? raw.map : undefined,
+    mapMoved: Array.isArray(raw.mapMoved) ? raw.mapMoved.filter((n: unknown) => Number.isInteger(n) && (n as number) >= 0) : undefined,
     reflection: parseReflection(raw.reflection),
     ground: parseGround(raw.ground),
     background: typeof raw.background === "string" && /^#[0-9a-f]{6}$/i.test(raw.background) ? raw.background.toLowerCase() : undefined,

@@ -267,6 +267,8 @@ export interface MapLightAt { cube: [number, number, number][]; key: { dir: [num
 export const mapLightAt = (name: string, points: [number, number, number][]) => invoke<MapLightAt[] | null>("map_light_at", { name, points });
 /** A model as a map places it: posed by its first sequence (binary, as loadModel). */
 export const loadMapModel = (path: string) => invoke<ArrayBuffer>("load_map_model", { path });
+/** The light a map baked into its static props of a model (`indices`: their numbers): RGBA per vertex of the model's meshes, all zero for none. */
+export const loadMapPropLight = (map: string, path: string, indices: number[]) => invoke<ArrayBuffer>("load_map_prop_light", { map, path, indices });
 /** A map material's shader, parameters and base textures no bigger than `maxSize` (binary; see mapScene.ts). */
 export const loadMapMaterial = (name: string, maxSize: number) => invoke<ArrayBuffer>("load_map_material", { name, maxSize });
 /** A value that changes when those zips do. */

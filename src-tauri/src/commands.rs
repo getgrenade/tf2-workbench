@@ -208,6 +208,12 @@ pub async fn map_light_at(name: String, points: Vec<[f32; 3]>) -> Result<serde_j
     workbench_core::map::light_at(&name, &points)
 }
 
+/// The lighting a map baked into its static props (see `workbench_core::map::load_map_prop_light`).
+#[tauri::command]
+pub async fn load_map_prop_light(state: State<'_, AppState>, map: String, path: String, indices: Vec<u32>) -> Result<tauri::ipc::Response, String> {
+    Ok(tauri::ipc::Response::new(workbench_core::map::load_map_prop_light(&state, &map, &path, &indices)?))
+}
+
 /// A model as a map places it: posed by its first sequence (see `workbench_core::map::load_map_model`).
 #[tauri::command]
 pub async fn load_map_model(state: State<'_, AppState>, path: String) -> Result<tauri::ipc::Response, String> {

@@ -6941,7 +6941,13 @@ export function createViewTab(els: Els) {
   /** The view's right-click menu. */
   function viewMenu(x: number, y: number) {
     const ents = sendTargets();
+    const ray = worldMap ? viewer?.rayAt(x, y) : null;
+    const mapProp = ray && worldMap ? worldMap.propAt(ray) : null;
+    const mapPropModel = mapProp !== null ? worldMap?.propPlacement(mapProp)?.model : undefined;
     openMenu({ x, y }, [
+      ...(mapProp !== null && mapPropModel
+        ? [{ label: "Make this prop movable", icon: "move" as const, hint: mapPropModel.replace(/^models\//, "").replace(/\.mdl$/, ""), separator: true, run: () => void moveMapProp(mapProp) }]
+        : []),
       {
         label: ents.length > 1 ? `Send ${ents.length} characters to promo board` : "Send to promo board",
         icon: "send",
@@ -7143,7 +7149,7 @@ export function createViewTab(els: Els) {
       pointLight: v.getPointLight(),
       ...capturePost(),
       sky: { ...(skyBeforeMap ?? sky) },
-      ...(worldMap ? { map: worldMap.name } : {}),
+      ...(worldMap ? { map: worldMap.name, ...(worldMap.hiddenPropList.length ? { mapMoved: worldMap.hiddenPropList } : {}) } : {}),
       reflection: { ...reflection },
       ground: { ...ground },
       background: bgInput.value,
@@ -7295,7 +7301,7 @@ export function createViewTab(els: Els) {
     skyBeforeMap = null;
     if (!scene.map) removeWorldMap();
     void setSkyState(scene.sky ?? DEFAULT_SKY).catch(() => {}).then(() => {
-      if (scene.map) void loadWorldMap(scene.map);
+      if (scene.map) void loadWorldMap(scene.map, scene.mapMoved ?? []);
     });
     void setReflectionState(scene.reflection ?? DEFAULT_REFLECTION).catch(() => {});
     setGroundState(scene.ground ?? DEFAULT_GROUND);
@@ -8347,10 +8353,14 @@ export function createViewTab(els: Els) {
     hierarchy().setMap(worldMap ? { name: worldMap.name, off: !worldMap.group.visible, ...(mapStatus ? { status: mapStatus } : {}) } : null);
   }
   /** Loads a map into the scene in place of the one there (its sky with it); a spawn point of it is where the characters stand. */
-  async function loadWorldMap(name: string) {
+  async function loadWorldMap(name: string, moved: number[] = []) {
     const v = viewer;
     if (!v) return;
-    if (worldMap?.name === name) return;
+    if (worldMap?.name === name) {
+      for (const n of worldMap.hiddenPropList) if (!moved.includes(n)) worldMap.setPropHidden(n, false);
+      for (const n of moved) worldMap.setPropHidden(n, true);
+      return;
+    }
     removeWorldMap();
     const map = new MapScene(name);
     worldMap = map;
@@ -8396,6 +8406,7 @@ export function createViewTab(els: Els) {
       mapStatus = "";
       syncMapRow();
       if (worldMap !== map) return;
+      for (const n of moved) map.setPropHidden(n, true);
       v.setWorld(map.group, Math.max(20000, map.extent * 1.5));
       if (map.sky) {
         skyBeforeMap ??= { ...sky };
@@ -8613,6 +8624,43 @@ export function createViewTab(els: Els) {
     await show(e, e.cls);
     // it stands on the floor, wherever the model keeps its origin
     v.placeActorAt(e.actor, place.x, place.y - e.actor.bindMinY, place.z);
+  }
+
+  /** Swaps a prop of the map for a prop of the scene in its place (same model, skin, turn and size), which can be moved. */
+  async function moveMapProp(n: number) {
+    const map = worldMap;
+    const info = map?.propPlacement(n);
+    if (!map || !info) return;
+    const v = ensureViewer();
+    const base = selected;
+    if (base) saveUi(base);
+    const cls = info.model.replace(/^models\//i, "").replace(/\.mdl$/i, "");
+    const e = newEntity(v.addActor(), cls, Math.max(0, info.skin));
+    e.group = hierarchy().activeGroup();
+    const place = () => {
+      e.actor.setScale(new THREE.Vector3(info.scale, info.scale, info.scale));
+      v.placeActorAt(e.actor, info.position.x, info.position.y, info.position.z);
+      e.actor.setPlacement(info.position.x, info.position.y, info.position.z, info.yaw);
+      e.actor.setTilt(info.pitch, info.roll);
+    };
+    place();
+    map.setPropHidden(n, true);
+    entities.push(e);
+    selected = e;
+    soleSelection(e);
+    v.select(e.actor);
+    restoreUi(e);
+    renderEntities();
+    // undone, the map's own prop comes back (deleted, the prop is gone from the map: a way to clear the map's props)
+    let caps: Captured[] = [];
+    const picks: Pick[] = [{ kind: "character", id: String(e.id) }];
+    editHistory.push({
+      label: "Make map prop movable",
+      undo: () => { caps = capturePicks(picks); removeCaptured(caps); if (worldMap === map) map.setPropHidden(n, false); },
+      redo: () => { reinstate(caps); if (worldMap === map) map.setPropHidden(n, true); },
+    });
+    await show(e, e.cls);
+    place();
   }
 
   async function addBuilding(kind: BuildingKind) {

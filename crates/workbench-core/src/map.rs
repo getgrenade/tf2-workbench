@@ -61,7 +61,7 @@ pub fn load_map(state: &AppState, name: &str) -> Result<Vec<u8>, String> {
         .collect();
     let lightmap = blob.len();
     blob.extend_from_slice(&map.lightmap);
-    let props: Vec<_> = map.props.iter().map(|p| json!({ "model": p.model, "origin": p.origin, "angles": p.angles, "skin": p.skin, "scale": p.scale, "ambient": p.ambient, "sunlit": p.sunlit })).collect();
+    let props: Vec<_> = map.props.iter().map(|p| json!({ "index": p.static_index, "model": p.model, "origin": p.origin, "angles": p.angles, "skin": p.skin, "scale": p.scale, "ambient": p.ambient, "sunlit": p.sunlit, "key": p.key.map(|(dir, color)| json!({ "dir": dir, "color": color })) })).collect();
     // the average light of the lit faces (linear), to set the exposure by, as the game's auto exposure does
     let page = (map.lightmap_width * map.lightmap_height * 4) as usize;
     let (mut sum, mut n) = (0.0f64, 0usize);
@@ -83,6 +83,7 @@ pub fn load_map(state: &AppState, name: &str) -> Result<Vec<u8>, String> {
         "lightmap": { "width": map.lightmap_width, "height": map.lightmap_height, "pages": source_formats::bsp::LIGHTMAP_PAGES, "offset": lightmap, "range": source_formats::bsp::LIGHTMAP_RANGE, "average": average_light },
         "sun": map.sun.map(|s| json!({ "dir": s.dir, "color": s.color })),
         "exposureMin": map.exposure_min,
+        "cubemaps": map.cubemaps,
         "exposureMax": map.exposure_max,
         "sky": map.sky,
         "bounds": map.bounds,
@@ -168,6 +169,63 @@ fn mul34(a: &M34, b: &M34) -> M34 {
 
 /// A model as a map shows it: its vertices in the pose of its first sequence (the game draws a prop posed by its bones, and a model's
 /// bind pose can be turned from that: a resupply locker's is a quarter turn off), as `load_model` encodes a model.
+/// The lighting the map baked into its static props' vertices (`sp_hdr_<n>.vhv`, else `sp_<n>.vhv`, in its own files), as the game
+/// draws them by: for each of `indices` (the props' static numbers), RGBA bytes (gamma, half the light: the game doubles it) for
+/// every vertex of the model's meshes as `load_map_model` gives them (each body part's first model). A prop the map baked nothing
+/// for (or whose list doesn't fit its model) has all zero there.
+pub fn load_map_prop_light(state: &AppState, map: &str, path: &str, indices: &[u32]) -> Result<Vec<u8>, String> {
+    let vpk = state.vpk()?;
+    vpk.mount_map(map).map_err(|e| e.to_string())?;
+    let model = source_formats::model::load(&vpk, &path.to_ascii_lowercase()).map_err(|e| e.to_string())?;
+    // the meshes the lighting lists (all of every body part's models), and which of them are drawn
+    let mut all: Vec<(&source_formats::model::Mesh, bool)> = Vec::new();
+    for part in &model.body_parts {
+        for (m, sub) in part.models.iter().enumerate() {
+            all.extend(sub.meshes.iter().map(|mesh| (mesh, m == 0)));
+        }
+    }
+    let drawn: usize = all.iter().filter(|(_, d)| *d).map(|(m, _)| m.vertex_ids.len()).sum();
+    let mut out = vec![0u8; indices.len() * drawn * 4];
+    for (k, &index) in indices.iter().enumerate() {
+        let Some(file) = vpk.map_file(map, &format!("sp_hdr_{index}.vhv")).or_else(|| vpk.map_file(map, &format!("sp_{index}.vhv"))) else { continue };
+        let Some(lists) = vhv_lists(&file) else { continue };
+        // the first level of detail's lists, a mesh each, in the model's order
+        let lod0: Vec<&[u8]> = lists.iter().filter(|(lod, _)| *lod == 0).map(|(_, l)| *l).collect();
+        if lod0.len() != all.len() || all.iter().zip(&lod0).any(|((m, _), l)| m.vertex_ids.iter().any(|&v| (v as usize + 1) * 4 > l.len())) {
+            continue;
+        }
+        let mut at = k * drawn * 4;
+        for ((mesh, shown), list) in all.iter().zip(&lod0) {
+            if !shown {
+                continue;
+            }
+            for &v in &mesh.vertex_ids {
+                let c = &list[v as usize * 4..v as usize * 4 + 4];
+                // (stored as BGRA)
+                out[at..at + 4].copy_from_slice(&[c[2], c[1], c[0], 255]);
+                at += 4;
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The lists of a `.vhv` file: (level of detail, its vertices' colours, 4 bytes each).
+fn vhv_lists(file: &[u8]) -> Option<Vec<(u32, &[u8])>> {
+    let u32_at = |at: usize| file.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+    if u32_at(0)? != 2 || u32_at(12)? != 4 {
+        return None;
+    }
+    let meshes = u32_at(20)? as usize;
+    (0..meshes)
+        .map(|m| {
+            let h = 40 + m * 28;
+            let (lod, count, offset) = (u32_at(h)?, u32_at(h + 4)? as usize, u32_at(h + 8)? as usize);
+            Some((lod, file.get(offset..offset + count * 4)?))
+        })
+        .collect()
+}
+
 pub fn load_map_model(state: &AppState, path: &str) -> Result<Vec<u8>, String> {
     let vpk = state.vpk()?;
     let mut model = source_formats::model::load(&vpk, &path.to_ascii_lowercase()).map_err(|e| e.to_string())?;
@@ -211,6 +269,11 @@ pub fn load_map_model(state: &AppState, path: &str) -> Result<Vec<u8>, String> {
                             for r in 0..3 {
                                 mesh.positions[v * 3 + r] = (m[r * 4] * p[0] + m[r * 4 + 1] * p[1] + m[r * 4 + 2] * p[2] + m[r * 4 + 3]) / total;
                                 mesh.normals[v * 3 + r] = (m[r * 4] * nn[0] + m[r * 4 + 1] * nn[1] + m[r * 4 + 2] * nn[2]) / total;
+                            }
+                            if let Some(t) = mesh.tangents.get(v * 4..v * 4 + 3).map(|t| [t[0], t[1], t[2]]) {
+                                for r in 0..3 {
+                                    mesh.tangents[v * 4 + r] = (m[r * 4] * t[0] + m[r * 4 + 1] * t[1] + m[r * 4 + 2] * t[2]) / total;
+                                }
                             }
                             let l = (mesh.normals[v * 3].powi(2) + mesh.normals[v * 3 + 1].powi(2) + mesh.normals[v * 3 + 2].powi(2)).sqrt();
                             if l > 1e-8 {

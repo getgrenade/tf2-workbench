@@ -583,6 +583,12 @@ impl VpkSet {
     }
 
     /// A file of a mounted map's pakfile.
+    /// A file of one mounted map's own files (see [`Self::mount_map`]), not of the others.
+    pub fn map_file(&self, map: &str, key: &str) -> Option<Vec<u8>> {
+        let map = map.trim_end_matches(".bsp").to_ascii_lowercase();
+        self.maps.read().unwrap().iter().find(|(n, _)| *n == map).and_then(|(_, z)| z.read(key))
+    }
+
     fn map_read(&self, key: &str) -> Option<Vec<u8>> {
         self.maps.read().unwrap().iter().find(|(_, z)| z.contains(key)).and_then(|(_, z)| z.read(key))
     }
