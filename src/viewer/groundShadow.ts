@@ -143,6 +143,13 @@ export class GroundShadow {
     scene.add(this.quad);
   }
 
+  /** Where the shadow last fell (its square on the floor), for a map that receives it on its own floors; null while it is off. */
+  cast: { centerX: number; centerZ: number; half: number; floorY: number; opacity: number } | null = null;
+  /** The blurred silhouette (red: how dark). */
+  get texture(): THREE.Texture {
+    return this.rtA.texture;
+  }
+
   /** Meshes that must not cast a shadow (translucent / additive layers such as glass, the light gizmo). */
   private static isCaster(o: THREE.Object3D): boolean {
     const m = (o as THREE.Mesh).material as THREE.Material | undefined;
@@ -156,6 +163,7 @@ export class GroundShadow {
   update(p: ShadowParams, cx: number, cz: number, radius: number, floorY: number, exclude: THREE.Object3D[], redraw = true) {
     this.quad.visible = p.enabled;
     if (!p.enabled) {
+      this.cast = null;
       this.drawnKey = ""; // the texture goes stale while the shadow is off
       return;
     }
@@ -234,6 +242,7 @@ export class GroundShadow {
     }
 
     // The decal: the same square on the floor, a hair above it to avoid z-fighting with a ground plane.
+    this.cast = { centerX: f.centerX, centerZ: f.centerZ, half: f.half, floorY, opacity: Math.min(Math.max(p.opacity, 0), 1) };
     this.quad.position.set(f.centerX, floorY + 0.05, f.centerZ);
     this.quad.scale.set(f.half, 1, f.half);
     this.decalMaterial.uniforms.uOpacity.value = Math.min(Math.max(p.opacity, 0), 1);

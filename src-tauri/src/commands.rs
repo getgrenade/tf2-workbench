@@ -202,6 +202,12 @@ pub async fn load_map(state: State<'_, AppState>, name: String) -> Result<tauri:
     Ok(tauri::ipc::Response::new(workbench_core::map::load_map(&state, &name)?))
 }
 
+/// The light of the loaded map at points: per point an ambient cube and a key light, as the game would light a character there.
+#[tauri::command]
+pub async fn map_light_at(name: String, points: Vec<[f32; 3]>) -> Result<serde_json::Value, String> {
+    workbench_core::map::light_at(&name, &points)
+}
+
 /// A map material: its shader, parameters and base textures no bigger than `max_size`.
 #[tauri::command]
 pub async fn load_map_material(state: State<'_, AppState>, name: String, max_size: u32) -> Result<tauri::ipc::Response, String> {

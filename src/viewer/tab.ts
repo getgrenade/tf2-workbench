@@ -10,7 +10,7 @@ import { propLabel } from "../props/propList";
 import { forgetThumbnail } from "../props/propThumbs";
 import { decodeTga, encodeTga, iconProblem, ICON_SAFE_ROWS } from "../compiler/tga";
 import { fadeAmount, maskIcon, type IconFade } from "../compiler/iconMask";
-import { searchPaths, importSourceDir, readItemSession, readPropSession, saveItemIcon, buildItem, buildProp, loadTextureFrames, readSourceFile, revealFile, sourceSiblings, sourceStamp, mountItemZips, listMaps } from "../api";
+import { searchPaths, importSourceDir, readItemSession, readPropSession, saveItemIcon, buildItem, buildProp, loadTextureFrames, readSourceFile, revealFile, sourceSiblings, sourceStamp, mountItemZips, listMaps, mapLightAt } from "../api";
 import { FILE_DROP_EVENT, type FileDropDetail } from "../fileDrop";
 import { parseTextureFrames } from "./sourceMaterials";
 import { getWeaponProfile, importEffectZip, removeCustomEffect, type WeaponProfile, type UnusualEffectInfo } from "../api";
@@ -8354,6 +8354,34 @@ export function createViewTab(els: Els) {
     const map = new MapScene(name);
     worldMap = map;
     v.setWorld(map.group, 1e5);
+    // every frame: the eye for its reflections, the characters' shadow on its floors, and (now and then) its light where they stand
+    let lightAsked = 0;
+    let lightAt: THREE.Vector3 | null = null;
+    v.onWorldFrame = (camera, shadow) => {
+      if (worldMap !== map) return;
+      map.setEye(camera);
+      map.setShadow(shadow);
+      const now = performance.now();
+      if (now - lightAsked < 250 || !map.exposure) return;
+      const shown = entities.filter((e) => !e.hidden);
+      if (!shown.length) return;
+      const mid = shown.reduce((s, e) => s.add(e.actor.offset), new THREE.Vector3()).divideScalar(shown.length);
+      mid.y += Math.max(...shown.map((e) => e.actor.bindHeight)) * 0.5;
+      if (lightAt && lightAt.distanceTo(mid) < 4) return;
+      lightAsked = now;
+      lightAt = mid.clone();
+      const p = map.toMap(mid);
+      void mapLightAt(name, [[p.x, p.y, p.z]]).then((r) => {
+        const at = r?.[0];
+        if (worldMap !== map || !at) return;
+        // the map's cube faces (+X -X +Y -Y +Z -Z, z up) as the view's (+X -X +Y -Y +Z -Z, y up)
+        const order = [2, 3, 4, 5, 0, 1];
+        const cube = order.map((i) => new THREE.Vector3(...(at.cube[i] ?? [0, 0, 0])).multiplyScalar(map.exposure));
+        const keyDir = at.key ? MapScene.toView(at.key.dir).normalize() : null;
+        const keyColor = at.key ? new THREE.Vector3(...at.key.color).multiplyScalar(map.exposure) : new THREE.Vector3();
+        v.setWorldLight({ cube, keyDir, keyColor });
+      }).catch(() => undefined);
+    };
     mapStatus = "loading";
     syncMapRow();
     try {
@@ -8385,6 +8413,7 @@ export function createViewTab(els: Els) {
     worldMap = null;
     mapStatus = "";
     viewer?.setWorld(null);
+    viewer?.setWorldLight(null);
     syncMapRow();
     if (skyBeforeMap) {
       const before = skyBeforeMap;

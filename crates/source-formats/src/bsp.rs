@@ -43,6 +43,17 @@ fn bad(what: &str) -> BspError {
 
 const LUMP_ENTITIES: usize = 0;
 const LUMP_PLANES: usize = 1;
+const LUMP_NODES: usize = 5;
+const LUMP_LEAFS: usize = 10;
+const LUMP_LEAF_BRUSHES: usize = 17;
+const LUMP_BRUSHES: usize = 18;
+const LUMP_BRUSH_SIDES: usize = 19;
+const LUMP_WORLDLIGHTS: usize = 15;
+const LUMP_WORLDLIGHTS_HDR: usize = 54;
+const LUMP_LEAF_AMBIENT_INDEX_HDR: usize = 51;
+const LUMP_LEAF_AMBIENT_INDEX: usize = 52;
+const LUMP_LEAF_AMBIENT_LIGHTING_HDR: usize = 55;
+const LUMP_LEAF_AMBIENT_LIGHTING: usize = 56;
 const LUMP_TEXDATA: usize = 2;
 const LUMP_VERTEXES: usize = 3;
 const LUMP_TEXINFO: usize = 6;
@@ -68,6 +79,11 @@ const SURF_NODRAW: i32 = 0x80;
 const SURF_HINT: i32 = 0x100;
 const SURF_SKIP: i32 = 0x200;
 const SURF_NOLIGHT: i32 = 0x400;
+/// A face lit with three more lightmaps, one per direction of the bump basis (for its normal map).
+const SURF_BUMPLIGHT: i32 = 0x800;
+const CONTENTS_SOLID: i32 = 0x1;
+const CONTENTS_WINDOW: i32 = 0x2;
+const CONTENTS_GRATE: i32 = 0x8;
 
 /// The triangles of one material.
 #[derive(Default)]
@@ -83,6 +99,9 @@ pub struct MapMesh {
     pub lightmap_uvs: Vec<f32>,
     /// How much of a blend material's second texture shows (a displacement's painted alpha, 0..1); 0 elsewhere.
     pub blend: Vec<f32>,
+    /// The tangent frame the face's normal map and bump lightmaps are in (the game's: from its texture axes), xyz per vertex.
+    pub tangents_s: Vec<f32>,
+    pub tangents_t: Vec<f32>,
     pub indices: Vec<u32>,
 }
 
@@ -95,6 +114,17 @@ pub struct MapProp {
     pub angles: [f32; 3],
     pub skin: i32,
     pub scale: f32,
+    /// The light around it, as the game lights a prop: the ambient cube of the map where it stands with the map's lights that reach it
+    /// folded in (+X -X +Y -Y +Z -Z, linear), and whether the sun reaches it.
+    pub ambient: [[f32; 3]; 6],
+    pub sunlit: bool,
+}
+
+/// The sun of the map (`light_environment`): the direction toward it and its colour (linear).
+#[derive(Clone, Copy)]
+pub struct MapSun {
+    pub dir: [f32; 3],
+    pub color: [f32; 3],
 }
 
 /// A spawn point (`info_player_teamspawn`).
@@ -109,7 +139,8 @@ pub struct Map {
     pub meshes: Vec<MapMesh>,
     pub props: Vec<MapProp>,
     pub spawns: Vec<MapSpawn>,
-    /// The lightmap atlas: `width` x `height` RGBA, each colour the square root of the light over [`LIGHTMAP_RANGE`] (so 8 bits keep the
+    /// The lightmap atlas: [`LIGHTMAP_PAGES`] pages of `width` x `height` RGBA one above the other (the plain light, then the light from
+    /// the three directions of the bump basis), each colour the square root of the light over [`LIGHTMAP_RANGE`] (so 8 bits keep the
     /// darks); alpha is 255.
     pub lightmap_width: u32,
     pub lightmap_height: u32,
@@ -118,10 +149,359 @@ pub struct Map {
     pub sky: Option<String>,
     /// The world's bounds (min xyz, max xyz).
     pub bounds: [f32; 6],
+    /// The sun, when the map has one.
+    pub sun: Option<MapSun>,
+    /// The map's light where something stands (for the characters).
+    pub light: MapLight,
+}
+
+/// What the light of a map is made of, to ask it where things stand: its BSP tree (which leaf a point is in), its brushes (whether a
+/// ray to the sun is blocked or reaches the sky) and the ambient light samples of its leaves.
+pub struct MapLight {
+    planes: Vec<([f32; 3], f32)>,
+    nodes: Vec<(usize, [i32; 2])>,
+    head: i32,
+    /// contents, area, mins, maxs, first leaf brush, leaf brush count, first ambient sample, sample count
+    leaves: Vec<Leaf>,
+    leaf_brushes: Vec<u16>,
+    /// contents, first side, side count, has a sky side
+    brushes: Vec<(i32, usize, usize, bool)>,
+    /// plane, bevel
+    sides: Vec<(usize, bool)>,
+    /// position (0..1 in its leaf), cube
+    samples: Vec<([f32; 3], [[f32; 3]; 6])>,
+    lights: Vec<WorldLight>,
+    pub sun: Option<MapSun>,
+}
+
+/// A light of the map, as the game lights models with it (`dworldlight_t`).
+#[derive(Clone, Copy)]
+struct WorldLight {
+    kind: i32,
+    origin: [f32; 3],
+    intensity: [f32; 3],
+    normal: [f32; 3],
+    stopdot: f32,
+    stopdot2: f32,
+    exponent: f32,
+    radius: f32,
+    attn: [f32; 3],
+}
+
+const EMIT_SURFACE: i32 = 0;
+const EMIT_POINT: i32 = 1;
+const EMIT_SPOTLIGHT: i32 = 2;
+const EMIT_SKYLIGHT: i32 = 3;
+
+/// The light at a point, as the game lights a model there: an ambient cube (the map's, with the lesser lights added to it) and the
+/// strongest light that reaches it, as a direction toward it and a colour.
+pub struct LightAt {
+    pub cube: [[f32; 3]; 6],
+    pub key: Option<([f32; 3], [f32; 3])>,
+}
+
+/// The six directions of an ambient cube.
+const CUBE_AXES: [[f32; 3]; 6] = [[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, -1.0]];
+
+#[derive(Clone, Copy)]
+struct Leaf {
+    contents: i32,
+    area: u16,
+    mins: [f32; 3],
+    maxs: [f32; 3],
+    first_brush: usize,
+    brush_count: usize,
+    first_sample: usize,
+    sample_count: usize,
+}
+
+impl MapLight {
+    fn leaf_at(&self, p: [f32; 3]) -> Option<usize> {
+        let mut node = self.head;
+        for _ in 0..4096 {
+            if node < 0 {
+                let leaf = (-1 - node) as usize;
+                return (leaf < self.leaves.len()).then_some(leaf);
+            }
+            let (plane, children) = *self.nodes.get(node as usize)?;
+            let (n, d) = *self.planes.get(plane)?;
+            node = if dot(n, p) - d >= 0.0 { children[0] } else { children[1] };
+        }
+        None
+    }
+
+    /// The area (the part of the map portals split off) a point is in.
+    fn area_at(&self, p: [f32; 3]) -> Option<u16> {
+        self.leaf_at(p).map(|l| self.leaves[l].area)
+    }
+
+    /// The brush a point is in, when it is in a solid one: whether it has a sky side.
+    fn solid_at(&self, p: [f32; 3]) -> Option<bool> {
+        let leaf = self.leaves.get(self.leaf_at(p)?)?;
+        for &b in self.leaf_brushes.get(leaf.first_brush..leaf.first_brush + leaf.brush_count).unwrap_or(&[]) {
+            let Some(&(contents, first, count, sky)) = self.brushes.get(b as usize) else { continue };
+            if contents & (CONTENTS_SOLID | CONTENTS_WINDOW | CONTENTS_GRATE) == 0 {
+                continue;
+            }
+            let inside = self.sides.get(first..first + count).unwrap_or(&[]).iter().filter(|(_, bevel)| !bevel).all(|&(plane, _)| {
+                self.planes.get(plane).is_some_and(|&(n, d)| dot(n, p) - d <= 0.01)
+            });
+            if inside {
+                return Some(sky || contents & CONTENTS_SOLID == 0);
+            }
+        }
+        (leaf.contents & CONTENTS_SOLID != 0).then_some(false)
+    }
+
+    /// Whether the sun reaches a point: a ray toward it, followed through the map until it is in the sky (a sky brush) or outside the
+    /// world, or blocked by a solid brush.
+    pub fn sunlit(&self, p: [f32; 3]) -> bool {
+        let Some(sun) = self.sun else { return false };
+        self.sunlit_toward(p, sun.dir)
+    }
+
+    fn sunlit_toward(&self, p: [f32; 3], dir: [f32; 3]) -> bool {
+        let sun = MapSun { dir, color: [0.0; 3] };
+        // (from a little above the point, so the floor it stands on does not block it)
+        let start = [p[0], p[1], p[2] + 8.0];
+        let mut t = 0.0;
+        while t < 32768.0 {
+            let q = [start[0] + sun.dir[0] * t, start[1] + sun.dir[1] * t, start[2] + sun.dir[2] * t];
+            if self.leaf_at(q).is_none() {
+                return true;
+            }
+            if let Some(sky) = self.solid_at(q) {
+                return sky;
+            }
+            t += 6.0;
+        }
+        true
+    }
+
+    /// Whether nothing solid is between two points.
+    fn clear_between(&self, a: [f32; 3], b: [f32; 3]) -> bool {
+        let d = sub(b, a);
+        let len = dot(d, d).sqrt();
+        let step = 6.0;
+        let mut t = step;
+        while t < len - step {
+            let q = [a[0] + d[0] * t / len, a[1] + d[1] * t / len, a[2] + d[2] * t / len];
+            if self.solid_at(q).is_some() {
+                return false;
+            }
+            t += step;
+        }
+        true
+    }
+
+    /// The light the game would give a model at a point (see [`LightAt`]): the leaf's ambient cube, and the map's lights that reach it.
+    pub fn light_at(&self, p: [f32; 3]) -> LightAt {
+        let mut cube = self.ambient_at(p);
+        let mut direct: Vec<([f32; 3], [f32; 3])> = Vec::new();
+        for l in &self.lights {
+            let (dir, ratio) = match l.kind {
+                EMIT_SKYLIGHT => {
+                    let dir = l.normal.map(|v| -v);
+                    let lit = self.sun.map_or(false, |_| true) && self.sunlit_toward(p, dir);
+                    (dir, if lit { 1.0 } else { 0.0 })
+                }
+                EMIT_POINT | EMIT_SPOTLIGHT | EMIT_SURFACE => {
+                    let delta = sub(l.origin, p);
+                    let dist2 = dot(delta, delta).max(1.0);
+                    let dist = dist2.sqrt();
+                    if l.radius > 0.0 && dist > l.radius {
+                        continue;
+                    }
+                    let dir = delta.map(|v| v / dist);
+                    let mut ratio = match l.kind {
+                        EMIT_SURFACE => {
+                            let d = -dot(dir, l.normal);
+                            if d <= 0.0 { 0.0 } else { d / dist2 }
+                        }
+                        _ => 1.0 / (l.attn[0] + l.attn[1] * dist + l.attn[2] * dist2).max(1e-6),
+                    };
+                    if l.kind == EMIT_SPOTLIGHT {
+                        let d = -dot(dir, l.normal);
+                        if d <= l.stopdot2 {
+                            ratio = 0.0;
+                        } else {
+                            if l.exponent > 0.0 {
+                                ratio *= d.powf(l.exponent);
+                            }
+                            if d <= l.stopdot && l.stopdot > l.stopdot2 {
+                                ratio *= (d - l.stopdot2) / (l.stopdot - l.stopdot2);
+                            }
+                        }
+                    }
+                    (dir, ratio)
+                }
+                _ => continue,
+            };
+            let color = l.intensity.map(|c| c * ratio);
+            if color[0] + color[1] + color[2] < 0.003 {
+                continue;
+            }
+            if l.kind != EMIT_SKYLIGHT && !self.clear_between(p, l.origin) {
+                continue;
+            }
+            direct.push((dir, color));
+        }
+        // the strongest is the key light; the others go into the cube, as the game folds the lights beyond its few into it
+        direct.sort_by(|a, b| (b.1[0] + b.1[1] + b.1[2]).total_cmp(&(a.1[0] + a.1[1] + a.1[2])));
+        let key = direct.first().copied();
+        for &(dir, color) in direct.iter().skip(1) {
+            for (face, axis) in cube.iter_mut().zip(CUBE_AXES) {
+                let d = dot(dir, axis);
+                if d > 0.0 {
+                    for c in 0..3 {
+                        face[c] += color[c] * d;
+                    }
+                }
+            }
+        }
+        LightAt { cube, key }
+    }
+
+    /// The light at a point with the key light folded into the cube too (for a prop, which is lit by its cube alone).
+    pub fn cube_at(&self, p: [f32; 3]) -> [[f32; 3]; 6] {
+        let LightAt { mut cube, key } = self.light_at(p);
+        if let Some((dir, color)) = key {
+            for (face, axis) in cube.iter_mut().zip(CUBE_AXES) {
+                let d = dot(dir, axis);
+                if d > 0.0 {
+                    for c in 0..3 {
+                        face[c] += color[c] * d;
+                    }
+                }
+            }
+        }
+        cube
+    }
+
+    /// The ambient cube of the map at a point (+X -X +Y -Y +Z -Z, linear): the nearest light sample of its leaf, else of the map.
+    pub fn ambient_at(&self, p: [f32; 3]) -> [[f32; 3]; 6] {
+        let near = |range: &mut dyn Iterator<Item = ([f32; 3], [[f32; 3]; 6])>| {
+            range.min_by(|a, b| {
+                let da = sub(a.0, p);
+                let db = sub(b.0, p);
+                dot(da, da).total_cmp(&dot(db, db))
+            })
+        };
+        if let Some(leaf) = self.leaf_at(p).map(|l| self.leaves[l]) {
+            let size = sub(leaf.maxs, leaf.mins);
+            let mut own = self.samples.get(leaf.first_sample..leaf.first_sample + leaf.sample_count).unwrap_or(&[]).iter().map(|(f, c)| {
+                ([leaf.mins[0] + f[0] * size[0], leaf.mins[1] + f[1] * size[1], leaf.mins[2] + f[2] * size[2]], *c)
+            });
+            if let Some((_, cube)) = near(&mut own) {
+                return cube;
+            }
+        }
+        // a point in no lit leaf (in a wall, under the floor): the nearest sample of any leaf
+        let mut all = self.leaves.iter().flat_map(|leaf| {
+            let size = sub(leaf.maxs, leaf.mins);
+            let mins = leaf.mins;
+            self.samples.get(leaf.first_sample..leaf.first_sample + leaf.sample_count).unwrap_or(&[]).iter().map(move |(f, c)| {
+                ([mins[0] + f[0] * size[0], mins[1] + f[1] * size[1], mins[2] + f[2] * size[2]], *c)
+            })
+        });
+        near(&mut all).map(|(_, c)| c).unwrap_or([[0.3; 3]; 6])
+    }
+}
+
+fn rgbe(s: &[u8]) -> [f32; 3] {
+    let scale = 2f32.powi(s[3] as i8 as i32) / 255.0;
+    [s[0] as f32 * scale, s[1] as f32 * scale, s[2] as f32 * scale]
+}
+
+/// The light of a map: its tree, brushes, ambient samples and sun.
+fn map_light(bsp: &Bsp, sun: Option<MapSun>, texinfo_flags: &[i32]) -> MapLight {
+    let planes: Vec<([f32; 3], f32)> = bsp.lump(LUMP_PLANES).data.chunks_exact(20).map(|p| (vec3(p, 0), f32_at(p, 12).unwrap_or(0.0))).collect();
+    let nodes = bsp.lump(LUMP_NODES).data.chunks_exact(32).map(|n| (i32_at(n, 0).unwrap_or(0).max(0) as usize, [i32_at(n, 4).unwrap_or(-1), i32_at(n, 8).unwrap_or(-1)])).collect();
+    let head = bsp.lump(LUMP_MODELS).data.get(..48).and_then(|m| i32_at(m, 36)).unwrap_or(0);
+    let version = u32_at(bsp.file, 4).unwrap_or(20);
+    let leaf_size = if version <= 19 { 56 } else { 32 };
+    let hdr = !bsp.lump(LUMP_LEAF_AMBIENT_LIGHTING_HDR).data.is_empty();
+    let index = bsp.lump(if hdr { LUMP_LEAF_AMBIENT_INDEX_HDR } else { LUMP_LEAF_AMBIENT_INDEX });
+    let lighting = bsp.lump(if hdr { LUMP_LEAF_AMBIENT_LIGHTING_HDR } else { LUMP_LEAF_AMBIENT_LIGHTING });
+    let leaves = bsp
+        .lump(LUMP_LEAFS)
+        .data
+        .chunks_exact(leaf_size)
+        .enumerate()
+        .map(|(i, l)| {
+            let s16 = |at: usize| i16_at(l, at).unwrap_or(0) as f32;
+            Leaf {
+                contents: i32_at(l, 0).unwrap_or(0),
+                area: u16_at(l, 6).unwrap_or(0) & 0x1ff,
+                mins: [s16(8), s16(10), s16(12)],
+                maxs: [s16(14), s16(16), s16(18)],
+                first_brush: u16_at(l, 24).unwrap_or(0) as usize,
+                brush_count: u16_at(l, 26).unwrap_or(0) as usize,
+                sample_count: u16_at(&index.data, i * 4).unwrap_or(0) as usize,
+                first_sample: u16_at(&index.data, i * 4 + 2).unwrap_or(0) as usize,
+            }
+        })
+        .collect();
+    let samples = lighting
+        .data
+        .chunks_exact(28)
+        .map(|s| {
+            let cube = std::array::from_fn(|k| rgbe(&s[k * 4..k * 4 + 4]));
+            ([s[24] as f32 / 255.0, s[25] as f32 / 255.0, s[26] as f32 / 255.0], cube)
+        })
+        .collect();
+    let sides: Vec<(usize, bool)> = bsp.lump(LUMP_BRUSH_SIDES).data.chunks_exact(8).map(|s| (u16_at(s, 0).unwrap_or(0) as usize, s[6] != 0)).collect();
+    let side_sky: Vec<bool> = bsp
+        .lump(LUMP_BRUSH_SIDES)
+        .data
+        .chunks_exact(8)
+        .map(|s| {
+            let ti = i16_at(s, 2).unwrap_or(-1);
+            ti >= 0 && texinfo_flags.get(ti as usize).is_some_and(|f| f & (SURF_SKY | SURF_SKY2D) != 0)
+        })
+        .collect();
+    let brushes = bsp
+        .lump(LUMP_BRUSHES)
+        .data
+        .chunks_exact(12)
+        .map(|b| {
+            let first = i32_at(b, 0).unwrap_or(0).max(0) as usize;
+            let count = i32_at(b, 4).unwrap_or(0).max(0) as usize;
+            let sky = side_sky.get(first..first + count).is_some_and(|s| s.iter().any(|&x| x));
+            (i32_at(b, 8).unwrap_or(0), first, count, sky)
+        })
+        .collect();
+    let leaf_brushes = bsp.lump(LUMP_LEAF_BRUSHES).data.chunks_exact(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
+    let lights_lump = bsp.lump(if bsp.lump(LUMP_WORLDLIGHTS_HDR).data.is_empty() { LUMP_WORLDLIGHTS } else { LUMP_WORLDLIGHTS_HDR });
+    // (version 1 of the lump has 12 more bytes)
+    let stride = if lights_lump.data.len() % 88 == 0 { 88 } else { 100 };
+    let lights: Vec<WorldLight> = lights_lump
+        .data
+        .chunks_exact(stride)
+        .map(|l| {
+            let f = |at: usize| f32_at(l, at).unwrap_or(0.0);
+            WorldLight {
+                origin: vec3(l, 0),
+                intensity: vec3(l, 12),
+                normal: vec3(l, 24),
+                kind: i32_at(l, 40).unwrap_or(-1),
+                stopdot: f(48),
+                stopdot2: f(52),
+                exponent: f(56),
+                radius: f(60),
+                attn: [f(64), f(68), f(72)],
+            }
+        })
+        .collect();
+    // the sun: the map's sky light (its colour as the compile made it), else light_environment's
+    let sun = lights.iter().find(|l| l.kind == EMIT_SKYLIGHT).map(|l| MapSun { dir: normalize(l.normal.map(|v| -v)), color: l.intensity }).or(sun);
+    MapLight { planes, nodes, head, leaves, leaf_brushes, brushes, sides, samples, lights, sun }
 }
 
 /// The brightest light the lightmap atlas keeps (linear; 1 is a surface lit to its own colour).
 pub const LIGHTMAP_RANGE: f32 = 4.0;
+/// The pages of the lightmap atlas (see [`Map::lightmap`]).
+pub const LIGHTMAP_PAGES: u32 = 4;
 
 struct Lump<'a> {
     data: std::borrow::Cow<'a, [u8]>,
@@ -324,12 +704,29 @@ pub fn read(file: &[u8]) -> Result<Map> {
     let mut spawns = Vec::new();
     let mut sky = None;
     let mut shown_models: Vec<(usize, [f32; 3], [f32; 3])> = vec![(0, [0.0; 3], [0.0; 3])];
+    let mut sun = None;
+    let mut sky_camera = None;
     for e in &entities {
         let class = e.get("classname").map(String::as_str).unwrap_or("");
         let origin = e.get("origin").map(|s| parse3(s)).unwrap_or([0.0; 3]);
         let angles = e.get("angles").map(|s| parse3(s)).unwrap_or([0.0; 3]);
         match class {
             "worldspawn" => sky = e.get("skyname").filter(|s| !s.is_empty()).cloned(),
+            "sky_camera" => sky_camera = Some(origin),
+            "light_environment" => {
+                // the direction the light comes from: its angles, with "pitch" in place of theirs when given
+                let pitch = e.get("pitch").and_then(|p| p.parse::<f32>().ok()).unwrap_or(angles[0]);
+                let (p, y) = (pitch.to_radians(), angles[1].to_radians());
+                let toward = [p.cos() * y.cos(), p.cos() * y.sin(), -p.sin()];
+                let light: Vec<f32> = e.get("_light").map(|l| l.split_whitespace().filter_map(|v| v.parse().ok()).collect()).unwrap_or_default();
+                let (rgb, bright) = match light.as_slice() {
+                    [r, g, b, i, ..] => ([*r, *g, *b], *i / 255.0),
+                    [r, g, b] => ([*r, *g, *b], 1.0),
+                    _ => ([255.0, 255.0, 255.0], 1.0),
+                };
+                let color = rgb.map(|c| (c / 255.0).powf(2.2) * bright);
+                sun = Some(MapSun { dir: normalize(toward), color });
+            }
             "info_player_teamspawn" => spawns.push(MapSpawn { origin, yaw: angles[1], team: e.get("teamnum").and_then(|t| t.parse().ok()).unwrap_or(0) }),
             _ => {}
         }
@@ -345,10 +742,28 @@ pub fn read(file: &[u8]) -> Result<Map> {
                 angles,
                 skin: e.get("skin").and_then(|s| s.parse().ok()).unwrap_or(0),
                 scale: e.get("modelscale").and_then(|s| s.parse().ok()).filter(|s: &f32| *s > 0.0).unwrap_or(1.0),
+                ambient: [[0.0; 3]; 6],
+                sunlit: false,
             });
         }
     }
     props.extend(static_props(&bsp));
+    let texinfo_flags: Vec<i32> = texinfos.iter().map(|t| t.flags).collect();
+    let light = map_light(&bsp, sun, &texinfo_flags);
+    let sun = light.sun;
+    // the 3D skybox (the small copy of the scenery around the map that the game draws far away) is left out: its area
+    let sky_area = sky_camera.and_then(|o| light.area_at(o)).filter(|&a| a != 0);
+    let in_sky = |p: [f32; 3]| sky_area.is_some() && light.area_at(p) == sky_area;
+    props.retain(|p| !in_sky(p.origin));
+    let mut lit_at: HashMap<[i32; 3], ([[f32; 3]; 6], bool)> = HashMap::new();
+    for p in &mut props {
+        // (lit at its middle, a little up from its origin)
+        let at = [p.origin[0], p.origin[1], p.origin[2] + 16.0];
+        let key = at.map(|v| (v / 8.0).round() as i32);
+        let (ambient, sunlit) = *lit_at.entry(key).or_insert_with(|| (light.cube_at(at), light.sunlit(at)));
+        p.ambient = ambient;
+        p.sunlit = sunlit;
+    }
 
     // the lightmap atlas: the faces' first light style, the plain (not bumped) samples
     let lit = |f: &Face| -> bool {
@@ -366,23 +781,28 @@ pub fn read(file: &[u8]) -> Result<Map> {
         placed.insert(i, atlas.place(f.lm_size[0] as u32 + 1, f.lm_size[1] as u32 + 1));
     }
     let height = (atlas.y + atlas.row).max(1).next_power_of_two();
-    let mut lightmap = vec![0u8; (width * height * 4) as usize];
+    // four pages, one above the other: the plain lightmap, then the three of the bump basis (copies of the plain one for a face without)
+    let mut lightmap = vec![0u8; (width * height * 4 * LIGHTMAP_PAGES) as usize];
     for px in lightmap.chunks_exact_mut(4) {
         px[3] = 255;
     }
-    let light = &lighting.data[..];
+    let lighting_data = &lighting.data[..];
     for (&i, &(ax, ay)) in &placed {
         let f = &faces[i];
         let (w, h) = (f.lm_size[0] as u32 + 1, f.lm_size[1] as u32 + 1);
-        for y in 0..h {
-            for x in 0..w {
-                let at = f.lightofs as usize + ((y * w + x) as usize) * 4;
-                let Some(s) = light.get(at..at + 4) else { continue };
-                let scale = 2f32.powi(s[3] as i8 as i32) / 255.0;
-                let o = (((ay + y) * width + ax + x) * 4) as usize;
-                for c in 0..3 {
-                    let v = (s[c] as f32 * scale / LIGHTMAP_RANGE).clamp(0.0, 1.0).sqrt();
-                    lightmap[o + c] = (v * 255.0 + 0.5) as u8;
+        let bumped = texinfos.get(f.texinfo as usize).is_some_and(|t| t.flags & SURF_BUMPLIGHT != 0);
+        for page in 0..LIGHTMAP_PAGES {
+            let from = if bumped { page } else { 0 };
+            for y in 0..h {
+                for x in 0..w {
+                    let at = f.lightofs as usize + ((from * w * h + y * w + x) as usize) * 4;
+                    let Some(s) = lighting_data.get(at..at + 4) else { continue };
+                    let c3 = rgbe(s);
+                    let o = (((page * height + ay + y) * width + ax + x) * 4) as usize;
+                    for c in 0..3 {
+                        let v = (c3[c] / LIGHTMAP_RANGE).clamp(0.0, 1.0).sqrt();
+                        lightmap[o + c] = (v * 255.0 + 0.5) as u8;
+                    }
                 }
             }
         }
@@ -416,6 +836,17 @@ pub fn read(file: &[u8]) -> Result<Map> {
                 continue;
             }
             let water = t.flags & SURF_WARP != 0;
+            if sky_area.is_some() && model == 0 {
+                let poly = face_vertices(f);
+                if !poly.is_empty() {
+                    let c = poly.iter().fold([0.0; 3], |a, v| [a[0] + v[0], a[1] + v[1], a[2] + v[2]]).map(|v| v / poly.len() as f32);
+                    let pn = vec3(planes, f.plane * 20);
+                    let n = if f.side { pn.map(|v| -v) } else { pn };
+                    if in_sky([c[0] + n[0] * 2.0, c[1] + n[1] * 2.0, c[2] + n[2] * 2.0]) {
+                        continue;
+                    }
+                }
+            }
             let mesh = by_material.entry(material.clone()).or_insert_with(|| MapMesh { material: material.clone(), ..Default::default() });
             let uv = |p: [f32; 3]| -> [f32; 2] {
                 [(dot(p, [t.texture[0][0], t.texture[0][1], t.texture[0][2]]) + t.texture[0][3]) / tw, (dot(p, [t.texture[1][0], t.texture[1][1], t.texture[1][2]]) + t.texture[1][3]) / th]
@@ -433,6 +864,18 @@ pub fn read(file: &[u8]) -> Result<Map> {
             let plane_normal = vec3(planes, f.plane * 20);
             let front = if dot(wound, wound) > 1e-8 { normalize(wound) } else if f.side { [-plane_normal[0], -plane_normal[1], -plane_normal[2]] } else { plane_normal };
             let normal = mul3(&rotate, front);
+            // the tangent frame, as the game makes it (TangentSpaceSurfaceSetup / TangentSpaceComputeBasis)
+            let tangents = |n: [f32; 3]| -> ([f32; 3], [f32; 3]) {
+                let sv = normalize(mul3(&rotate, [t.texture[0][0], t.texture[0][1], t.texture[0][2]]));
+                let tv = normalize(mul3(&rotate, [t.texture[1][0], t.texture[1][1], t.texture[1][2]]));
+                let negate = dot(normal, cross(sv, tv)) > 0.0;
+                let mut ts = normalize(cross(n, tv));
+                let tt = normalize(cross(ts, n));
+                if negate {
+                    ts = ts.map(|v| -v);
+                }
+                (ts, tt)
+            };
             let base = (mesh.positions.len() / 3) as u32;
             if f.dispinfo >= 0 && !water {
                 let Some(d) = dispinfo.get(f.dispinfo as usize * 176..f.dispinfo as usize * 176 + 176) else { continue };
@@ -499,6 +942,9 @@ pub fn read(file: &[u8]) -> Result<Map> {
                     mesh.uvs.extend_from_slice(&tuv);
                     mesh.lightmap_uvs.extend_from_slice(&luv);
                     mesh.blend.push(alpha);
+                    let (ts, tt) = tangents(nn);
+                    mesh.tangents_s.extend_from_slice(&ts);
+                    mesh.tangents_t.extend_from_slice(&tt);
                     grow(&mut bounds, p);
                 }
             } else {
@@ -509,6 +955,9 @@ pub fn read(file: &[u8]) -> Result<Map> {
                     mesh.uvs.extend_from_slice(&uv(p));
                     mesh.lightmap_uvs.extend_from_slice(&lightmap_uv(i, f, t, p));
                     mesh.blend.push(0.0);
+                    let (ts, tt) = tangents(normal);
+                    mesh.tangents_s.extend_from_slice(&ts);
+                    mesh.tangents_t.extend_from_slice(&tt);
                     grow(&mut bounds, at);
                 }
                 // a convex polygon, wound clockwise seen from its front (the game's way): a fan, turned to counter-clockwise
@@ -523,7 +972,7 @@ pub fn read(file: &[u8]) -> Result<Map> {
     if bounds[0] > bounds[3] {
         bounds = [0.0; 6];
     }
-    Ok(Map { meshes, props, spawns, lightmap_width: width, lightmap_height: height, lightmap, sky, bounds })
+    Ok(Map { meshes, props, spawns, lightmap_width: width, lightmap_height: height, lightmap, sky, bounds, sun, light })
 }
 
 fn grow(b: &mut [f32; 6], p: [f32; 3]) {
@@ -641,7 +1090,7 @@ fn static_props(bsp: &Bsp) -> Vec<MapProp> {
             let Some(model) = names.get(u16_at(p, 24).unwrap_or(0) as usize) else { continue };
             // version 11 ends with a uniform scale
             let scale = if version >= 11 { f32_at(p, stride - 4).filter(|s| *s > 0.0 && s.is_finite()).unwrap_or(1.0) } else { 1.0 };
-            out.push(MapProp { model: model.clone(), origin: vec3(p, 0), angles: vec3(p, 12), skin: i32_at(p, 32).unwrap_or(0), scale });
+            out.push(MapProp { model: model.clone(), origin: vec3(p, 0), angles: vec3(p, 12), skin: i32_at(p, 32).unwrap_or(0), scale, ambient: [[0.0; 3]; 6], sunlit: false });
         }
     }
     out
@@ -732,17 +1181,31 @@ pub struct MapMaterial {
 /// The parameters of a map material the viewer reads.
 const MAP_MATERIAL_PARAMS: &[&str] = &[
     "$translucent", "$alphatest", "$alphatestreference", "$additive", "$nocull", "$color", "$color2", "$fogcolor", "$basetexturetransform",
-    "$basetexturetransform2", "$selfillum", "$alpha", "$vertexalpha", "$blendmodulatetexture", "$surfaceprop",
+    "$basetexturetransform2", "$selfillum", "$alpha", "$vertexalpha", "$blendmodulatetexture", "$surfaceprop", "$ssbump", "$envmap",
+    "$envmaptint", "$basealphaenvmapmask", "$normalmapalphaenvmapmask", "$envmapcontrast", "$envmapsaturation", "$fresnelreflection",
+    "$bumptransform", "$nodiffusebumplighting", "$selfillumtint",
 ];
+
+/// The biggest face of a material's cubemap (reflections are blurry).
+const CUBE_FACE: u32 = 128;
 
 pub fn map_material(vpk: &crate::VpkSet, name: &str, max_size: u32) -> std::result::Result<MapMaterial, String> {
     let path = format!("materials/{}.vmt", name.trim_start_matches('/').trim_end_matches(".vmt"));
     let vmt = crate::vmt::load(vpk, &path).map_err(|e| e.to_string())?;
     let mut textures = Vec::new();
-    for (slot, keys) in [("base", &["$basetexture"][..]), ("base2", &["$basetexture2"][..])] {
-        let Some(tex) = keys.iter().find_map(|k| vmt.get(k)) else { continue };
+    let vtf_of = |tex: &str| {
         let tex = tex.replace('\\', "/").to_ascii_lowercase();
-        let vtf = format!("materials/{}.vtf", tex.trim_start_matches('/').trim_end_matches(".vtf"));
+        format!("materials/{}.vtf", tex.trim_start_matches('/').trim_end_matches(".vtf"))
+    };
+    for (slot, keys) in [
+        ("base", &["$basetexture"][..]),
+        ("base2", &["$basetexture2"][..]),
+        ("bump", &["$bumpmap", "$normalmap"][..]),
+        ("bump2", &["$bumpmap2"][..]),
+        ("envmask", &["$envmapmask"][..]),
+    ] {
+        let Some(tex) = keys.iter().find_map(|k| vmt.get(k)) else { continue };
+        let vtf = vtf_of(tex);
         let Ok(bytes) = vpk.read(&vtf) else { continue };
         let Ok(info) = crate::vtf::info(&bytes) else { continue };
         let mut mip = 0;
@@ -753,6 +1216,42 @@ pub fn map_material(vpk: &crate::VpkSet, name: &str, max_size: u32) -> std::resu
             textures.push((slot.to_string(), img));
         }
     }
+    // the cubemap it reflects: its own, or the map's nearest (a patch material of the map names that one in place of env_cubemap)
+    if let Some(env) = vmt.get("$envmap").filter(|e| !e.eq_ignore_ascii_case("env_cubemap")) {
+        let base = vtf_of(env);
+        let hdr = base.replace(".vtf", ".hdr.vtf");
+        for path in [base, hdr] {
+            let Ok(bytes) = vpk.read(&path) else { continue };
+            let Ok(info) = crate::vtf::info(&bytes) else { continue };
+            let mut mip = 0;
+            while (info.width >> mip) > CUBE_FACE && mip + 1 < info.mip_count {
+                mip += 1;
+            }
+            if let Ok(faces) = crate::vtf::decode_faces(&bytes, mip) {
+                textures.extend(faces.into_iter().enumerate().map(|(i, img)| (format!("env{i}"), img)));
+                break;
+            }
+        }
+    }
     let params = MAP_MATERIAL_PARAMS.iter().filter_map(|k| vmt.get(k).map(|v| (k.to_string(), v.to_string()))).collect();
     Ok(MapMaterial { shader: vmt.shader.clone(), params, textures })
+}
+
+#[cfg(test)]
+mod light_tests {
+    /// The light of a real map (TF2_TF_DIR): props are lit, some by the sun and some not, and the ambient light is not all dark.
+    #[test]
+    fn a_game_maps_props_are_lit() {
+        let Some(dir) = std::env::var_os("TF2_TF_DIR") else { return };
+        let path = std::path::Path::new(&dir).join("maps/koth_krampus.bsp");
+        let Ok(bytes) = std::fs::read(&path) else { return };
+        let t = std::time::Instant::now();
+        let map = super::read(&bytes).unwrap();
+        let sunlit = map.props.iter().filter(|p| p.sunlit).count();
+        let bright = map.props.iter().filter(|p| p.ambient.iter().flatten().sum::<f32>() > 0.05).count();
+        eprintln!("{} props, {sunlit} in the sun, {bright} with ambient light, sun {:?}, {:?}", map.props.len(), map.sun.map(|s| (s.dir, s.color)), t.elapsed());
+        let p = &map.props[map.props.len() / 2];
+        eprintln!("sample {} {:?} {:?}", p.model, p.origin, p.ambient);
+        assert!(map.sun.is_some() && sunlit > 0 && sunlit < map.props.len() && bright > map.props.len() / 2);
+    }
 }

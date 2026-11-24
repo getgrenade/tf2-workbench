@@ -884,6 +884,12 @@ void main() {
       this.facingMarker.position.y = floorY + 0.14;
       this.ground.update(world ? { ...this.groundState, enabled: false } : this.groundState, this.center.x, this.center.z, floorY, Math.max(1, this.actorList.reduce((h, a) => Math.max(h, a.bindHeight), 0)));
       this.updateShadows(floorY, moved);
+      if (world) {
+        // the map's floors take the characters' shadow themselves (the decal would lie flat at the characters' feet, through the map)
+        const shadow = this.groundShadows.find((s) => s.cast);
+        for (const s of this.groundShadows) s.quad.visible = false;
+        this.onWorldFrame(this.camera, shadow?.cast ? { texture: shadow.texture, ...shadow.cast } : null);
+      }
       if (!world) this.updateReflection(floorY);
       else this.reflection.mesh.visible = false;
       this.renderLightShadows(moved);
@@ -3000,7 +3006,15 @@ void main() {
     // Same conversion as the light colour: the picker value is a display colour, converted to linear, times the level.
     const [ar, ag, ab] = [1, 3, 5].map((i) => Math.pow(parseInt(ambientColor.slice(i, i + 2), 16) / 255, 2.2) * ambient);
     for (const a of this.shared.uAmbient.value) a.set(ar, ag, ab);
-    this.shared.uAverageAmbient.value = Math.max(0, Math.min(0.2126 * ar + 0.7152 * ag + 0.0722 * ab, 1));
+    // a map's own light where the characters stand, in place of the main light and the ambient (the light rig and point lights stay)
+    const wl = this.world?.visible ? this.worldLight : null;
+    if (wl) {
+      (this.shared.uAmbient.value as THREE.Vector3[]).forEach((a, i) => a.copy(wl.cube[i]));
+      if (wl.keyDir) this.shared.uLightDir.value.copy(wl.keyDir);
+      this.shared.uLightColor.value.copy(wl.keyDir ? wl.keyColor : new THREE.Vector3());
+    }
+    const avg = (this.shared.uAmbient.value as THREE.Vector3[]).reduce((s, a) => s + 0.2126 * a.x + 0.7152 * a.y + 0.0722 * a.z, 0) / 6;
+    this.shared.uAverageAmbient.value = Math.max(0, Math.min(avg, 1));
 
     const bulb = this.gizmo.getObjectByName("bulb") as THREE.Mesh;
     const ray = this.gizmo.getObjectByName("ray") as THREE.Line;
@@ -3101,6 +3115,17 @@ void main() {
   }
 
   /** The plane at the floor (see groundPlane.ts). */
+  /** Called every frame while a map is shown, before it is drawn: the camera, and the characters' ground shadow for its floors. */
+  onWorldFrame: (camera: THREE.Camera, shadow: { texture: THREE.Texture; centerX: number; centerZ: number; half: number; floorY: number; opacity: number } | null) => void = () => {};
+  /**
+   * The map's light where the characters are (in place of the light settings' ambient and main light, as the game lights a model):
+   * the ambient cube (+X -X +Y -Y +Z -Z of the view) and the key light (direction toward it, colour); null: the light settings.
+   */
+  private worldLight: { cube: THREE.Vector3[]; keyDir: THREE.Vector3 | null; keyColor: THREE.Vector3 } | null = null;
+  setWorldLight(light: { cube: THREE.Vector3[]; keyDir: THREE.Vector3 | null; keyColor: THREE.Vector3 } | null) {
+    this.worldLight = light;
+  }
+
   /** The map in the scene (one at a time; null: none) and how far the camera must see to take it in. */
   private world: THREE.Object3D | null = null;
   private worldFar = 0;
