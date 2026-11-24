@@ -6,6 +6,10 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { createCompilerUi, type PreviewApplication } from "../compiler/compilerUi";
 import { MODEL_EXTENSIONS } from "../compiler/importModel";
 import { createPropPanel, PROP_DRAG_TYPE } from "../props/propPanel";
+import { PlacementGhost } from "./placementGhost";
+
+/** What an entry of the Add menu dragged into the view carries: what it adds (`character`, `building:<kind>`). */
+const ADD_DRAG_TYPE = "application/x-workbench-add";
 import { propLabel } from "../props/propList";
 import { forgetThumbnail } from "../props/propThumbs";
 import { decodeTga, encodeTga, iconProblem, ICON_SAFE_ROWS } from "../compiler/tga";
@@ -1740,17 +1744,46 @@ export function createViewTab(els: Els) {
     if (!viewer) {
       viewer = new Viewer(els.wrap, () => [models, materials]);
       viewer.setSelectionOutline(document.getElementById("hudOutline")?.classList.contains("on") ?? true);
-      // a prop dragged out of the browser and dropped on the view is put where it is dropped
+      // a prop dragged out of the browser, or an entry of the Add menu, dropped on the view is put where it is dropped; while it is
+      // dragged over the view a see-through ghost of it shows where that is
+      const ghost = new PlacementGhost();
+      viewer.scene.add(ghost.group);
+      /** What is being dragged (read when the drag starts: a drag's data cannot be read while it moves). */
+      let dragged: { model: string; onLowest: boolean } | null = null;
+      const dragModel = (dt: DataTransfer): { model: string; onLowest: boolean } | null => {
+        const prop = dt.getData(PROP_DRAG_TYPE);
+        if (prop) return { model: prop, onLowest: true };
+        const add = dt.getData(ADD_DRAG_TYPE);
+        if (add === "character") return { model: classPath(addedClass()), onLowest: false };
+        if (add.startsWith("building:")) return { model: classPath(buildingCls(add.slice(9) as BuildingKind, 1)), onLowest: false };
+        return null;
+      };
+      document.addEventListener("dragstart", (ev) => { dragged = ev.dataTransfer ? dragModel(ev.dataTransfer) : null; });
+      document.addEventListener("dragend", () => { dragged = null; ghost.hide(); });
+      const ours = (dt: DataTransfer | null) => !!dt && (dt.types.includes(PROP_DRAG_TYPE) || dt.types.includes(ADD_DRAG_TYPE));
       els.wrap.addEventListener("dragover", (ev) => {
-        if (!ev.dataTransfer?.types.includes(PROP_DRAG_TYPE)) return;
+        if (!ours(ev.dataTransfer)) return;
         ev.preventDefault();
-        ev.dataTransfer.dropEffect = "copy";
+        ev.dataTransfer!.dropEffect = "copy";
+        void ghost.show(dragged?.model ?? null, viewer?.floorPointAt(ev.clientX, ev.clientY) ?? null, dragged?.onLowest);
+      });
+      els.wrap.addEventListener("dragleave", (ev) => {
+        if (!els.wrap.contains(ev.relatedTarget as Node | null)) ghost.hide();
       });
       els.wrap.addEventListener("drop", (ev) => {
+        ghost.hide();
+        const at = { clientX: ev.clientX, clientY: ev.clientY };
         const path = ev.dataTransfer?.getData(PROP_DRAG_TYPE);
-        if (!path) return;
+        if (path) {
+          ev.preventDefault();
+          void addProp(path, at);
+          return;
+        }
+        const add = ev.dataTransfer?.getData(ADD_DRAG_TYPE);
+        if (!add) return;
         ev.preventDefault();
-        void addProp(path, { clientX: ev.clientX, clientY: ev.clientY });
+        if (add === "character") void addEntity(false, true, false, at);
+        else if (add.startsWith("building:")) void addBuilding(add.slice(9) as BuildingKind, at);
       });
       const boxButton = document.getElementById("boxSelect") as HTMLButtonElement;
       boxButton.innerHTML = svgIcon("squareDashedMousePointer");
@@ -3507,13 +3540,21 @@ export function createViewTab(els: Els) {
 
   /** Adds a character next to the others, of the selected one's class and team, and selects it. */
   /** `inPlace`: the copy takes the place, turn and size of the one it copies (a paste), instead of a free spot in the row. */
-  async function addEntity(copy = false, record = true, inPlace = false) {
+  /** The class a new character has: the selected one's when that is a merc, else the first class. */
+  function addedClass(): string {
+    return selected && CLASSES.some(([, m]) => m === selected!.cls) ? selected.cls : CLASSES[0][1];
+  }
+
+  /** With `at` (a point of the view, where an entry of the Add menu was dropped) the character stands on the floor there. */
+  async function addEntity(copy = false, record = true, inPlace = false, at?: { clientX: number; clientY: number }) {
     const v = ensureViewer();
     const base = selected;
     if (base) saveUi(base);
     const copiedPose = copy && base ? base.actor.snapshotCustomPose() : null;
     const pose = copiedPose && base ? { ...copiedPose, bones: base.actor.boneNames, editing: base.actor.isPosing } : undefined;
-    const e = newEntity(v.addActor(), base?.cls ?? CLASSES[0][1], base?.team ?? 0);
+    const e = newEntity(v.addActor(), copy ? base?.cls ?? CLASSES[0][1] : addedClass(), base?.team ?? 0);
+    const dropAt = at ? v.floorPointAt(at.clientX, at.clientY) : null;
+    if (dropAt) v.placeActorAt(e.actor, dropAt.x, 0, dropAt.z);
     e.group = hierarchy().activeGroup() ?? (copy ? base?.group : undefined);
     if (copy && base) e.actor.setScale(base.actor.scale);
     if (copy && base) e.actor.setEyesFollowCamera(base.actor.followsCamera);
@@ -8322,7 +8363,7 @@ export function createViewTab(els: Els) {
   });
   els.entities.add.onclick = () => {
     openMenu(els.entities.add, [
-      { label: "Character", icon: ICON.character, hint: "Ctrl: copy of the selected", run: ({ ctrl }) => void addEntity(ctrl) },
+      { label: "Character", icon: ICON.character, hint: "Ctrl: copy of the selected · drag into the view", drag: { type: ADD_DRAG_TYPE, data: "character" }, run: ({ ctrl }) => void addEntity(ctrl) },
       {
         label: "All classes",
         icon: ICON.classes,
@@ -8332,9 +8373,9 @@ export function createViewTab(els: Els) {
         label: "Buildable",
         icon: ICON.buildable,
         children: [
-          { label: "Dispenser", run: () => void addBuilding("dispenser") },
-          { label: "Sentry", run: () => void addBuilding("sentry") },
-          { label: "Teleporter", run: () => void addBuilding("teleporter") },
+          { label: "Dispenser", drag: { type: ADD_DRAG_TYPE, data: "building:dispenser" }, run: () => void addBuilding("dispenser") },
+          { label: "Sentry", drag: { type: ADD_DRAG_TYPE, data: "building:sentry" }, run: () => void addBuilding("sentry") },
+          { label: "Teleporter", drag: { type: ADD_DRAG_TYPE, data: "building:teleporter" }, run: () => void addBuilding("teleporter") },
         ],
       },
       { label: "Prop…", icon: ICON.prop, hint: "opens the prop browser", run: () => document.dispatchEvent(new CustomEvent("workbench:reveal-panel", { detail: "props" })) },
@@ -8489,11 +8530,13 @@ export function createViewTab(els: Els) {
     v.placeActorAt(e.actor, place.x, -e.actor.bindMinY, place.z);
   }
 
-  async function addBuilding(kind: BuildingKind) {
+  async function addBuilding(kind: BuildingKind, at?: { clientX: number; clientY: number }) {
     const v = ensureViewer();
     const base = selected;
     if (base) saveUi(base);
     const e = newEntity(v.addActor(), buildingCls(kind, 1), base?.team ?? 0);
+    const dropAt = at ? v.floorPointAt(at.clientX, at.clientY) : null;
+    if (dropAt) v.placeActorAt(e.actor, dropAt.x, 0, dropAt.z);
     entities.push(e);
     selected = e;
     soleSelection(e);

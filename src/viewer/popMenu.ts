@@ -22,6 +22,8 @@ export interface MenuItem {
   remove?: () => void;
   /** What the × says when the pointer rests on it. */
   removeTitle?: string;
+  /** The entry can also be dragged out of the menu (into the view, to put what it adds where it is dropped): the drag carries this. */
+  drag?: { type: string; data: string };
 }
 
 const OPEN_DELAY = 140;
@@ -120,6 +122,19 @@ export function openMenu(anchor: HTMLElement | { x: number; y: number }, items: 
         row.focus({ preventScroll: true });
         timer = setTimeout(openChildren, item.children ? OPEN_DELAY : 0);
       };
+      if (item.drag && !item.disabled) {
+        const drag = item.drag;
+        row.draggable = true;
+        row.classList.add("draggable");
+        row.addEventListener("dragstart", (e) => {
+          clearTimeout(timer);
+          e.dataTransfer?.setData(drag.type, drag.data);
+          if (e.dataTransfer) e.dataTransfer.effectAllowed = "copy";
+          // the menu steps aside while the entry is dragged (it is closed when the drag ends: the drag needs its entry until then)
+          requestAnimationFrame(() => { for (const l of levels) l.style.visibility = "hidden"; });
+        });
+        row.addEventListener("dragend", () => close());
+      }
       row.onclick = (e) => {
         if (item.children) {
           openChildren();
