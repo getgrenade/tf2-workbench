@@ -92,7 +92,7 @@ import { loadSettings, onSettingsChange, settings, updateSetting } from "../sett
 import { accentHex } from "../theme";
 import { zombieFamily, type Actor } from "./actor";
 import { DISPENSER_MAX_METAL, defaultFx, type BuildingFx } from "./buildingFx";
-import { BOSSES, GIANT_SCALE, ROBOTS, bossOf, robotOf } from "./npcs";
+import { BOSSES, GIANT_SCALE, HL2_CITIZEN_GROUPS, ROBOTS, bossOf, hl2Keys, robotOf } from "./npcs";
 import { BUILDINGS, buildingCls, buildingLabel, buildingOf, classPath, defaultBuildingSequence, isBuildingCls, type BuildingKind, type BuildingStage, type TeleporterMode } from "./buildings";
 import { bakeClip, blendingTaunts, createAnimUi, newAnimState, type AnimEls, type AnimState } from "./animUi";
 import { createFlexUi, flexGlobalsFor, type FlexEls } from "./flexUi";
@@ -8680,6 +8680,24 @@ export function createViewTab(els: Els) {
           ...(["saxton", "santaHale", "hellHale", "krampus"] as const).map((key, i) => ({ label: BOSSES[key].label, separator: i === 0, drag: { type: ADD_DRAG_TYPE, data: `boss:${key}` }, run: () => void addBoss(key) })),
           // the creatures of the maps
           ...(["toastmaster", "botler", "salmann", "seal", "sealSmall", "chicken"] as const).map((key, i) => ({ label: BOSSES[key].label, separator: i === 0, drag: { type: ADD_DRAG_TYPE, data: `boss:${key}` }, run: () => void addBoss(key) })),
+          // Half-Life 2's characters, from the HL2 content that comes with TF2
+          {
+            label: "HL2",
+            separator: true,
+            children: [
+              ...(["characters", "combine", "creatures"] as const).map((part) => ({
+                label: { characters: "Characters", combine: "Combine", creatures: "Creatures" }[part],
+                children: hl2Keys(part).map((key) => ({ label: BOSSES[key].label, drag: { type: ADD_DRAG_TYPE, data: `boss:${key}` }, run: () => void addBoss(key) })),
+              })),
+              {
+                label: "Citizens",
+                children: HL2_CITIZEN_GROUPS.map(({ group, label }) => ({
+                  label,
+                  children: hl2Keys("citizens", group).map((key) => ({ label: BOSSES[key].label, drag: { type: ADD_DRAG_TYPE, data: `boss:${key}` }, run: () => void addBoss(key) })),
+                })),
+              },
+            ],
+          },
         ],
       },
       { label: "Prop…", icon: ICON.prop, hint: "opens the prop browser", run: () => document.dispatchEvent(new CustomEvent("workbench:reveal-panel", { detail: "props" })) },

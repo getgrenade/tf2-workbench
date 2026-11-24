@@ -67,6 +67,8 @@ export interface Boss {
    * sound files under `folders` (from sound/; a map's packed files too).
    */
   voice?: { sounds?: string[]; skip?: string[]; folders?: string[] };
+  /** A Half-Life 2 character (from the HL2 content that comes with TF2: hl2/hl2_*.vpk), and which part of the HL2 menu it is in. */
+  hl2?: "characters" | "combine" | "citizens" | "creatures";
 }
 
 export const BOSSES: Record<string, Boss> = {
@@ -107,6 +109,78 @@ export const BOSSES: Record<string, Boss> = {
   // the farm's chickens of ctf_applejack, which packs their model (standing, sitting, pecking, walking and running; five feathers)
   chicken: { label: "Chicken", model: "applejack/applejack_chicken", sequence: "stand_a", map: "ctf_applejack" },
 };
+
+/**
+ * The Half-Life 2 characters that come with TF2 (its hl2 folder, which the game mounts): each standing in its idle, saying its own lines
+ * (from HL2's sounds, which come with it too). The flying and hanging ones float where they are put.
+ */
+const HL2: Record<string, Boss> = {
+  alyx: { label: "Alyx Vance", model: "alyx", sequence: "Idle_subtle", hl2: "characters", voice: { folders: ["vo/npc/alyx/", "vo/citadel/al_"] } },
+  barney: { label: "Barney Calhoun", model: "barney", sequence: "idle_subtle", hl2: "characters", voice: { folders: ["vo/npc/barney/"] } },
+  breen: { label: "Dr. Breen", model: "breen", sequence: "idle_subtle", hl2: "characters", voice: { folders: ["vo/breencast/", "vo/citadel/br_"] } },
+  eli: { label: "Eli Vance", model: "eli", sequence: "idle_subtle", hl2: "characters", voice: { folders: ["vo/eli_lab/eli_"] } },
+  gman: { label: "G-Man", model: "gman", sequence: "idle_subtle", hl2: "characters", voice: { folders: ["vo/gman_misc/"] } },
+  kleiner: { label: "Dr. Kleiner", model: "kleiner", sequence: "idle_subtle", hl2: "characters", voice: { folders: ["vo/k_lab/kl_", "vo/k_lab2/kl_"] } },
+  mossman: { label: "Dr. Mossman", model: "mossman", sequence: "m_idle01", hl2: "characters", voice: { folders: ["vo/eli_lab/mo_", "vo/novaprospekt/mo_"] } },
+  odessa: { label: "Odessa Cubbage", model: "odessa", sequence: "idle_subtle", hl2: "characters", voice: { folders: ["vo/coast/odessa/"] } },
+  grigori: { label: "Father Grigori", model: "monk", sequence: "Idle01", hl2: "characters", voice: { folders: ["vo/ravenholm/monk_"] } },
+  dog: { label: "Dog", model: "dog", sequence: "idle01", hl2: "characters", voice: { folders: ["npc/dog/"] } },
+  lamarr: { label: "Lamarr", model: "lamarr", sequence: "Idle01", hl2: "characters", voice: { folders: ["npc/headcrab/"] } },
+  vortigaunt: { label: "Vortigaunt", model: "vortigaunt", sequence: "Idle01", hl2: "characters", voice: { folders: ["vo/npc/vortigaunt/"] } },
+  combineSoldier: { label: "Combine Soldier", model: "combine_soldier", sequence: "Idle1", hl2: "combine", voice: { folders: ["npc/combine_soldier/vo/"] } },
+  combineGuard: { label: "Combine Prison Guard", model: "combine_soldier_prisonguard", sequence: "Idle1", hl2: "combine", voice: { folders: ["npc/combine_soldier/vo/"] } },
+  combineElite: { label: "Combine Elite", model: "combine_super_soldier", sequence: "Idle1", hl2: "combine", voice: { folders: ["npc/combine_soldier/vo/"] } },
+  metrocop: { label: "Metrocop", model: "police", sequence: "batonidle1", hl2: "combine", voice: { folders: ["npc/metropolice/vo/"] } },
+  stalker: { label: "Stalker", model: "stalker", sequence: "idle1", hl2: "combine", voice: { folders: ["npc/stalker/"] } },
+  advisor: { label: "Advisor", model: "advisor", sequence: "Idle01", floats: true, hl2: "combine" },
+  scanner: { label: "City Scanner", model: "combine_scanner", sequence: "idle", floats: true, hl2: "combine", voice: { folders: ["npc/scanner/"] } },
+  clawScanner: { label: "Claw Scanner", model: "shield_scanner", sequence: "Hover1", floats: true, hl2: "combine", voice: { folders: ["npc/scanner/"] } },
+  manhack: { label: "Manhack", model: "manhack", sequence: "fly", floats: true, hl2: "combine", voice: { folders: ["npc/manhack/"] } },
+  turret: { label: "Floor Turret", model: "combine_turrets/floor_turret", sequence: "idlealert", hl2: "combine", voice: { folders: ["npc/turret_floor/"] } },
+  strider: { label: "Strider", model: "combine_strider", sequence: "Idle01", hl2: "combine", voice: { folders: ["npc/strider/"] } },
+  gunship: { label: "Gunship", model: "gunship", sequence: "prop_turn", floats: true, hl2: "combine", voice: { folders: ["npc/combine_gunship/"] } },
+  helicopter: { label: "Hunter-Chopper", model: "combine_helicopter", sequence: "idle", floats: true, hl2: "combine", voice: { folders: ["npc/attack_helicopter/"] } },
+  dropship: { label: "Dropship", model: "combine_dropship", sequence: "idle", floats: true, hl2: "combine" },
+  zombie: { label: "Zombie", model: "zombie/classic", sequence: "Idle01", hl2: "creatures", voice: { folders: ["npc/zombie/"] } },
+  fastZombie: { label: "Fast Zombie", model: "zombie/fast", sequence: "idle", hl2: "creatures", voice: { folders: ["npc/fast_zombie/"] } },
+  poisonZombie: { label: "Poison Zombie", model: "zombie/poison", sequence: "Idle01", hl2: "creatures", voice: { folders: ["npc/zombie_poison/"] } },
+  headcrab: { label: "Headcrab", model: "headcrabclassic", sequence: "Idle01", hl2: "creatures", voice: { folders: ["npc/headcrab/"] } },
+  fastHeadcrab: { label: "Fast Headcrab", model: "headcrab", sequence: "Idle01", hl2: "creatures", voice: { folders: ["npc/headcrab_fast/"] } },
+  poisonHeadcrab: { label: "Poison Headcrab", model: "headcrabblack", sequence: "Idle01", hl2: "creatures", voice: { folders: ["npc/headcrab_poison/"] } },
+  antlion: { label: "Antlion", model: "antlion", sequence: "Idle", hl2: "creatures", voice: { folders: ["npc/antlion/"] } },
+  antlionGuard: { label: "Antlion Guard", model: "antlion_guard", sequence: "idle", hl2: "creatures", voice: { folders: ["npc/antlion_guard/"] } },
+  barnacle: { label: "Barnacle", model: "barnacle", sequence: "idle01", floats: true, hl2: "creatures", voice: { folders: ["npc/barnacle/"] } },
+  ichthyosaur: { label: "Ichthyosaur", model: "ichthyosaur", sequence: "swimslow", floats: true, hl2: "creatures", voice: { folders: ["npc/ichthyosaur/"] } },
+  crow: { label: "Crow", model: "crow", sequence: "Idle01", hl2: "creatures", voice: { folders: ["npc/crow/"] } },
+  pigeon: { label: "Pigeon", model: "pigeon", sequence: "Idle01", hl2: "creatures", voice: { folders: ["ambient/creatures/pigeon"] } },
+  seagull: { label: "Seagull", model: "seagull", sequence: "Idle01", hl2: "creatures", voice: { folders: ["ambient/creatures/seagull"] } },
+};
+/** The citizens of HL2: the townspeople (group01), the refugees (02), the rebels (03, some bloody) and the medics (03m), men and women. */
+export const HL2_CITIZEN_GROUPS: { group: string; label: string; bloody?: boolean }[] = [
+  { group: "group01", label: "Citizens" },
+  { group: "group02", label: "Refugees" },
+  { group: "group03", label: "Rebels", bloody: true },
+  { group: "group03m", label: "Medics" },
+];
+const CITIZEN_FACES = [...["01", "02", "03", "04", "06", "07"].map((n) => `female_${n}`), ...["01", "02", "03", "04", "05", "06", "07", "08", "09"].map((n) => `male_${n}`)];
+for (const { group, label, bloody } of HL2_CITIZEN_GROUPS) {
+  for (const face of CITIZEN_FACES) {
+    for (const blood of bloody ? ["", "_bloody"] : [""]) {
+      const female = face.startsWith("female");
+      HL2[`${group}_${face}${blood}`] = {
+        label: `${label.replace(/s$/, "")} ${female ? "woman" : "man"} ${face.slice(-2)}${blood ? " (bloody)" : ""}`,
+        model: `humans/${group}/${face}${blood}`,
+        sequence: "idle_subtle",
+        hl2: "citizens",
+        voice: { folders: [female ? "vo/npc/female01/" : "vo/npc/male01/"] },
+      };
+    }
+  }
+}
+Object.assign(BOSSES, HL2);
+/** The HL2 characters of a part of the HL2 menu, by key. */
+export const hl2Keys = (part: NonNullable<Boss["hl2"]>, group?: string) =>
+  Object.keys(BOSSES).filter((k) => BOSSES[k].hl2 === part && (!group || BOSSES[k].model.startsWith(`humans/${group}/`)));
 
 /** The boss a prop's `cls` is, if it is one. */
 export const bossOf = (cls: string): Boss | null => Object.values(BOSSES).find((b) => b.model === cls.split("#")[0].toLowerCase()) ?? null;
