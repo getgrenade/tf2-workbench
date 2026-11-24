@@ -939,14 +939,14 @@ pub fn read(file: &[u8]) -> Result<Map> {
                 // the corners, from the one nearest the displacement's start
                 let k = (0..4).min_by(|&a, &b| dot(sub(corners[a], start), sub(corners[a], start)).total_cmp(&dot(sub(corners[b], start), sub(corners[b], start)))).unwrap_or(0);
                 let c: Vec<[f32; 3]> = (0..4).map(|j| corners[(k + j) % 4]).collect();
-                let lm: Vec<[f32; 2]> = c.iter().map(|&p| lightmap_uv(i, f, t, p)).collect();
+                // its lightmap lies over its grid, not by the texture's projection: lm_size + 1 luxels along the grid's x (from its start
+                // corner toward the fourth) and y (toward the second) (stitched to its neighbours' at the shared edges)
+                let lm_at = placed.get(&i).copied();
                 let mut grid = Vec::with_capacity(n * n);
                 for y in 0..n {
                     let ty = y as f32 / (n - 1) as f32;
                     let left = lerp3(c[0], c[1], ty);
                     let right = lerp3(c[3], c[2], ty);
-                    let lm_left = [lm[0][0] + (lm[1][0] - lm[0][0]) * ty, lm[0][1] + (lm[1][1] - lm[0][1]) * ty];
-                    let lm_right = [lm[3][0] + (lm[2][0] - lm[3][0]) * ty, lm[3][1] + (lm[2][1] - lm[3][1]) * ty];
                     for x in 0..n {
                         let tx = x as f32 / (n - 1) as f32;
                         let flat = lerp3(left, right, tx);
@@ -954,7 +954,9 @@ pub fn read(file: &[u8]) -> Result<Map> {
                         let (offset, dist, alpha) = dv.map_or(([0.0; 3], 0.0, 0.0), |v| (vec3(v, 0), f32_at(v, 12).unwrap_or(0.0), f32_at(v, 16).unwrap_or(0.0)));
                         let p = [flat[0] + offset[0] * dist, flat[1] + offset[1] * dist, flat[2] + offset[2] * dist];
                         let tuv = uv(flat);
-                        let luv = if lm[0][0] < 0.0 { [-1.0, -1.0] } else { [lm_left[0] + (lm_right[0] - lm_left[0]) * tx, lm_left[1] + (lm_right[1] - lm_left[1]) * tx] };
+                        let luv = lm_at.map_or([-1.0, -1.0], |(ax, ay)| {
+                            [(ax as f32 + 0.5 + tx * f.lm_size[0] as f32) / width as f32, (ay as f32 + 0.5 + ty * f.lm_size[1] as f32) / height as f32]
+                        });
                         grid.push((place(p), tuv, luv, alpha / 255.0));
                     }
                 }
@@ -1456,5 +1458,40 @@ mod overlay_light_tests {
             }
         }
         assert!(total > 4 && dark == 0, "{dark} of {total} overlay corners unlit");
+    }
+}
+
+#[cfg(test)]
+mod disp_lightmap_tests {
+    /// Surfaces (koth_krampus in TF2_TF_DIR) meet their neighbours' light where they share an edge: a displacement's lightmap is read
+    /// over its grid, as the game lays it out (read by the texture's projection, its slopes showed their neighbours' shadows: 11 apart
+    /// on average, against 4).
+    #[test]
+    fn displacements_meet_their_neighbours_light() {
+        let Some(dir) = std::env::var_os("TF2_TF_DIR") else { return };
+        let Ok(bytes) = std::fs::read(std::path::Path::new(&dir).join("maps/koth_krampus.bsp")) else { return };
+        let map = super::read(&bytes).unwrap();
+        let (w, h) = (map.lightmap_width as usize, map.lightmap_height as usize);
+        let sample = |uv: &[f32]| {
+            let (x, y) = (((uv[0] * w as f32) as usize).min(w - 1), ((uv[1] * h as f32) as usize).min(h - 1));
+            let o = (y * w + x) * 4;
+            map.lightmap[o] as i32 + map.lightmap[o + 1] as i32 + map.lightmap[o + 2] as i32
+        };
+        // the light at each point of the map's surfaces
+        // (by place and facing: where two surfaces meet at an angle, a wall and a floor, their light differs)
+        let mut at: std::collections::HashMap<[i32; 6], Vec<i32>> = Default::default();
+        for m in &map.meshes {
+            for (k, uv) in m.lightmap_uvs.chunks_exact(2).enumerate() {
+                if uv[0] < 0.0 {
+                    continue;
+                }
+                let n = |c: usize| (m.normals[k * 3 + c] * 4.0).round() as i32;
+                let p = [m.positions[k * 3].round() as i32, m.positions[k * 3 + 1].round() as i32, m.positions[k * 3 + 2].round() as i32, n(0), n(1), n(2)];
+                at.entry(p).or_default().push(sample(uv));
+            }
+        }
+        let shared: Vec<i32> = at.values().filter(|v| v.len() > 1).map(|v| v.iter().max().unwrap() - v.iter().min().unwrap()).collect();
+        let mean = shared.iter().sum::<i32>() as f32 / shared.len().max(1) as f32;
+        assert!(shared.len() > 1000 && mean < 7.0, "{} shared points, mean light difference {mean}", shared.len());
     }
 }
