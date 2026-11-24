@@ -875,6 +875,8 @@ td.n { text-align: right; font-variant-numeric: tabular-nums; }
 .popItem { display: flex; align-items: center; gap: 8px; height: var(--ui-h-bar); padding: 0 8px 0 6px; border: 0; border-radius: var(--ui-radius); background: transparent; color: var(--fg); text-align: left; cursor: pointer; }
 .popItem:hover, .popItem:focus-visible, .popItem.open { background: var(--ui-hover); outline: none; }
 .popItem:disabled { opacity: .4; cursor: default; }
+/* an entry that can be dragged into the view */
+.popItem.draggable { cursor: grab; }
 .popIcon { flex: none; width: 18px; height: 18px; display: flex; color: var(--dim); }
 .popIcon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
 .popItem:hover .popIcon, .popItem.open .popIcon { color: var(--fg); }
