@@ -2132,9 +2132,18 @@ export function createViewTab(els: Els) {
    * part is one of the model's bodygroups (the stepper: which of its models shows). The model's bodygroups are the left column, in bold,
    * and the parts that are only drawn or not (the hide groups) the right one.
    */
+  /** Whether a model (a prop's, an NPC's, a building's) has bodygroups to switch: a part with more than one model. */
+  function hasModelBodygroups(e: Entity | null): boolean {
+    const data = e ? models.get(classPath(e.cls)) : null;
+    return !!data?.bodyParts.some((bp) => bp.models.length > 1);
+  }
+
   function renderBodygroups() {
     if (iconTab && activeTab === iconTab) renderIconParts(); // the studio's own list of the parts
     if (!bodyBox) return;
+    // (a prop's or an NPC's: shown once its model, which may have come since the panel was drawn, has bodygroups)
+    const block = document.getElementById("bodyBlock");
+    if (block && selected && isBuildingCls(selected.cls)) block.hidden = !hasModelBodygroups(selected);
     bodyBox.replaceChildren();
     const e = selected;
     const data = e ? models.get(classPath(e.cls)) : null;
@@ -2962,8 +2971,9 @@ export function createViewTab(els: Els) {
     characterTransform.el.hidden = nothingSelected || propsKind !== "character";
     lightTransform.el.hidden = nothingSelected || propsKind !== "light";
     if (cameraTransformEl) cameraTransformEl.hidden = nothingSelected || propsKind !== "camera";
-    // a building has no class, bodygroups, level of detail or effects
-    for (const id of ["classBlock", "bodyBlock", "effectsBlock"]) propsEl(id).hidden = building;
+    // a building, a prop or an NPC has no class or effects; its bodygroups show when its model has some (see renderBodygroups)
+    for (const id of ["classBlock", "effectsBlock"]) propsEl(id).hidden = building;
+    propsEl("bodyBlock").hidden = building && !hasModelBodygroups(selected);
     els.focusFace.hidden = building;
     syncTransform();
   }
