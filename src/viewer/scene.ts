@@ -203,7 +203,8 @@ export function parseScene(text: string): SceneFile {
     aos: Array.isArray(raw.aos) ? raw.aos : undefined,
     look: raw.look && typeof raw.look === "object" && !Array.isArray(raw.look) ? raw.look : undefined,
     sky: parseSky(raw.sky),
-    map: typeof raw.map === "string" && /^\w+$/.test(raw.map) ? raw.map : undefined,
+    // (the game's own map by its name, another by its path: download/maps/x, custom/<pack>/maps/x, maps/workshop/..., steam-workshop/<id>/x)
+    map: typeof raw.map === "string" && /^[\w.\- ]+(\/[\w.\- ]+)*$/.test(raw.map) && !raw.map.split("/").includes("..") ? raw.map : undefined,
     mapMoved: Array.isArray(raw.mapMoved) ? raw.mapMoved.filter((n: unknown) => Number.isInteger(n) && (n as number) >= 0) : undefined,
     reflection: parseReflection(raw.reflection),
     ground: parseGround(raw.ground),

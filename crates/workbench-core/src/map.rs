@@ -11,17 +11,46 @@ static LIGHT: Mutex<Option<(String, Arc<source_formats::bsp::MapLight>)>> = Mute
 pub fn list_maps(state: &AppState) -> Result<Vec<String>, String> {
     let vpk = state.vpk()?;
     let Some(root) = vpk.game_root() else { return Ok(Vec::new()) };
-    let mut out: Vec<String> = std::fs::read_dir(root.join("maps"))
-        .map_err(|e| e.to_string())?
-        .flatten()
-        .filter_map(|e| {
-            let name = e.file_name().to_string_lossy().to_string();
-            name.strip_suffix(".bsp").filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')).map(str::to_ascii_lowercase)
-        })
-        .collect();
+    // the .bsp files of a folder: their names (without .bsp), lower case
+    let bsps = |dir: &std::path::Path| -> Vec<String> {
+        std::fs::read_dir(dir)
+            .map(|d| {
+                d.flatten()
+                    .filter(|e| e.path().is_file())
+                    .filter_map(|e| e.file_name().to_string_lossy().to_ascii_lowercase().strip_suffix(".bsp").filter(|n| !n.is_empty() && !n.contains('/')).map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let subdirs = |dir: &std::path::Path| -> Vec<String> {
+        std::fs::read_dir(dir).map(|d| d.flatten().filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().to_string()).collect()).unwrap_or_default()
+    };
+    // the game's own
+    let mut out: Vec<String> = bsps(&root.join("maps")).into_iter().filter(|n| n.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.')).collect();
+    // the others, by their path: the servers' (download/maps), the custom folders', the workshop's
+    out.extend(bsps(&root.join("download").join("maps")).into_iter().map(|n| format!("download/maps/{n}")));
+    for pack in subdirs(&root.join("custom")) {
+        out.extend(bsps(&root.join("custom").join(&pack).join("maps")).into_iter().map(|n| format!("custom/{pack}/maps/{n}")));
+    }
+    let workshop = root.join("maps").join("workshop");
+    out.extend(bsps(&workshop).into_iter().map(|n| format!("maps/workshop/{n}")));
+    for id in subdirs(&workshop) {
+        out.extend(bsps(&workshop.join(&id)).into_iter().map(|n| format!("maps/workshop/{id}/{n}")));
+    }
+    if let Some(steam) = source_formats::vpk::steam_workshop(root) {
+        for id in subdirs(&steam) {
+            out.extend(bsps(&steam.join(&id)).into_iter().map(|n| format!("steam-workshop/{id}/{n}")));
+        }
+    }
     out.sort();
     out.dedup();
     Ok(out)
+}
+
+/// A map's file, by its name (see `VpkSet::map_path`).
+fn map_bytes(vpk: &source_formats::VpkSet, name: &str) -> Result<Vec<u8>, String> {
+    let path = vpk.map_path(name).ok_or("not a map name")?;
+    std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 fn push_f32(blob: &mut Vec<u8>, v: &[f32]) -> usize {
@@ -37,8 +66,7 @@ fn push_f32(blob: &mut Vec<u8>, v: &[f32]) -> usize {
 pub fn load_map(state: &AppState, name: &str) -> Result<Vec<u8>, String> {
     let vpk = state.vpk()?;
     vpk.mount_map(name).map_err(|e| e.to_string())?;
-    let root = vpk.game_root().ok_or("no game folder")?;
-    let bytes = std::fs::read(root.join("maps").join(format!("{name}.bsp"))).map_err(|e| e.to_string())?;
+    let bytes = map_bytes(&vpk, name)?;
     let map = source_formats::bsp::read(&bytes).map_err(|e| e.to_string())?;
     let mut blob = Vec::new();
     let meshes: Vec<_> = map
@@ -300,8 +328,7 @@ pub fn map_sounds(state: &AppState, name: &str) -> Result<Value, String> {
     use source_formats::kv::{self, Node};
     let vpk = state.vpk()?;
     vpk.mount_map(name).map_err(|e| e.to_string())?;
-    let root = vpk.game_root().ok_or("no game folder")?;
-    let bytes = std::fs::read(root.join("maps").join(format!("{name}.bsp"))).map_err(|e| e.to_string())?;
+    let bytes = map_bytes(&vpk, name)?;
     let ents = source_formats::bsp::entities(&bytes).map_err(|e| e.to_string())?;
     let voice = state.voice().ok();
     // a wave, or a sound script's waves (and its volume / pitch when it gives them)
@@ -351,7 +378,7 @@ pub fn map_sounds(state: &AppState, name: &str) -> Result<Value, String> {
             files.extend(nodes.first().and_then(Node::block).unwrap_or(&[]).iter().filter_map(|n| n.as_str()).map(|p| p.replace('\\', "/").to_ascii_lowercase()));
         }
     }
-    files.push(format!("scripts/soundscapes_{}.txt", name.to_ascii_lowercase()));
+    files.push(format!("scripts/soundscapes_{}.txt", name.rsplit('/').next().unwrap_or(name).to_ascii_lowercase()));
     for file in files {
         let Ok(b) = vpk.read(&file) else { continue };
         let Ok(nodes) = kv::parse(&String::from_utf8_lossy(&b)) else { continue };

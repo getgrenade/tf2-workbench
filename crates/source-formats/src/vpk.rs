@@ -558,11 +558,9 @@ impl VpkSet {
     pub fn mount_map(&self, name: &str) -> std::io::Result<()> {
         let name = name.trim_end_matches(".bsp").to_ascii_lowercase();
         let bad = || std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a map name");
-        if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') { return Err(bad()); }
         if self.maps.read().unwrap().iter().any(|(n, _)| *n == name) { return Ok(()); }
-        let root = self.loose_root.as_ref().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no game folder"))?;
-        let path = root.join("maps").join(format!("{name}.bsp"));
-        if !path.is_file() { return Err(std::io::Error::new(std::io::ErrorKind::NotFound, format!("maps/{name}.bsp is not in the game folder"))); }
+        let path = self.map_path(&name).ok_or_else(bad)?;
+        if !path.is_file() { return Err(std::io::Error::new(std::io::ErrorKind::NotFound, format!("{name}.bsp is not in the game folder"))); }
         let zip = ZipFile::open_bsp(&path)?;
         let mut maps = self.maps.write().unwrap();
         if !maps.iter().any(|(n, _)| *n == name) { maps.push((name, zip)); }
@@ -583,6 +581,31 @@ impl VpkSet {
     }
 
     /// A file of a mounted map's pakfile.
+    /// Where a map is, by its name: the game's own (`cp_dustbowl`: tf/maps), or one of the others by its path from tf/ without `.bsp`
+    /// (`download/maps/x`, a server's; `custom/<pack>/maps/x`; `maps/workshop/<id>/x`), or a Steam Workshop download
+    /// (`steam-workshop/<id>/x`: steamapps/workshop/content/440). None for a name that is none of these (or climbs out with `..`).
+    pub fn map_path(&self, name: &str) -> Option<PathBuf> {
+        let root = self.loose_root.as_ref()?;
+        let name = name.trim_end_matches(".bsp");
+        let parts: Vec<&str> = name.split('/').collect();
+        let fine = |p: &str| !p.is_empty() && p != "." && p != ".." && !p.contains('\\') && !p.contains(':');
+        if parts.iter().any(|p| !fine(p)) {
+            return None;
+        }
+        match parts.as_slice() {
+            [map] if map.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.') => Some(root.join("maps").join(format!("{map}.bsp"))),
+            ["download", "maps", map] => Some(root.join("download").join("maps").join(format!("{map}.bsp"))),
+            ["custom", pack, "maps", map] => Some(root.join("custom").join(pack).join("maps").join(format!("{map}.bsp"))),
+            ["maps", "workshop", rest @ ..] if !rest.is_empty() => {
+                let mut p = root.join("maps").join("workshop");
+                for r in &rest[..rest.len() - 1] { p = p.join(r); }
+                Some(p.join(format!("{}.bsp", rest[rest.len() - 1])))
+            }
+            ["steam-workshop", id, map] => Some(steam_workshop(root)?.join(id).join(format!("{map}.bsp"))),
+            _ => None,
+        }
+    }
+
     /// A file of one mounted map's own files (see [`Self::mount_map`]), not of the others.
     pub fn map_file(&self, map: &str, key: &str) -> Option<Vec<u8>> {
         let map = map.trim_end_matches(".bsp").to_ascii_lowercase();
@@ -755,4 +778,10 @@ impl VpkSet {
         }
         Ok(out)
     }
+}
+
+/// The Steam Workshop downloads of TF2 (steamapps/workshop/content/440), from its tf folder (steamapps/common/Team Fortress 2/tf).
+pub fn steam_workshop(tf: &Path) -> Option<PathBuf> {
+    let steamapps = tf.parent()?.parent()?.parent()?;
+    Some(steamapps.join("workshop").join("content").join("440"))
 }

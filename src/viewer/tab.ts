@@ -8569,7 +8569,7 @@ export function createViewTab(els: Els) {
   /** The map's row in the outliner (its name, whether it is hidden, what it is loading). */
   let mapStatus = "";
   function syncMapRow() {
-    hierarchy().setMap(worldMap ? { name: worldMap.name, off: !worldMap.group.visible, ...(mapStatus ? { status: mapStatus } : {}) } : null);
+    hierarchy().setMap(worldMap ? { name: mapLabel(worldMap.name), off: !worldMap.group.visible, ...(mapStatus ? { status: mapStatus } : {}) } : null);
   }
   /** Loads a map into the scene in place of the one there (its sky with it); a spawn point of it is where the characters stand. */
   /** The sounds of the map in the scene (null: none). */
@@ -8683,23 +8683,49 @@ export function createViewTab(els: Els) {
   /** The Add menu's Map entry: the game's maps by game mode (the part of the name before the first "_"), and taking the map out. */
   function mapMenu(): MenuItem {
     void fetchMapNames();
-    const groups = new Map<string, string[]>();
+    // the game's own maps by their mode (cp, koth, ...); the custom ones (a server's downloads, the custom folders') and the workshop's
+    // in groups of their own, each by mode too
+    const official = new Map<string, string[]>(), custom = new Map<string, string[]>(), workshop = new Map<string, string[]>();
     for (const name of mapNames ?? []) {
-      const mode = name.includes("_") ? name.slice(0, name.indexOf("_")) : "other";
-      groups.set(mode, [...(groups.get(mode) ?? []), name]);
+      const kind = mapKind(name);
+      const into = kind === "workshop" ? workshop : kind === "custom" ? custom : official;
+      const base = mapLabel(name);
+      const mode = base.includes("_") ? base.slice(0, base.indexOf("_")) : "other";
+      into.set(mode, [...(into.get(mode) ?? []), name]);
     }
+    const modes = (groups: Map<string, string[]>): MenuItem[] =>
+      [...groups].sort(([a], [b]) => a.localeCompare(b)).map(([mode, names]) => ({
+        label: mode,
+        hint: String(names.length),
+        children: names.map((name) => ({ label: mapLabel(name), hint: mapSource(name), checked: worldMap?.name === name, run: () => void loadWorldMap(name) })),
+      }));
+    const count = (groups: Map<string, string[]>) => String([...groups.values()].reduce((n, l) => n + l.length, 0));
     const children: MenuItem[] = mapNames
-      ? [...groups].sort(([a], [b]) => a.localeCompare(b)).map(([mode, names]) => ({
-          label: mode,
-          hint: String(names.length),
-          children: names.map((name) => ({ label: name, checked: worldMap?.name === name, run: () => void loadWorldMap(name) })),
-        }))
+      ? [
+          ...modes(official),
+          ...(custom.size ? [{ label: "Custom", hint: count(custom), separator: true, children: modes(custom) }] : []),
+          ...(workshop.size ? [{ label: "Workshop", hint: count(workshop), separator: !custom.size, children: modes(workshop) }] : []),
+        ]
       : [{ label: "Reading the maps folder…", disabled: true }];
     if (worldMap) {
       if (children[0]) children[0] = { ...children[0], separator: true };
-      children.unshift({ label: `Remove ${worldMap.name}`, run: () => removeWorldMap() });
+      children.unshift({ label: `Remove ${mapLabel(worldMap.name)}`, run: () => removeWorldMap() });
     }
-    return { label: "Map", icon: ICON.map, hint: worldMap ? worldMap.name : "one at a time", separator: true, children };
+    return { label: "Map", icon: ICON.map, hint: worldMap ? mapLabel(worldMap.name) : "one at a time", separator: true, children };
+  }
+  /** A map's own name (the last part of a custom or workshop map's path). */
+  function mapLabel(name: string): string { return name.split("/").pop() ?? name; }
+  /** Where a map comes from: the game's, a custom one (a server's download, a custom folder's) or the workshop's. */
+  function mapKind(name: string): "game" | "custom" | "workshop" {
+    return name.startsWith("maps/workshop/") || name.startsWith("steam-workshop/") ? "workshop" : name.includes("/") ? "custom" : "game";
+  }
+  /** A short note of where a custom or workshop map is (the custom folder, "download", the workshop item). */
+  function mapSource(name: string): string | undefined {
+    const p = name.split("/");
+    if (p[0] === "download") return "download";
+    if (p[0] === "custom") return p[1];
+    if (p[0] === "steam-workshop" || (p[0] === "maps" && p.length > 3)) return p[p.length - 2];
+    return undefined;
   }
   els.entities.add.onclick = () => {
     openMenu(els.entities.add, [
