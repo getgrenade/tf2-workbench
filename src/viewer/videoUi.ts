@@ -2,7 +2,7 @@ import { canBeTransparent, effectiveScale, GIF_MAX_SIDE, VIDEO_FPS, VIDEO_LIMITS
 
 const KEY = "videoOptions";
 
-const DEFAULTS: VideoOptions & { fpsGif: number } = { source: "live", format: "mp4", scale: 0.5, fps: 30, fpsGif: 15, seconds: 5, turn: 360, transparent: false };
+const DEFAULTS: VideoOptions & { fpsGif: number } = { source: "live", format: "mp4", scale: 0.5, fps: 30, fpsGif: 15, seconds: 5, turn: 360, transparent: false, fit2mb: false };
 
 function load(): VideoOptions & { fpsGif: number } {
   try {
@@ -14,7 +14,7 @@ function load(): VideoOptions & { fpsGif: number } {
 function clean(o: typeof DEFAULTS): typeof DEFAULTS {
   const [lo, hi] = VIDEO_LIMITS.seconds, [tlo, thi] = VIDEO_LIMITS.turn;
   return {
-    source: o.source === "turntable" ? "turntable" : "live",
+    source: o.source === "turntable" || o.source === "play" ? o.source : "live",
     format: o.format === "webm" || o.format === "gif" || o.format === "png" ? o.format : "mp4",
     scale: (VIDEO_LIMITS.scales as readonly number[]).includes(o.scale) ? o.scale : DEFAULTS.scale,
     fps: VIDEO_FPS.mp4.includes(o.fps) ? o.fps : DEFAULTS.fps,
@@ -22,6 +22,7 @@ function clean(o: typeof DEFAULTS): typeof DEFAULTS {
     seconds: Number.isFinite(o.seconds) ? Math.max(lo, Math.min(hi, o.seconds)) : DEFAULTS.seconds,
     turn: Number.isFinite(o.turn) ? Math.max(tlo, Math.min(thi, o.turn)) : DEFAULTS.turn,
     transparent: o.transparent === true,
+    fit2mb: o.fit2mb === true,
   };
 }
 
@@ -66,7 +67,7 @@ export function toggleVideoPanel(anchor: HTMLElement, host: VideoPanelHost) {
     return { box, refresh: () => buttons.forEach(([value, b]) => b.classList.toggle("on", value === get())) };
   };
 
-  const source = segment<VideoSource>([["live", "Live view", "Records the scene as it moves now: the animations, the particles, the weapon"], ["turntable", "Turntable", "The camera turns round the character while the scene plays"]], () => o.source, (v) => (o.source = v));
+  const source = segment<VideoSource>([["live", "Live view", "Records the scene as it moves now: the animations, the particles, the weapon"], ["turntable", "Turntable", "The camera turns round the character while the scene plays"], ["play", "Play mode", "Recorded in real time while you steer the character: Record waits, and recording starts the moment play mode starts (at once if it is on) and stops when it ends or the length is reached"]], () => o.source, (v) => (o.source = v));
   const format = segment<VideoFormat>([["mp4", "MP4", "H.264"], ["webm", "WebM"], ["gif", "GIF", `Optimized: one palette, only the changes are stored; the longest side stops at ${GIF_MAX_SIDE} pixels`], ["png", "PNG seq.", "One numbered PNG per frame, written into a folder you pick"]], () => o.format, (v) => (o.format = v));
   row("Record", source.box);
   row("Format", format.box);
@@ -77,6 +78,14 @@ export function toggleVideoPanel(anchor: HTMLElement, host: VideoPanelHost) {
   clear.append(clearBox, " Transparent background");
   const clearRow = row("Background", clear);
   clearBox.onchange = () => { o.transparent = clearBox.checked; sync(); };
+  const fit = document.createElement("label");
+  fit.className = "inline-check";
+  fit.title = "If the GIF comes out over 2 MB (the Steam Workshop's limit), it is made plainer (less dithering, fewer colours), then smaller, until it fits. The message at the end says what it gave up";
+  const fitBox = document.createElement("input");
+  fitBox.type = "checkbox";
+  fit.append(fitBox, " Fit in 2 MB (Workshop)");
+  const fitRow = row("Limit", fit);
+  fitBox.onchange = () => { o.fit2mb = fitBox.checked; sync(); };
 
   const size = document.createElement("select");
   size.setAttribute("aria-label", "Size");
@@ -94,6 +103,7 @@ export function toggleVideoPanel(anchor: HTMLElement, host: VideoPanelHost) {
   const sizeRow = row("Size", size, sizeNote);
   const fpsRow = row("Frame rate", fps);
   const secondsRow = row("Length (s)", seconds);
+  const secondsKey = secondsRow.querySelector("span")!;
   const turnRow = row("Turn (°)", turn);
   void sizeRow; void fpsRow; void secondsRow;
 
@@ -115,8 +125,11 @@ export function toggleVideoPanel(anchor: HTMLElement, host: VideoPanelHost) {
     Object.assign(o, clean(o));
     source.refresh(); format.refresh();
     turnRow.hidden = o.source !== "turntable";
+    secondsKey.textContent = o.source === "play" ? "Up to (s)" : "Length (s)";
     clearRow.hidden = !canBeTransparent(o.format);
     clearBox.checked = o.transparent;
+    fitRow.hidden = o.format !== "gif";
+    fitBox.checked = !!o.fit2mb;
     clear.title = o.format === "gif"
       ? "Leaves the background and the ground plane out. A GIF pixel is either shown or not, so soft edges and the ground shadow come out hard. A shot through a camera follows its Capture background setting"
       : "Leaves the background and the ground plane out (the ground shadow keeps its soft edge). A shot through a camera follows its Capture background setting";
@@ -131,9 +144,9 @@ export function toggleVideoPanel(anchor: HTMLElement, host: VideoPanelHost) {
     fps.value = String(o.format === "gif" ? o.fpsGif : o.fps);
     seconds.value = String(o.seconds);
     turn.value = String(o.turn);
-    for (const el of [size, fps, seconds, turn, clearBox]) el.disabled = !!busy;
+    for (const el of [size, fps, seconds, turn, clearBox, fitBox]) el.disabled = !!busy;
     for (const b of panel.querySelectorAll<HTMLButtonElement>(".slotBtns button")) b.disabled = !!busy;
-    go.textContent = busy ? "Cancel" : o.source === "turntable" ? "Render turntable" : "Record";
+    go.textContent = busy ? "Cancel" : o.source === "turntable" ? "Render turntable" : o.source === "play" ? "Record play mode" : "Record";
     go.classList.toggle("on", !busy);
     try { localStorage.setItem(KEY, JSON.stringify(o)); } catch { /* not kept */ }
   }
@@ -142,7 +155,7 @@ export function toggleVideoPanel(anchor: HTMLElement, host: VideoPanelHost) {
     busy = new AbortController();
     sync();
     status.textContent = "";
-    const options: VideoOptions = { source: o.source, format: o.format, scale: o.scale, fps: o.format === "gif" ? o.fpsGif : o.fps, seconds: o.seconds, turn: o.turn, transparent: o.transparent && canBeTransparent(o.format) };
+    const options: VideoOptions = { source: o.source, format: o.format, scale: o.scale, fps: o.format === "gif" ? o.fpsGif : o.fps, seconds: o.seconds, turn: o.turn, transparent: o.transparent && canBeTransparent(o.format), fit2mb: o.format === "gif" && !!o.fit2mb };
     try { await host.record(options, busy.signal, (t) => (status.textContent = t)); }
     catch (e) { status.textContent = e instanceof Error && e.message === "Cancelled" ? "Cancelled." : `Failed: ${e instanceof Error ? e.message : String(e)}`; }
     finally { busy = null; if (panel.isConnected) sync(); }
@@ -168,7 +181,8 @@ export function toggleVideoPanel(anchor: HTMLElement, host: VideoPanelHost) {
   };
   // a running render keeps the panel (and goes on if it is clicked away from); only the button, Escape or Cancel end it
   const onDown = (e: PointerEvent) => { if (!busy && !panel.contains(e.target as Node) && !anchor.contains(e.target as Node)) close(); };
-  const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { if (busy) busy.abort(); else close(); } };
+  // (recording play mode, Escape is play mode's: it ends play mode, and with it the recording, which is saved)
+  const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { if (busy) { if (o.source !== "play") busy.abort(); } else close(); } };
   window.addEventListener("pointerdown", onDown, true);
   window.addEventListener("keydown", onKey, true);
   window.addEventListener("resize", place);

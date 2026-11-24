@@ -239,6 +239,11 @@ export interface ShotSpec extends ShotAim {
   bodygroups?: Record<string, number>;
   /** The parts of the body hidden by hand in this shot (unticked in 3D, the Bodygroups panel's right column), of those it would show. */
   hiddenRegions?: string[];
+  /** The triangles hidden by hand (box, lasso, brush in 3D): the character's own, and its worn items' (as a scene file keeps them). */
+  bodyTris?: Record<string, string>;
+  itemTris?: Record<string, string>;
+  /** A Spy's cigarette smoke, as set in 3D; absent: he smokes unless what he wears covers his head. */
+  cig?: boolean;
   /**
    * Shots with the same value show their characters at the same size (RED and BLU, the styles, the line-up start out so): the camera
    * stands this far over `fill` away, not as near as the frame allows. Each is its own after that: its zoom and turn change it alone.

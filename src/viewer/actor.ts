@@ -509,6 +509,24 @@ export class Actor {
     this.buildClassMeshes();
   }
 
+  /** The worn items' triangles hidden by hand as text per mesh (keyed by the item: the same item keeps them), or undefined when none are. */
+  get itemMaskState(): Record<string, string> | undefined {
+    const out: Record<string, string> = {};
+    for (const [key, v] of this.itemMask) {
+      if (typeof v === "string") out[key] = v;
+      else if (v.some((x) => x)) out[key] = packMask(v);
+    }
+    return Object.keys(out).length ? out : undefined;
+  }
+
+  /** The worn items' triangles hidden by hand are these (the items worn now show it at once, the ones put on later as they are built). */
+  setItemMaskState(state: Record<string, string> | undefined) {
+    this.itemMask = new Map(Object.entries(state ?? {}));
+    this.cosmeticGroup?.traverse((o) => {
+      if (o instanceof THREE.SkinnedMesh && o.userData.maskKey) this.refreshHand(o);
+    });
+  }
+
   /** Whether any triangle of the worn items is hidden by hand. */
   get hasItemMask(): boolean {
     return [...this.itemMask.values()].some((v) => typeof v === "string" || v.some((x) => x));

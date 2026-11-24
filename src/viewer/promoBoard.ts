@@ -16,6 +16,8 @@ import { defaultMask, partsOf, type KeepPart, type LayerMask } from "./promoMask
 import { DEFAULT_GROUND_SPEC, DEFAULT_SKY_SPEC, layer, LAYER_BLENDS, type GroundSpec, type LayerBlend, type OverlaySpec, type SkySpec } from "./promo";
 import { listSkies, skyLabel } from "./skybox";
 import { openTextureBrowser, overlayImage } from "./promoOverlay";
+import type { ShotEnv } from "./promo";
+import type { RimLightState } from "./rimLight";
 import { DEFAULT_CHART, DEFAULT_GLOW, DEFAULT_STROKE, DEFAULT_TEXT, TEXT_FONTS, layerPivot, layerRect, turnPoint, measureContent, opaqueRect, loadBackdropPictures, randomBackdrop, refreshText, textLayer, type ChartCellRect, renderPicture, type Backdrop, type BoardLook, type PromoLayer, type PromoPicture, type ShotSpec } from "./promo";
 
 export interface BoardHost {
@@ -77,6 +79,8 @@ export interface BoardHost {
   paintAnimation(p: PromoPicture, look: BoardLook, o: PaintAnimation, say: (text: string) => void): Promise<string>;
   /** The effects of the scene being looked at in the 3D view (see ShotEffects.post). */
   viewLook?(): Record<string, unknown>;
+  /** A copy of the lights and effects a shot is taken in (its own, else its scene's; null: not known until it is taken). */
+  shotEnv?(spec: ShotSpec): ShotEnv | null;
 }
 
 /** How the board's pictures are exported (see BoardHost.exportAll). */
@@ -233,6 +237,27 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
   };
 
   // --- drawing ---
+  /** The framing guide over the preview (never exported): the page cut into equal columns × rows, or none (remembered). */
+  let guides: [number, number] | null = null;
+  try { const g = JSON.parse(localStorage.getItem("tf2workbench.boardGuides") ?? "null"); if (Array.isArray(g) && g.length === 2) guides = [g[0], g[1]]; } catch { /* none */ }
+  function drawGuides(c: HTMLCanvasElement, p: PromoPicture, scale: number) {
+    if (!guides) return;
+    const [cols, rows] = guides, ctx = c.getContext("2d")!, w = p.w * scale, h = p.h * scale;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    const lines = new Path2D();
+    for (let i = 1; i < cols; i++) { const x = Math.round((w * i) / cols) + 0.5; lines.moveTo(x, 0); lines.lineTo(x, h); }
+    for (let i = 1; i < rows; i++) { const y = Math.round((h * i) / rows) + 0.5; lines.moveTo(0, y); lines.lineTo(w, y); }
+    // (a dark line under a light one: seen on any background)
+    const px = window.devicePixelRatio || 1;
+    ctx.strokeStyle = "rgba(0,0,0,0.45)";
+    ctx.lineWidth = 3 * px;
+    ctx.stroke(lines);
+    ctx.strokeStyle = "rgba(255,255,255,0.85)";
+    ctx.lineWidth = 1 * px;
+    ctx.stroke(lines);
+    ctx.restore();
+  }
   const thumbScale = (p: PromoPicture) => (THUMB_H * 2) / p.h;
   /** Draws the large preview of the picked picture, fitted to the stage, with the selected shot outlined (the outline is not exported). */
   function drawPreview() {
@@ -252,6 +277,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     preview.style.width = `${p.w * k}px`;
     preview.style.height = `${p.h * k}px`;
     previewScale = k;
+    drawGuides(preview, p, k * pr);
     if (hovered) {
       // the paint the pointer is on: a click takes it out of the chart
       const ctx = preview.getContext("2d")!;
@@ -1687,6 +1713,8 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
   const linkNote = document.createElement("p");
   linkNote.className = "dim hint promoLinkNote";
   const layerBox = document.createElement("div");
+  /** Draws the camera window of the inspector again (the one shown last). */
+  let peekCamera: (() => void) | null = null;
   function showInspector() {
     const p = picked;
     inspector.innerHTML = "";
@@ -2356,6 +2384,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       }
     };
     void peek();
+    peekCamera = () => void peek();
     canvas.oncontextmenu = (e) => e.preventDefault();
     canvas.onpointerdown = (ev) => {
       ev.preventDefault();
@@ -2538,6 +2567,33 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     showInspector();
     status.textContent = `Took ${some(sel)} out of this picture${sel.some((l) => l.shared) ? " (the other pictures keep theirs)" : ""}.`;
   }
+  /**
+   * The rim lights (fresnel) of a shot's scene, when it has any: changed here, the shot keeps them as its own (as a change made in 3D
+   * does: see ShotSpec.env), and is taken again.
+   */
+  function rimFields(p: PromoPicture, l: PromoLayer, spec: ShotSpec) {
+    const env: ShotEnv | null = spec.env ?? host.shotEnv?.(spec) ?? null;
+    const rims = env?.post.rimLights as RimLightState[] | undefined;
+    if (!env || !Array.isArray(rims) || !rims.length) return;
+    const changed = () => {
+      // (the first is the scene's "rimLight" too, as the 3D view saves it)
+      env.post.rimLight = { ...rims[0] };
+      spec.env = env;
+      retake(p, l);
+      peekCamera?.(); // (the camera window shows it too)
+    };
+    rims.forEach((r, i) => {
+      heading(layerBox, rims.length > 1 ? `Rim light ${i + 1}` : "Rim light");
+      check(layerBox, "On", r.enabled, (v) => { r.enabled = v; changed(); }, "The fresnel rim light of the shot's scene, on or off (for this shot only)");
+      check(layerBox, "All around", r.allAround, (v) => { r.allAround = v; changed(); showInspector(); }, "Lit on every edge, not from one side");
+      field(layerBox, "Colour", colour(r.color, (v) => { r.color = v; changed(); }));
+      field(layerBox, "Strength", range(0, 8, 0.05, r.strength, (v) => { r.strength = v; changed(); }), "How bright the rim is");
+      field(layerBox, "Width", range(0.02, 1, 0.01, r.width, (v) => { r.width = v; changed(); }), "How far in from the edges it reaches");
+      field(layerBox, "Softness", range(0, 1, 0.01, r.softness, (v) => { r.softness = v; changed(); }), "How softly it fades in from the edge");
+      if (!r.allAround) field(layerBox, "Direction", range(-180, 180, 1, r.direction, (v) => { r.direction = v; changed(); }), "The side it lights, in degrees round the view");
+    });
+  }
+
   /** Opens a shot's character in the 3D view (see BoardHost.editIn3D); the shot is taken again when it is set from there. */
   async function editIn3D(p: PromoPicture, l: PromoLayer) {
     if (!l.shot) return;
@@ -2644,7 +2700,55 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     add("Duplicate", "A copy of its own in this picture, beside it", () => { if (l) pasteLayers("copy", [l]); });
     if (l && p && linked.length) add("Unlink", "Make this picture's own copy: it keeps a copy of the shot, changed on its own from now on", () => unlinkLayer(p, l));
     else if (l && p && others.length) add("Link back", "Link it to the others again: it takes their shot and place, and changes with them", () => relinkLayer(p, l));
+    // the page's backdrop and its layers that are no text and no character (overlays, ground, sky, pictures from files) on every page
+    const sync = document.createElement("button");
+    sync.type = "button";
+    sync.className = "iconBtn syncPages";
+    sync.innerHTML = icon("layers");
+    sync.setAttribute("aria-label", "Sync pages");
+    sync.disabled = !p || pictures.length < 2;
+    sync.title = p ? "Sync pages: give every other page this page's backdrop and its layers that are not texts or characters (overlays, ground, sky, pictures from files), in the same order; their texts and characters stay" : "Pick a page first";
+    sync.onclick = () => { if (p) syncPages(p); };
+    actionsBox.append(sync);
     add("Delete", "Take it out of this picture (Delete)", () => { if (l) { selectOnly(l); deleteLayers(); } }, "trash2");
+  }
+
+  /** A layer that Sync pages makes the same on every page: neither a text, nor a character's shot, nor a paint chart. */
+  const syncable = (l: PromoLayer) => !l.text && !l.shot && !l.chart;
+  /**
+   * Every other page gets the backdrop of `from` and copies of its syncable layers in place of its own, in the same stack: each page's
+   * texts and characters stay, in their order, where they were among the others on `from` (and the border, as it is there). A page of
+   * another size has its overlays made again at its size, its pictures moved and sized with it.
+   */
+  function syncPages(from: PromoPicture) {
+    const was = snapshot();
+    const strokeAt = from.strokeAt ?? from.layers.length;
+    for (const q of pictures) {
+      if (q === from) continue;
+      const keep = q.layers.filter((l) => !syncable(l));
+      const out: PromoLayer[] = [];
+      let k = 0, stroke: number | undefined;
+      const kx = q.w / from.w, ky = q.h / from.h, ks = Math.min(kx, ky), sized = q.w !== from.w || q.h !== from.h;
+      from.layers.forEach((l, i) => {
+        if (i === strokeAt) stroke = out.length;
+        if (!syncable(l)) { if (k < keep.length) out.push(keep[k++]); return; }
+        const c = ownCopy(l);
+        if (sized) {
+          if (c.overlay) { c.box = { x: 0, y: 0, w: q.w, h: q.h }; c.opaque = { x0: 0, y0: 0, x1: q.w, y1: q.h }; c.dx = 0; c.dy = 0; c.scale = 1; }
+          else { c.box = { x: l.box.x * kx, y: l.box.y * ky, w: l.box.w * ks, h: l.box.h * ks }; c.dx = l.dx * kx; c.dy = l.dy * ky; c.opaque = undefined; }
+        }
+        out.push(c);
+      });
+      if (stroke === undefined && from.strokeAt !== undefined) stroke = out.length;
+      out.push(...keep.slice(k));
+      q.layers = out;
+      q.strokeAt = from.strokeAt === undefined ? undefined : stroke;
+      q.backdrop = from.backdrop ? { ...from.backdrop } : null;
+      if (sized) for (const l of out) if (!keep.includes(l)) { if (l.overlay) void retile(q, l).then(() => draw(q)); else measureContent(l); }
+    }
+    pushUndo(was);
+    drawAll();
+    status.textContent = `${pictures.length - 1} other page${pictures.length === 2 ? "" : "s"} now ha${pictures.length === 2 ? "s" : "ve"} this page's backdrop, overlays and pictures (their texts and characters kept).`;
   }
 
   /** Every thumbnail's shot layer, with its picture. */
@@ -2970,6 +3074,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
         field(layerBox, "Spacing", spacing, "How far apart the characters stand, middle to middle");
       }
       if (!spec.group) poseFields(p, l, spec);
+      rimFields(p, l, spec);
       // the particle effects in the shot: how far in they are, and another roll of their chances
       heading(layerBox, "Particle effects", undefined, [{ label: "Reroll", title: "Another seed for the effects' chances: where each particle is, which way it went", run: () => { const s = l.shot!.particles!; s.seed = Math.floor(Math.random() * 0x7fffffff); retake(p, l); } }]);
       const particles = (spec.particles ??= { seed: Math.floor(Math.random() * 0x7fffffff), time: 2 });
@@ -3210,6 +3315,24 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       }
       return box;
     };
+    // the framing guide (only on the preview, never in what is exported)
+    const g = document.createElement("div");
+    g.className = "promoSeg";
+    for (const [v, text, tip] of [[null, "Off", "No guide"], [[2, 2], "2 × 2", "Halves"], [[3, 3], "3 × 3", "Thirds"], [[4, 2], "4 × 2", "Four columns, two rows"]] as [[number, number] | null, string, string][]) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = text;
+      b.title = tip;
+      b.classList.toggle("on", JSON.stringify(guides) === JSON.stringify(v));
+      b.onclick = () => {
+        guides = v;
+        try { localStorage.setItem("tf2workbench.boardGuides", JSON.stringify(v)); } catch { /* not remembered */ }
+        drawExport();
+        drawPreview();
+      };
+      g.append(b);
+    }
+    row("Guides", "Lines over the preview that cut the page into equal parts, to frame by (not exported)", g);
     row("Format", "PNG and JPG: the pictures as they are. PSD: each layer of the board a layer of the file (texts editable, the glow and the text outline and shadow as layer effects)",
       seg<BoardExport["format"]>([["png", "PNG"], ["jpg", "JPG"], ["psd", "PSD"]], () => exportAs.format, (v) => (exportAs.format = v)));
     row("Size", "The size of the files (a 1920 × 1080 page: 1080p, 2560 × 1440, 3840 × 2160; other pages as much larger)",
