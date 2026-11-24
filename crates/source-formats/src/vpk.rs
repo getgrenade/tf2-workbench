@@ -496,6 +496,12 @@ impl VpkSet {
     /// Mounts a folder of loose files (or, when it has none of its own, each folder in it that has: `tf/custom`). A folder that is the `models` or
     /// `materials` folder of an addon mounts the addon. Returns what was mounted; a folder that is mounted already is read again (it has new files).
     pub fn mount_custom(&self, root: &Path, auto: bool) -> Result<Vec<CustomInfo>, String> {
+        self.mount_custom_as(root, auto, None)
+    }
+
+    /// As [`Self::mount_custom`], under a name of its own (`label`; each addon in it: `label · <its folder>`), such as Source Filmmaker's
+    /// workshop, whose folders are named only by a number.
+    pub fn mount_custom_as(&self, root: &Path, auto: bool, label: Option<&str>) -> Result<Vec<CustomInfo>, String> {
         let mut root = root.to_path_buf();
         if !root.is_dir() { return Err(format!("{} is not a folder", root.display())); }
         if !has_content(&root) {
@@ -523,7 +529,13 @@ impl VpkSet {
                     continue;
                 }
             }
-            let base = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "custom".into());
+            let folder = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "custom".into());
+            // (one addon in the folder: the label alone; one of several: the label and its folder)
+            let base = match label {
+                Some(l) if dir == root => l.to_string(),
+                Some(l) => format!("{l} · {folder}"),
+                None => folder,
+            };
             let mut mounts = self.custom.write().unwrap();
             let mut name = base.clone();
             let mut n = 2;

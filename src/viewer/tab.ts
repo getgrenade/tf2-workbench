@@ -8685,10 +8685,10 @@ export function createViewTab(els: Els) {
     void fetchMapNames();
     // the game's own maps by their mode (cp, koth, ...); the custom ones (a server's downloads, the custom folders') and the workshop's
     // in groups of their own, each by mode too
-    const official = new Map<string, string[]>(), custom = new Map<string, string[]>(), workshop = new Map<string, string[]>();
+    const official = new Map<string, string[]>(), custom = new Map<string, string[]>(), workshop = new Map<string, string[]>(), sfm = new Map<string, string[]>();
     for (const name of mapNames ?? []) {
       const kind = mapKind(name);
-      const into = kind === "workshop" ? workshop : kind === "custom" ? custom : official;
+      const into = kind === "sfm" ? sfm : kind === "workshop" ? workshop : kind === "custom" ? custom : official;
       const base = mapLabel(name);
       const mode = base.includes("_") ? base.slice(0, base.indexOf("_")) : "other";
       into.set(mode, [...(into.get(mode) ?? []), name]);
@@ -8705,6 +8705,7 @@ export function createViewTab(els: Els) {
           ...modes(official),
           ...(custom.size ? [{ label: "Custom", hint: count(custom), separator: true, children: modes(custom) }] : []),
           ...(workshop.size ? [{ label: "Workshop", hint: count(workshop), separator: !custom.size, children: modes(workshop) }] : []),
+          ...(sfm.size ? [{ label: "Source Filmmaker workshop", hint: count(sfm), separator: !custom.size && !workshop.size, children: modes(sfm) }] : []),
         ]
       : [{ label: "Reading the maps folder…", disabled: true }];
     if (worldMap) {
@@ -8716,14 +8717,15 @@ export function createViewTab(els: Els) {
   /** A map's own name (the last part of a custom or workshop map's path). */
   function mapLabel(name: string): string { return name.split("/").pop() ?? name; }
   /** Where a map comes from: the game's, a custom one (a server's download, a custom folder's) or the workshop's. */
-  function mapKind(name: string): "game" | "custom" | "workshop" {
-    return name.startsWith("maps/workshop/") || name.startsWith("steam-workshop/") || name.startsWith("sfm") ? "workshop" : name.includes("/") ? "custom" : "game";
+  function mapKind(name: string): "game" | "custom" | "workshop" | "sfm" {
+    if (name.startsWith("sfm/") || name.startsWith("sfm-workshop/")) return "sfm";
+    return name.startsWith("maps/workshop/") || name.startsWith("steam-workshop/") ? "workshop" : name.includes("/") ? "custom" : "game";
   }
   /** A short note of where a custom or workshop map is (the custom folder, "download", the workshop item). */
   function mapSource(name: string): string | undefined {
     const p = name.split("/");
     if (p[0] === "download") return "download";
-    if (p[0] === "sfm" || p[0] === "sfm-workshop") return "SFM";
+    if (p[0] === "sfm-workshop") return p[1];
     if (p[0] === "custom") return p[1];
     if (p[0] === "steam-workshop" || (p[0] === "maps" && p.length > 3)) return p[p.length - 2];
     return undefined;
