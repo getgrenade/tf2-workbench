@@ -61,3 +61,35 @@ fn a_class_has_its_voice_lines_with_their_scenes() {
     let wave = first["sound"]["waves"][0].as_str().unwrap();
     assert!(voice::lip_sync(&state, wave).unwrap()["phonemes"].as_array().is_some_and(|p| !p.is_empty()), "{wave} has phonemes");
 }
+
+#[test]
+fn a_map_prop_is_posed_like_the_game_draws_it() {
+    let Some(tf) = std::env::var_os("TF2_TF_DIR").map(std::path::PathBuf::from).or_else(steam::find_tf2) else { return };
+    let state = AppState::default();
+    state.set_vpk(VpkSet::open_folder(&tf).unwrap());
+    let path = "models/props_gameplay/resupply_locker.mdl";
+    let Ok(bind) = state.model(path) else { return };
+    let ext = |pos: &[f32]| {
+        let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+        for v in pos.chunks_exact(3) { for i in 0..3 { lo[i] = lo[i].min(v[i]); hi[i] = hi[i].max(v[i]); } }
+        [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]]
+    };
+    let all = |m: &source_formats::Model| m.body_parts.iter().flat_map(|b| b.models.first()).flat_map(|s| s.meshes.iter()).flat_map(|m| m.positions.iter().copied()).collect::<Vec<f32>>();
+    // its bind pose is a quarter turn from how the game draws it: its first sequence turns it (wide along y, as it stands in a map)
+    let b = ext(&all(&bind));
+    assert!(b[0] > b[1]);
+    let posed = workbench_core::map::load_map_model(&state, path).unwrap();
+    let n = u32::from_le_bytes(posed[..4].try_into().unwrap()) as usize;
+    let json: serde_json::Value = serde_json::from_slice(&posed[4..4 + n]).unwrap();
+    let blob = (4 + n + 3) & !3;
+    let mut pos = Vec::new();
+    for part in json["bodyParts"].as_array().unwrap() {
+        for mesh in part["models"][0]["meshes"].as_array().into_iter().flatten() {
+            let (at, count) = (mesh["pos"].as_u64().unwrap() as usize, mesh["vertexCount"].as_u64().unwrap() as usize);
+            pos.extend(posed[blob + at..blob + at + count * 12].chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())));
+        }
+    }
+    let p = ext(&pos);
+    assert!(p[1] > p[0], "{p:?}");
+}
+

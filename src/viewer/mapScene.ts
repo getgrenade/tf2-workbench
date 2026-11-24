@@ -1,7 +1,8 @@
 import * as THREE from "three";
-import { loadMap, loadMapMaterial, loadModel } from "../api";
+import { loadMap, loadMapMaterial, loadMapModel } from "../api";
 import { SOURCE_TO_VIEWER } from "./animator";
 import { parsePayload, type ModelData } from "./payload";
+import { loadSkyTexture } from "./skybox";
 
 /**
  * A map of the game in the scene, drawn the way the game's world shaders draw it:
@@ -14,12 +15,23 @@ import { parsePayload, type ModelData } from "./payload";
  */
 
 /** The biggest side of a map texture (they are many; the view rarely comes close to a wall). */
-const TEXTURE_SIZE = 512;
+const TEXTURE_SIZE = 1024;
+/** The side of a cell of the grid of solid triangles (map units). */
+const CELL = 128;
 /** How many materials and models load at once. */
 const PARALLEL = 6;
-/** The average light the exposure brings the map's lit faces to (the game's auto exposure does much the same), and its limits. */
-const EXPOSURE_TARGET = 0.16;
-const EXPOSURE_RANGE: [number, number] = [1, 12];
+/**
+ * The exposure, as the game's auto exposure sets it: the scale that brings the picture's average to a middle grey (a typical surface,
+ * 0.35 of the light, under the map's average light), within the limits the map's tonemap controller gives (the game's own when it
+ * gives none), times a scale that brings that to the brightness the game shows (matched on itemtest).
+ */
+const EXPOSURE_TARGET = 0.18;
+const TYPICAL_ALBEDO = 0.35;
+const DEFAULT_EXPOSURE: [number, number] = [0.5, 2];
+const EXPOSURE_SCALE = 3;
+/** The material name of the sky's faces and the start of an overlay's (see bsp.rs). */
+const SKY_MATERIAL = "__sky__";
+const OVERLAY_PREFIX = "overlay:";
 
 export interface MapSpawn {
   origin: [number, number, number];
@@ -36,6 +48,8 @@ interface MapJson {
   spawns: MapSpawn[];
   lightmap: { width: number; height: number; pages: number; offset: number; range: number; average: number };
   sun: { dir: V3; color: V3 } | null;
+  exposureMin: number | null;
+  exposureMax: number | null;
   sky: string | null;
   bounds: [number, number, number, number, number, number];
 }
@@ -122,6 +136,11 @@ const fragmentShader = /* glsl */ `
   uniform sampler2D tBump;
   uniform sampler2D tBump2;
   uniform sampler2D tEnvMask;
+  uniform sampler2D tDetail;
+  uniform bool uHasDetail;
+  uniform vec2 uDetailScale;
+  uniform float uDetailFactor;
+  uniform int uDetailMode;
   uniform samplerCube tCube;
   uniform sampler2D tLightmap;
   uniform sampler2D tShadow;
@@ -178,6 +197,12 @@ const fragmentShader = /* glsl */ `
     vec4 albedo = uHasBase ? texture2D(tBase, vUv) : vec4(0.6, 0.6, 0.6, 1.0);
     if (uHasBase2) albedo = mix(albedo, texture2D(tBase2, vUv2), b);
     albedo.rgb *= uColor;
+    // the detail texture: modulate 2x (mode 0), or added (1)
+    if (uHasDetail) {
+      vec3 detail = texture2D(tDetail, vUv * uDetailScale).rgb;
+      if (uDetailMode == 1) albedo.rgb += detail * uDetailFactor;
+      else albedo.rgb *= mix(vec3(1.0), detail * 2.0, uDetailFactor);
+    }
     if (uAlphaTest > 0.0 && albedo.a < uAlphaTest) discard;
 
     // the normal map (tangent space; for a self-shadowed bump, the light of the three basis directions instead)
@@ -321,7 +346,24 @@ export class MapScene {
     uShadowOn: { value: false },
   };
   private readonly inverse = new THREE.Matrix4();
-
+  /** The meshes of each material (their draw order follows the material's). */
+  private readonly meshesOf = new Map<string, THREE.Object3D[]>();
+  /**
+   * The sky's faces show the sky, as the game draws its sky brushes: the map's sky picture in the direction looked at (the same picture
+   * and turn as the scene's sky, so the two meet).
+   */
+  private readonly skyMaterial = new THREE.ShaderMaterial({
+    uniforms: { tSky: { value: null as THREE.CubeTexture | null }, uHasSky: { value: false } },
+    vertexShader: "varying vec3 vWorld; void main() { vec4 w = modelMatrix * vec4(position, 1.0); vWorld = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }",
+    fragmentShader: /* glsl */ `
+      uniform samplerCube tSky; uniform bool uHasSky; varying vec3 vWorld;
+      void main() {
+        vec3 d = normalize(vWorld - cameraPosition);
+        gl_FragColor = uHasSky ? vec4(textureCube(tSky, vec3(-d.x, d.y, d.z)).rgb, 1.0) : vec4(0.0, 0.0, 0.0, 1.0);
+        #include <colorspace_fragment>
+      }`,
+    side: THREE.DoubleSide,
+  });
   constructor(name: string) {
     this.name = name;
     this.group.name = `map:${name}`;
@@ -366,7 +408,9 @@ export class MapScene {
     const b = json.bounds;
     this.extent = Math.hypot(b[3] - b[0], b[4] - b[1], b[5] - b[2]);
     const lm = json.lightmap;
-    this.exposure = lm.average > 0 ? Math.min(EXPOSURE_RANGE[1], Math.max(EXPOSURE_RANGE[0], EXPOSURE_TARGET / lm.average)) : 1;
+    const [lo, hi] = [json.exposureMin ?? DEFAULT_EXPOSURE[0], json.exposureMax ?? DEFAULT_EXPOSURE[1]];
+    const auto = lm.average > 0 ? EXPOSURE_TARGET / (TYPICAL_ALBEDO * lm.average) : 1;
+    this.exposure = EXPOSURE_SCALE * Math.min(Math.max(auto, Math.min(lo, hi)), Math.max(lo, hi));
     this.shared.uExposure.value = this.exposure;
     this.shared.uRange.value = lm.range;
     this.shared.uPages.value = lm.pages;
@@ -399,13 +443,25 @@ export class MapScene {
       geo.setIndex(new THREE.BufferAttribute(new Uint32Array(buf.slice(blob + m.index, blob + m.index + m.indexCount * 4)), 1));
       geo.computeBoundingSphere();
       this.geometries.push(geo);
-      const mesh = new THREE.Mesh(geo, this.material(m.material, false));
+      const sky = m.material === SKY_MATERIAL;
+      const mesh = new THREE.Mesh(geo, sky ? this.skyMaterial : this.material(m.material, false));
       mesh.name = m.material;
+      if (!sky) this.meshesOf.set(`w:${m.material}`, [...(this.meshesOf.get(`w:${m.material}`) ?? []), mesh]);
+      if (!sky && !m.material.startsWith(OVERLAY_PREFIX)) this.colliders.push({ geo, matrices: null, key: `w:${m.material}` });
       mesh.matrixAutoUpdate = false;
       this.world.add(mesh);
     }
     this.world.updateMatrixWorld(true);
 
+    this.skyMaterial.userData.noShadow = true;
+    if (json.sky) {
+      void loadSkyTexture(json.sky).then((cube) => {
+        if (this.disposed) { cube.dispose(); return; }
+        this.textures.push(cube);
+        this.skyMaterial.uniforms.tSky.value = cube;
+        this.skyMaterial.uniforms.uHasSky.value = true;
+      }).catch(() => undefined);
+    }
     // the textures, then the props
     const keys = [...this.materials.keys()];
     let done = 0;
@@ -413,6 +469,7 @@ export class MapScene {
       await this.fill(key);
       progress(`${this.name}: textures ${++done}/${keys.length}`);
     }, () => this.disposed);
+    this.buildColliders();
     await this.loadProps(json.props, progress);
     progress("");
   }
@@ -433,6 +490,11 @@ export class MapScene {
         tBump: { value: null },
         tBump2: { value: null },
         tEnvMask: { value: null },
+        tDetail: { value: null },
+        uHasDetail: { value: false },
+        uDetailScale: { value: new THREE.Vector2(4, 4) },
+        uDetailFactor: { value: 1 },
+        uDetailMode: { value: 0 },
         tCube: { value: emptyCube },
         uHasBase: { value: false },
         uHasBase2: { value: false },
@@ -475,7 +537,9 @@ export class MapScene {
   private async fill(key: string) {
     const m = this.materials.get(key);
     if (!m) return;
-    const name = key.slice(2);
+    if (key.slice(2) === SKY_MATERIAL) return;
+    const overlay = key.slice(2).startsWith(OVERLAY_PREFIX);
+    const name = key.slice(2).replace(OVERLAY_PREFIX, "");
     const buf = await loadMapMaterial(name, TEXTURE_SIZE);
     if (this.disposed) return;
     const { json, blob } = split(buf) as { json: MaterialJson; blob: number };
@@ -497,6 +561,17 @@ export class MapScene {
       if (t.slot === "bump") { u.tBump.value = tex; u.uHasBump.value = true; }
       if (t.slot === "bump2") { u.tBump2.value = tex; u.uHasBump2.value = true; }
       if (t.slot === "envmask") { u.tEnvMask.value = tex; u.uEnvMask.value = 1; }
+      if (t.slot === "detail") {
+        const mode = Number(p["$detailblendmode"] ?? 0);
+        if (mode === 0 || mode === 1) {
+          u.tDetail.value = tex;
+          u.uHasDetail.value = true;
+          u.uDetailMode.value = mode;
+          const scale = vmtColor(p["$detailscale"], [4, 4, 4]);
+          (u.uDetailScale.value as THREE.Vector2).set(scale[0], scale[1]);
+          u.uDetailFactor.value = Number(p["$detailblendfactor"] ?? 1);
+        }
+      }
     }
     if (faces.length === 6 && faces.every(Boolean)) {
       const cube = new THREE.CubeTexture(faces);
@@ -539,6 +614,19 @@ export class MapScene {
       m.transparent = true;
     }
     if (flag("$nocull")) m.side = THREE.DoubleSide;
+    // the see-through ones are drawn after the solid ones: the water first, then what is over it (rails, glass, decals)
+    if (shader === "water") m.userData.renderOrder = 1;
+    else if (m.transparent) m.userData.renderOrder = 2;
+    if (overlay) {
+      // an overlay lies on its surface: drawn over it, blended by its alpha
+      m.transparent = true;
+      m.depthWrite = false;
+      m.polygonOffset = true;
+      m.polygonOffsetFactor = -2;
+      m.polygonOffsetUnits = -2;
+      m.userData.renderOrder = 0.5;
+    }
+    for (const mesh of this.meshesOf.get(key) ?? []) mesh.renderOrder = m.userData.renderOrder ?? 0;
     m.needsUpdate = true;
   }
 
@@ -555,7 +643,7 @@ export class MapScene {
     await pool(models, PARALLEL, async (path) => {
       let data: ModelData;
       try {
-        data = parsePayload(await loadModel(path));
+        data = parsePayload(await loadMapModel(path));
       } finally {
         progress(`${this.name}: props ${++done}/${models.length}`);
       }
@@ -599,11 +687,119 @@ export class MapScene {
           inst.name = path;
           inst.matrixAutoUpdate = false;
           this.world.add(inst);
+          this.meshesOf.set(key, [...(this.meshesOf.get(key) ?? []), inst]);
+          this.colliders.push({ geo, matrices: placed.map((_, i) => { const mm = new THREE.Matrix4(); inst.getMatrixAt(i, mm); return mm; }), key });
         }
       }
       this.world.updateMatrixWorld(true);
       await Promise.all(fills);
     }, () => this.disposed);
+    this.buildColliders();
+  }
+
+  // --- what is solid: a grid of the map's triangles, to find what a ray meets (the floor under a point, a wall ahead) ---------------
+
+  private readonly colliders: { geo: THREE.BufferGeometry; matrices: THREE.Matrix4[] | null; key: string }[] = [];
+  /** The solid triangles, 9 floats each (map units), and per grid cell (CELL units square, in x and y) the triangles over it. */
+  private tris = new Float32Array(0);
+  private cells = new Map<number, number[]>();
+  private stamp = new Uint32Array(0);
+  private stampId = 0;
+
+  private static cellKey(ix: number, iy: number) {
+    return (ix + 32768) * 65536 + (iy + 32768);
+  }
+
+  /** Puts the solid triangles into the grid (the see-through ones, water and glass, are not solid). */
+  private buildColliders() {
+    const out: number[] = [];
+    const v = new THREE.Vector3();
+    for (const c of this.colliders) {
+      const m = this.materials.get(c.key);
+      if (m && (m.transparent || m.userData.renderOrder === 1)) continue;
+      const pos = c.geo.getAttribute("position") as THREE.BufferAttribute;
+      const index = c.geo.getIndex();
+      if (!index) continue;
+      for (const mat of c.matrices ?? [null]) {
+        for (let i = 0; i < index.count; i++) {
+          v.fromBufferAttribute(pos, index.getX(i));
+          if (mat) v.applyMatrix4(mat);
+          out.push(v.x, v.y, v.z);
+        }
+      }
+    }
+    this.tris = new Float32Array(out);
+    const count = this.tris.length / 9;
+    this.stamp = new Uint32Array(count);
+    this.cells = new Map();
+    for (let t = 0; t < count; t++) {
+      const o = t * 9;
+      const x0 = Math.floor(Math.min(this.tris[o], this.tris[o + 3], this.tris[o + 6]) / CELL);
+      const x1 = Math.floor(Math.max(this.tris[o], this.tris[o + 3], this.tris[o + 6]) / CELL);
+      const y0 = Math.floor(Math.min(this.tris[o + 1], this.tris[o + 4], this.tris[o + 7]) / CELL);
+      const y1 = Math.floor(Math.max(this.tris[o + 1], this.tris[o + 4], this.tris[o + 7]) / CELL);
+      for (let ix = x0; ix <= x1; ix++) for (let iy = y0; iy <= y1; iy++) {
+        const k = MapScene.cellKey(ix, iy);
+        let list = this.cells.get(k);
+        if (!list) this.cells.set(k, (list = []));
+        list.push(t);
+      }
+    }
+  }
+
+  /**
+   * The first solid surface along a ray of the view (from `origin`, toward `dir`, up to `max`): where it is met (view units), its normal
+   * and how far; null when nothing is met (or the map is hidden).
+   */
+  raycast(origin: THREE.Vector3, dir: THREE.Vector3, max = 1e5): { point: THREE.Vector3; normal: THREE.Vector3; distance: number } | null {
+    if (!this.group.visible || !this.tris.length) return null;
+    const o = origin.clone().applyMatrix4(this.inverse);
+    const d = dir.clone().transformDirection(this.inverse).normalize();
+    const id = ++this.stampId;
+    let best = max, bestTri = -1;
+    const tris = this.tris;
+    const test = (list: number[] | undefined) => {
+      if (!list) return;
+      for (const t of list) {
+        if (this.stamp[t] === id) continue;
+        this.stamp[t] = id;
+        const k = t * 9;
+        const e1x = tris[k + 3] - tris[k], e1y = tris[k + 4] - tris[k + 1], e1z = tris[k + 5] - tris[k + 2];
+        const e2x = tris[k + 6] - tris[k], e2y = tris[k + 7] - tris[k + 1], e2z = tris[k + 8] - tris[k + 2];
+        const px = d.y * e2z - d.z * e2y, py = d.z * e2x - d.x * e2z, pz = d.x * e2y - d.y * e2x;
+        const det = e1x * px + e1y * py + e1z * pz;
+        if (Math.abs(det) < 1e-9) continue;
+        const inv = 1 / det;
+        const sx = o.x - tris[k], sy = o.y - tris[k + 1], sz = o.z - tris[k + 2];
+        const u = (sx * px + sy * py + sz * pz) * inv;
+        if (u < 0 || u > 1) continue;
+        const qx = sy * e1z - sz * e1y, qy = sz * e1x - sx * e1z, qz = sx * e1y - sy * e1x;
+        const w = (d.x * qx + d.y * qy + d.z * qz) * inv;
+        if (w < 0 || u + w > 1) continue;
+        const dist = (e2x * qx + e2y * qy + e2z * qz) * inv;
+        if (dist > 1e-4 && dist < best) { best = dist; bestTri = t; }
+      }
+    };
+    // walk the cells the ray crosses (seen from above), nearest first, until a hit nearer than the next cell
+    let ix = Math.floor(o.x / CELL), iy = Math.floor(o.y / CELL);
+    const stepX = d.x > 0 ? 1 : -1, stepY = d.y > 0 ? 1 : -1;
+    const tDx = Math.abs(d.x) > 1e-9 ? CELL / Math.abs(d.x) : Infinity;
+    const tDy = Math.abs(d.y) > 1e-9 ? CELL / Math.abs(d.y) : Infinity;
+    let tMx = Math.abs(d.x) > 1e-9 ? ((d.x > 0 ? (ix + 1) * CELL - o.x : o.x - ix * CELL) / Math.abs(d.x)) : Infinity;
+    let tMy = Math.abs(d.y) > 1e-9 ? ((d.y > 0 ? (iy + 1) * CELL - o.y : o.y - iy * CELL) / Math.abs(d.y)) : Infinity;
+    for (let steps = 0; steps < 4096; steps++) {
+      test(this.cells.get(MapScene.cellKey(ix, iy)));
+      const exit = Math.min(tMx, tMy);
+      if (best <= exit || exit > max || exit === Infinity) break;
+      if (tMx < tMy) { ix += stepX; tMx += tDx; } else { iy += stepY; tMy += tDy; }
+    }
+    if (bestTri < 0) return null;
+    const k = bestTri * 9;
+    const a = new THREE.Vector3(tris[k], tris[k + 1], tris[k + 2]);
+    const n = new THREE.Vector3(tris[k + 3], tris[k + 4], tris[k + 5]).sub(a).cross(new THREE.Vector3(tris[k + 6], tris[k + 7], tris[k + 8]).sub(a)).normalize();
+    if (n.dot(d) > 0) n.negate();
+    const point = o.addScaledVector(d, best).applyMatrix4(this.group.matrix);
+    return { point, normal: n.transformDirection(this.group.matrix), distance: best };
   }
 
   dispose() {
@@ -613,6 +809,7 @@ export class MapScene {
     for (const t of this.textures) t.dispose();
     for (const m of this.materials.values()) m.dispose();
     this.lightmap?.dispose();
+    this.skyMaterial.dispose();
     this.materials.clear();
   }
 }

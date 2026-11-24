@@ -67,6 +67,7 @@ const LUMP_DISP_VERTS: usize = 33;
 const LUMP_GAME_LUMP: usize = 35;
 const LUMP_TEXDATA_STRING_DATA: usize = 43;
 const LUMP_TEXDATA_STRING_TABLE: usize = 44;
+const LUMP_OVERLAYS: usize = 45;
 const LUMP_LIGHTING_HDR: usize = 53;
 const LUMP_FACES_HDR: usize = 58;
 
@@ -151,6 +152,9 @@ pub struct Map {
     pub bounds: [f32; 6],
     /// The sun, when the map has one.
     pub sun: Option<MapSun>,
+    /// The limits the map gives the game's auto exposure (`env_tonemap_controller`'s SetAutoExposureMin / Max, when it sets them).
+    pub exposure_min: Option<f32>,
+    pub exposure_max: Option<f32>,
     /// The map's light where something stands (for the characters).
     pub light: MapLight,
 }
@@ -706,7 +710,25 @@ pub fn read(file: &[u8]) -> Result<Map> {
     let mut shown_models: Vec<(usize, [f32; 3], [f32; 3])> = vec![(0, [0.0; 3], [0.0; 3])];
     let mut sun = None;
     let mut sky_camera = None;
+    let (mut exposure_min, mut exposure_max) = (None, None);
     for e in &entities {
+        // the outputs that set the auto exposure's limits (target, input, parameter, delay, times; split by commas or ESC)
+        for (k, v) in e {
+            if !k.starts_with("on") {
+                continue;
+            }
+            for output in v.lines() {
+                let parts: Vec<&str> = output.split([',', '\u{1b}']).collect();
+                if parts.len() >= 3 {
+                    let value = parts[2].trim().parse::<f32>().ok();
+                    match parts[1].trim().to_ascii_lowercase().as_str() {
+                        "setautoexposuremin" => exposure_min = value.or(exposure_min),
+                        "setautoexposuremax" => exposure_max = value.or(exposure_max),
+                        _ => {}
+                    }
+                }
+            }
+        }
         let class = e.get("classname").map(String::as_str).unwrap_or("");
         let origin = e.get("origin").map(|s| parse3(s)).unwrap_or([0.0; 3]);
         let angles = e.get("angles").map(|s| parse3(s)).unwrap_or([0.0; 3]);
@@ -828,10 +850,12 @@ pub fn read(file: &[u8]) -> Result<Map> {
         for i in first..(first + count).min(faces.len()) {
             let f = &faces[i];
             let Some(t) = texinfos.get(f.texinfo as usize) else { continue };
-            if t.flags & (SURF_SKY | SURF_SKY2D | SURF_TRIGGER | SURF_NODRAW | SURF_HINT | SURF_SKIP) != 0 {
+            if t.flags & (SURF_TRIGGER | SURF_NODRAW | SURF_HINT | SURF_SKIP) != 0 {
                 continue;
             }
-            let Some((material, tw, th)) = texdata_of(t.texdata) else { continue };
+            // the sky's faces show the sky (as the game draws its sky brushes), whatever their material
+            let sky_face = t.flags & (SURF_SKY | SURF_SKY2D) != 0;
+            let Some((material, tw, th)) = (if sky_face { Some((SKY_MATERIAL.to_string(), 1.0, 1.0)) } else { texdata_of(t.texdata) }) else { continue };
             if material.starts_with("tools/") {
                 continue;
             }
@@ -967,12 +991,58 @@ pub fn read(file: &[u8]) -> Result<Map> {
             }
         }
     }
+    // the overlays (posters, signs, stripes on floors: info_overlay, compiled into the map): their quads, a hair off the surface, lit
+    // by the lightmap of the face they lie on
+    let overlays = bsp.lump(LUMP_OVERLAYS);
+    for o in overlays.data.chunks_exact(352) {
+        let texinfo = i16_at(o, 4).unwrap_or(-1);
+        let Some(t) = texinfos.get(texinfo.max(0) as usize).filter(|_| texinfo >= 0) else { continue };
+        let Some((material, _, _)) = texdata_of(t.texdata) else { continue };
+        let face = i32_at(o, 8).unwrap_or(-1);
+        let u = [f32_at(o, 264).unwrap_or(0.0), f32_at(o, 268).unwrap_or(1.0)];
+        let v = [f32_at(o, 272).unwrap_or(0.0), f32_at(o, 276).unwrap_or(1.0)];
+        let pts: Vec<[f32; 3]> = (0..4).map(|k| vec3(o, 280 + k * 12)).collect();
+        let origin = vec3(o, 328);
+        let normal = normalize(vec3(o, 340));
+        if in_sky(origin) {
+            continue;
+        }
+        // the basis: U from the points' third components, V = normal x U (the engine's unpacking)
+        let bu = normalize([pts[0][2], pts[1][2], pts[2][2]]);
+        let bv = cross(normal, bu);
+        let corners: Vec<[f32; 3]> = pts.iter().map(|q| {
+            let p = [origin[0] + bu[0] * q[0] + bv[0] * q[1], origin[1] + bu[1] * q[0] + bv[1] * q[1], origin[2] + bu[2] * q[0] + bv[2] * q[1]];
+            [p[0] + normal[0] * 0.25, p[1] + normal[1] * 0.25, p[2] + normal[2] * 0.25]
+        }).collect();
+        let uvs = [[u[0], v[0]], [u[0], v[1]], [u[1], v[1]], [u[1], v[0]]];
+        let lit = faces.get(face.max(0) as usize).filter(|_| face >= 0).and_then(|f| texinfos.get(f.texinfo as usize).map(|ft| (f, ft)));
+        let mesh = by_material.entry(format!("{OVERLAY_PREFIX}{material}")).or_insert_with(|| MapMesh { material: format!("{OVERLAY_PREFIX}{material}"), ..Default::default() });
+        let base = (mesh.positions.len() / 3) as u32;
+        let ts = bu;
+        let tt = bv.map(|c| -c);
+        for (k, p) in corners.iter().enumerate() {
+            mesh.positions.extend_from_slice(p);
+            mesh.normals.extend_from_slice(&normal);
+            mesh.uvs.extend_from_slice(&uvs[k]);
+            mesh.lightmap_uvs.extend_from_slice(&lit.map_or([-1.0, -1.0], |(f, ft)| lightmap_uv(face as usize, f, ft, *p)));
+            mesh.blend.push(0.0);
+            mesh.tangents_s.extend_from_slice(&ts);
+            mesh.tangents_t.extend_from_slice(&tt);
+        }
+        // wound to face along the normal
+        let n = cross(sub(corners[1], corners[0]), sub(corners[2], corners[0]));
+        if dot(n, normal) >= 0.0 {
+            mesh.indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        } else {
+            mesh.indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
+        }
+    }
     let mut meshes: Vec<MapMesh> = by_material.into_values().filter(|m| !m.indices.is_empty()).collect();
     meshes.sort_by(|a, b| a.material.cmp(&b.material));
     if bounds[0] > bounds[3] {
         bounds = [0.0; 6];
     }
-    Ok(Map { meshes, props, spawns, lightmap_width: width, lightmap_height: height, lightmap, sky, bounds, sun, light })
+    Ok(Map { meshes, props, spawns, lightmap_width: width, lightmap_height: height, lightmap, sky, bounds, sun, light, exposure_min, exposure_max })
 }
 
 fn grow(b: &mut [f32; 6], p: [f32; 3]) {
@@ -981,6 +1051,11 @@ fn grow(b: &mut [f32; 6], p: [f32; 3]) {
         b[i + 3] = b[i + 3].max(p[i]);
     }
 }
+
+/// The material name the sky's faces are grouped under (no such material exists: they show the sky).
+pub const SKY_MATERIAL: &str = "__sky__";
+/// What an overlay's material name starts with in the meshes (`overlay:decals/stripes`): drawn over the surface it lies on.
+pub const OVERLAY_PREFIX: &str = "overlay:";
 
 /// The brush entities whose faces are drawn (doors, walls, glass ...); triggers, clips and the like are not.
 const BRUSH_SHOWN: &[&str] = &[
@@ -1041,7 +1116,10 @@ fn parse_entities(text: &str) -> Vec<HashMap<String, String>> {
                 }
                 if let Some(e) = current.as_mut() {
                     match pending.take() {
-                        Some(k) => { e.entry(k.to_ascii_lowercase()).or_insert(s); }
+                        // (a key given more than once, the outputs: all of its values, one per line)
+                        Some(k) => {
+                            e.entry(k.to_ascii_lowercase()).and_modify(|v: &mut String| { v.push('\n'); v.push_str(&s); }).or_insert(s);
+                        }
                         None => pending = Some(s),
                     }
                 }
@@ -1183,7 +1261,8 @@ const MAP_MATERIAL_PARAMS: &[&str] = &[
     "$translucent", "$alphatest", "$alphatestreference", "$additive", "$nocull", "$color", "$color2", "$fogcolor", "$basetexturetransform",
     "$basetexturetransform2", "$selfillum", "$alpha", "$vertexalpha", "$blendmodulatetexture", "$surfaceprop", "$ssbump", "$envmap",
     "$envmaptint", "$basealphaenvmapmask", "$normalmapalphaenvmapmask", "$envmapcontrast", "$envmapsaturation", "$fresnelreflection",
-    "$bumptransform", "$nodiffusebumplighting", "$selfillumtint",
+    "$bumptransform", "$nodiffusebumplighting", "$selfillumtint", "$detailscale", "$detailblendfactor", "$detailblendmode", "$decal",
+    "$detailtexturetransform",
 ];
 
 /// The biggest face of a material's cubemap (reflections are blurry).
@@ -1203,6 +1282,7 @@ pub fn map_material(vpk: &crate::VpkSet, name: &str, max_size: u32) -> std::resu
         ("bump", &["$bumpmap", "$normalmap"][..]),
         ("bump2", &["$bumpmap2"][..]),
         ("envmask", &["$envmapmask"][..]),
+        ("detail", &["$detail"][..]),
     ] {
         let Some(tex) = keys.iter().find_map(|k| vmt.get(k)) else { continue };
         let vtf = vtf_of(tex);
@@ -1253,5 +1333,23 @@ mod light_tests {
         let p = &map.props[map.props.len() / 2];
         eprintln!("sample {} {:?} {:?}", p.model, p.origin, p.ambient);
         assert!(map.sun.is_some() && sunlit > 0 && sunlit < map.props.len() && bright > map.props.len() / 2);
+    }
+}
+
+#[cfg(test)]
+mod overlay_tests {
+    /// itemtest (TF2_TF_DIR): its floor stripes are overlays and it sets its exposure limits; vsh_maul's sky has faces.
+    #[test]
+    fn itemtest_has_its_overlays_sky_and_exposure() {
+        let Some(dir) = std::env::var_os("TF2_TF_DIR") else { return };
+        let Ok(bytes) = std::fs::read(std::path::Path::new(&dir).join("maps/itemtest.bsp")) else { return };
+        let map = super::read(&bytes).unwrap();
+        let overlays: Vec<&str> = map.meshes.iter().filter(|m| m.material.starts_with(super::OVERLAY_PREFIX)).map(|m| m.material.as_str()).collect();
+        eprintln!("overlays {overlays:?} exposure {:?}..{:?}", map.exposure_min, map.exposure_max);
+        assert!(!overlays.is_empty());
+        assert_eq!((map.exposure_min, map.exposure_max), (Some(0.5), Some(0.8)));
+        // an outdoor map's sky has faces
+        let Ok(bytes) = std::fs::read(std::path::Path::new(&dir).join("maps/vsh_maul.bsp")) else { return };
+        assert!(super::read(&bytes).unwrap().meshes.iter().any(|m| m.material == super::SKY_MATERIAL));
     }
 }

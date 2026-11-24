@@ -208,6 +208,12 @@ pub async fn map_light_at(name: String, points: Vec<[f32; 3]>) -> Result<serde_j
     workbench_core::map::light_at(&name, &points)
 }
 
+/// A model as a map places it: posed by its first sequence (see `workbench_core::map::load_map_model`).
+#[tauri::command]
+pub async fn load_map_model(state: State<'_, AppState>, path: String) -> Result<tauri::ipc::Response, String> {
+    Ok(tauri::ipc::Response::new(workbench_core::map::load_map_model(&state, &path)?))
+}
+
 /// A map material: its shader, parameters and base textures no bigger than `max_size`.
 #[tauri::command]
 pub async fn load_map_material(state: State<'_, AppState>, name: String, max_size: u32) -> Result<tauri::ipc::Response, String> {

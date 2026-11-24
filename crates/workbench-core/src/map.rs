@@ -82,6 +82,8 @@ pub fn load_map(state: &AppState, name: &str) -> Result<Vec<u8>, String> {
         "spawns": spawns,
         "lightmap": { "width": map.lightmap_width, "height": map.lightmap_height, "pages": source_formats::bsp::LIGHTMAP_PAGES, "offset": lightmap, "range": source_formats::bsp::LIGHTMAP_RANGE, "average": average_light },
         "sun": map.sun.map(|s| json!({ "dir": s.dir, "color": s.color })),
+        "exposureMin": map.exposure_min,
+        "exposureMax": map.exposure_max,
         "sky": map.sky,
         "bounds": map.bounds,
     }))
@@ -140,4 +142,87 @@ pub fn map_material(state: &AppState, name: &str, max_size: u32) -> Result<Vec<u
     }
     out.extend_from_slice(&blob);
     Ok(out)
+}
+
+/// A 3x4 row-major transform.
+type M34 = [f32; 12];
+
+fn quat_pos(q: [f32; 4], p: [f32; 3]) -> M34 {
+    let [x, y, z, w] = q;
+    [
+        1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w), 2.0 * (x * z + y * w), p[0],
+        2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w), p[1],
+        2.0 * (x * z - y * w), 2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y), p[2],
+    ]
+}
+
+fn mul34(a: &M34, b: &M34) -> M34 {
+    let mut o = [0.0; 12];
+    for r in 0..3 {
+        for c in 0..4 {
+            o[r * 4 + c] = a[r * 4] * b[c] + a[r * 4 + 1] * b[4 + c] + a[r * 4 + 2] * b[8 + c] + if c == 3 { a[r * 4 + 3] } else { 0.0 };
+        }
+    }
+    o
+}
+
+/// A model as a map shows it: its vertices in the pose of its first sequence (the game draws a prop posed by its bones, and a model's
+/// bind pose can be turned from that: a resupply locker's is a quarter turn off), as `load_model` encodes a model.
+pub fn load_map_model(state: &AppState, path: &str) -> Result<Vec<u8>, String> {
+    let vpk = state.vpk()?;
+    let mut model = source_formats::model::load(&vpk, &path.to_ascii_lowercase()).map_err(|e| e.to_string())?;
+    let set = state.anim_set(path).ok();
+    let n = model.bones.len();
+    if let Some(set) = set.filter(|s| s.num_sequences() > 0 && n > 0) {
+        let clip = set.bake(0, &set.default_pose_params());
+        if clip.frames > 0 && clip.num_bones == n {
+            let mut world: Vec<M34> = Vec::with_capacity(n);
+            for (i, bone) in model.bones.iter().enumerate() {
+                let p = [clip.pos[i * 3], clip.pos[i * 3 + 1], clip.pos[i * 3 + 2]];
+                let q = [clip.quat[i * 4], clip.quat[i * 4 + 1], clip.quat[i * 4 + 2], clip.quat[i * 4 + 3]];
+                let local = quat_pos(q, p);
+                let w = if bone.parent >= 0 && (bone.parent as usize) < i { mul34(&world[bone.parent as usize], &local) } else { local };
+                world.push(w);
+            }
+            let skin: Vec<M34> = model.bones.iter().zip(&world).map(|(b, w)| mul34(w, &b.pose_to_bone)).collect();
+            for part in &mut model.body_parts {
+                for sub in &mut part.models {
+                    for mesh in &mut sub.meshes {
+                        let verts = mesh.positions.len() / 3;
+                        for v in 0..verts {
+                            let mut m = [0.0f32; 12];
+                            let mut total = 0.0;
+                            for k in 0..4 {
+                                let w = mesh.bone_weights.get(v * 4 + k).copied().unwrap_or(0.0);
+                                let b = mesh.bone_indices.get(v * 4 + k).copied().unwrap_or(0) as usize;
+                                if w <= 0.0 || b >= n {
+                                    continue;
+                                }
+                                for (o, s) in m.iter_mut().zip(&skin[b]) {
+                                    *o += s * w;
+                                }
+                                total += w;
+                            }
+                            if total <= 0.0 {
+                                continue;
+                            }
+                            let p = [mesh.positions[v * 3], mesh.positions[v * 3 + 1], mesh.positions[v * 3 + 2]];
+                            let nn = [mesh.normals[v * 3], mesh.normals[v * 3 + 1], mesh.normals[v * 3 + 2]];
+                            for r in 0..3 {
+                                mesh.positions[v * 3 + r] = (m[r * 4] * p[0] + m[r * 4 + 1] * p[1] + m[r * 4 + 2] * p[2] + m[r * 4 + 3]) / total;
+                                mesh.normals[v * 3 + r] = (m[r * 4] * nn[0] + m[r * 4 + 1] * nn[1] + m[r * 4 + 2] * nn[2]) / total;
+                            }
+                            let l = (mesh.normals[v * 3].powi(2) + mesh.normals[v * 3 + 1].powi(2) + mesh.normals[v * 3 + 2].powi(2)).sqrt();
+                            if l > 1e-8 {
+                                for r in 0..3 {
+                                    mesh.normals[v * 3 + r] /= l;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(crate::payload::encode(&model))
 }

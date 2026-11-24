@@ -1417,7 +1417,33 @@ void main() {
    * when there is nothing to push against.
    */
   collidePlayer(position: THREE.Vector3, velocity: THREE.Vector3): THREE.Vector3 | null {
-    return this.propSim ? this.propSim.world.pushOut(position, 22, 82, velocity) : null;
+    let at = this.propSim ? this.propSim.world.pushOut(position, 22, 82, velocity) : null;
+    // a map's walls: kept a player's half width (24) from what is ahead at the knees and the chest, sliding along it
+    if (this.world?.visible && this.worldRaycast) {
+      const p = (at ?? position).clone();
+      const flat = new THREE.Vector3(velocity.x, 0, velocity.z);
+      if (flat.lengthSq() > 1e-6) {
+        flat.normalize();
+        let moved = false;
+        for (const h of [24, 60]) {
+          const from = p.clone().add(new THREE.Vector3(0, h, 0)).addScaledVector(flat, -24);
+          const hit = this.worldRaycast(from, flat, 48);
+          if (!hit || Math.abs(hit.normal.y) > 0.7) continue;
+          const n = new THREE.Vector3(hit.normal.x, 0, hit.normal.z).normalize();
+          const gap = new THREE.Vector3().subVectors(p.clone().setY(hit.point.y), hit.point).dot(n);
+          if (gap < 24) { p.addScaledVector(n, 24 - gap); moved = true; }
+        }
+        if (moved) at = p;
+      }
+    }
+    return at;
+  }
+
+  /** With a map: how high its floor is under a point (view units; looked for from a step above `y` down), or null (no map, nothing under). */
+  groundAt(x: number, y: number, z: number): number | null {
+    if (!this.world?.visible || !this.worldRaycast) return null;
+    const hit = this.worldRaycast(new THREE.Vector3(x, y + 20, z), new THREE.Vector3(0, -1, 0), 8192);
+    return hit ? hit.point.y : null;
   }
 
   /** The splash of a drink at the can (the lunchbox's `drink_spray` attachment). */
@@ -1867,6 +1893,11 @@ void main() {
     if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return null;
     const ray = new THREE.Raycaster();
     ray.setFromCamera(new THREE.Vector2((clientX - rect.left) / rect.width * 2 - 1, 1 - (clientY - rect.top) / rect.height * 2), this.camera);
+    // with a map: the surface of the map under the pointer (a floor, a ledge, a roof)
+    if (this.world?.visible && this.worldRaycast) {
+      const hit = this.worldRaycast(ray.ray.origin, ray.ray.direction, this.camera.far);
+      if (hit) return hit.point;
+    }
     return ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -y), new THREE.Vector3());
   }
 
@@ -3131,6 +3162,8 @@ void main() {
   private worldFar = 0;
   /** The grid was on when a map came in (it comes back when the map goes). */
   private gridHiddenForWorld = false;
+  /** What a ray meets in the map (see MapScene.raycast); null: no map. */
+  worldRaycast: ((origin: THREE.Vector3, dir: THREE.Vector3, max: number) => { point: THREE.Vector3; normal: THREE.Vector3; distance: number } | null) | null = null;
   setWorld(world: THREE.Object3D | null, far = 0) {
     if (this.world && this.world !== world) this.scene.remove(this.world);
     this.world = world;

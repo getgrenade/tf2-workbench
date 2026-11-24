@@ -3931,6 +3931,7 @@ export function createViewTab(els: Els) {
         const at = v.collidePlayer(new THREE.Vector3(x, y, z), new THREE.Vector3(vx, 0, vz));
         return at ? { x: at.x, z: at.z } : null;
       },
+      ground: (x, y, z) => v.groundAt(x, y, z),
       setHeldHidden: (hidden) => e.actor.setHeldHidden(hidden),
       onMeal: (event, profile) => {
         const c = profile.consumable;
@@ -8354,6 +8355,7 @@ export function createViewTab(els: Els) {
     const map = new MapScene(name);
     worldMap = map;
     v.setWorld(map.group, 1e5);
+    v.worldRaycast = (o, d, max) => map.raycast(o, d, max);
     // every frame: the eye for its reflections, the characters' shadow on its floors, and (now and then) its light where they stand
     let lightAsked = 0;
     let lightAt: THREE.Vector3 | null = null;
@@ -8414,6 +8416,7 @@ export function createViewTab(els: Els) {
     mapStatus = "";
     viewer?.setWorld(null);
     viewer?.setWorldLight(null);
+    if (viewer) viewer.worldRaycast = null;
     syncMapRow();
     if (skyBeforeMap) {
       const before = skyBeforeMap;
@@ -8599,7 +8602,7 @@ export function createViewTab(els: Els) {
     const e = newEntity(v.addActor(), cls, 0);
     e.group = hierarchy().activeGroup();
     const place = (at ? v.floorPointAt(at.clientX, at.clientY) : null) ?? v.floorInFront();
-    v.placeActorAt(e.actor, place.x, 0, place.z);
+    v.placeActorAt(e.actor, place.x, place.y, place.z);
     entities.push(e);
     selected = e;
     soleSelection(e);
@@ -8609,7 +8612,7 @@ export function createViewTab(els: Els) {
     recordAdd("Add prop", [{ kind: "character", id: String(e.id) }]);
     await show(e, e.cls);
     // it stands on the floor, wherever the model keeps its origin
-    v.placeActorAt(e.actor, place.x, -e.actor.bindMinY, place.z);
+    v.placeActorAt(e.actor, place.x, place.y - e.actor.bindMinY, place.z);
   }
 
   async function addBuilding(kind: BuildingKind) {
