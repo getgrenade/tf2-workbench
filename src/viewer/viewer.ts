@@ -4305,9 +4305,13 @@ void main() {
   async captureIcon(actor: Actor): Promise<Uint8Array> {
     const size = { w: 512, h: 512 };
     this.camera.updateMatrixWorld(true);
-    const camera = new THREE.PerspectiveCamera(this.camera.fov, 1, this.camera.near, this.camera.far);
-    camera.position.copy(this.camera.position);
-    camera.quaternion.copy(this.camera.quaternion);
+    // the view's camera as it is (orthographic too, with its zoom: a perspective camera at its place would frame something else), made square:
+    // the square the view's full height shows, as the studio's frame has it
+    const camera = new ViewportCamera();
+    camera.copy(this.camera);
+    camera.clearViewOffset();
+    camera.aspect = 1;
+    camera.updateProjectionMatrix();
     camera.updateMatrixWorld(true);
     const color = await this.capture(1, false, { size, camera, only: actor });
     const mask = await this.capture(1, true, { size, camera, only: actor });
