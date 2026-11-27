@@ -256,7 +256,8 @@ export class SourceMaterials {
       fragmentShader,
       wireframe: this.wireframe,
       side: flag("$nocull") ? THREE.DoubleSide : THREE.FrontSide,
-      transparent: blended || additive,
+      // (a cloaking Spy is see-through, still writing depth so his far side stays hidden)
+      transparent: blended || additive || !!fx?.cloak,
       // a translucent material does not write depth in the engine: what lies behind it (the pupil under the glass of Sight for Sore Eyes) is drawn through it, whatever order the triangles come in
       ...(blended ? { depthWrite: false } : {}),
       // $additive adds the colour to the frame without writing depth. The engine blends it as SRC_ALPHA, ONE (BT_BLENDADD) only when
@@ -335,6 +336,8 @@ export class SourceMaterials {
         uModulation: { value: new THREE.Vector3(modulation[0], modulation[1], modulation[2]) },
         uUvXf: { value: new THREE.Matrix3().set(xf?.[0] ?? 1, xf?.[1] ?? 0, xf?.[2] ?? 0, xf?.[3] ?? 0, xf?.[4] ?? 1, xf?.[5] ?? 0, 0, 0, 1) },
         uGray: { value: fx?.gray ? 1 : 0 },
+        uCloak: { value: fx?.cloak ?? 0 },
+        uCloakTint: { value: new THREE.Vector3(...(fx?.cloakTint ?? [1, 1, 1])) },
         uBlendTint: { value: blendTint },
         uTintReplace: { value: num("$blendtintcoloroverbase", 0) },
         uSelfIllum: { value: selfIllum },

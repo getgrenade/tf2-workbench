@@ -50,6 +50,8 @@ export interface SceneEntity {
   lod?: number;
   /** Player conditions switched on (Ubercharge, Jarate, ...); see conditions.ts. */
   conditions?: Conditions;
+  /** How far the Cloak effect has a Spy gone (0..1). */
+  cloak?: number;
   /** Drawn in plain grey (RGB 115; the GRAY switch of the properties). */
   gray?: boolean;
   /** Authored visibility group ids; scenes without bodyMaskVersion use the older anatomical regions. */
@@ -164,6 +166,7 @@ export function parseScene(text: string): SceneFile {
       bodyShown: Array.isArray(e.bodyShown) ? e.bodyShown.filter((k: unknown) => typeof k === "string") : undefined,
       bodyMaskVersion: e.bodyMaskVersion === 1 ? 1 : undefined,
       conditions: e.conditions && typeof e.conditions === "object" ? parseConditions(e.conditions) : undefined,
+      ...(isNum(e.cloak) ? { cloak: Math.max(0, Math.min(1, e.cloak)) } : {}),
       lod: isNum(e.lod) && e.lod >= 1 && e.lod <= 7 ? Math.floor(e.lod) : undefined,
       bodygroups: e.bodygroups && typeof e.bodygroups === "object" ? Object.fromEntries(Object.entries(e.bodygroups).filter(([, v]) => isNum(v))) : undefined,
       flex: e.flex && typeof e.flex === "object" ? Object.fromEntries(Object.entries(e.flex).filter(([, v]) => isNum(v))) : {},

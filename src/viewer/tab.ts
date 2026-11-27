@@ -2340,6 +2340,28 @@ export function createViewTab(els: Els) {
       b.onclick = () => setCondition(e, key, !e.actor.conditions[key]);
       condBox.appendChild(b);
     }
+    // how far a cloaked Spy is gone: half way shows his outline, all the way leaves nothing
+    if (e.actor.conditions.cloak) {
+      const row = document.createElement("label");
+      row.className = "cloakAmount";
+      row.title = "How far the character is cloaked: the middle goes first, the outline last";
+      const name = document.createElement("span");
+      name.textContent = "Cloak";
+      const range = document.createElement("input");
+      range.type = "range";
+      range.min = "0";
+      range.max = "100";
+      range.value = String(Math.round(e.actor.cloakAmount * 100));
+      const value = document.createElement("span");
+      value.className = "dim";
+      value.textContent = `${range.value}%`;
+      range.oninput = () => {
+        value.textContent = `${range.value}%`;
+        for (const t of entities.filter((x) => x === e || (multi.has(x.id) && x.actor.conditions.cloak))) t.actor.setCloakAmount(Number(range.value) / 100);
+      };
+      row.append(name, range, value);
+      condBox.appendChild(row);
+    }
   }
 
   /** Loads the Ubercharge materials when a character needs them, and starts or stops the particles of its conditions. */
@@ -7401,6 +7423,7 @@ export function createViewTab(els: Els) {
         bodygroups: e.bodyManual.size ? Object.fromEntries(e.bodyManual) : undefined,
         lod: e.lod > 0 ? e.lod : undefined,
         conditions: anyCondition(e.actor.conditions) ? { ...e.actor.conditions } : undefined,
+        ...(e.actor.conditions.cloak ? { cloak: e.actor.cloakAmount } : {}),
         gray: e.actor.gray || undefined,
         bodyShown: e.actor.partsHidden ? [...e.actor.visibleRegions] : undefined,
         bodyMaskVersion: 1,
@@ -7456,6 +7479,7 @@ export function createViewTab(els: Els) {
       e.actor.setEyesFollowCamera(s.eyesFollowCamera === true);
       if (s.bodyShown) e.actor.setVisibleRegions(s.bodyShown, s.bodyMaskVersion !== 1);
       else if (s.inspectOnly) e.actor.setVisibleRegions([]); // scenes saved before the parts picker showed no body
+      if (typeof s.cloak === "number") e.actor.setCloakAmount(s.cloak);
       if (s.conditions) e.actor.setConditions(s.conditions); // the materials follow when the model shows; syncConditions starts the rest
       if (s.gray) e.actor.setGray(true);
       e.lod = s.lod ?? 0;

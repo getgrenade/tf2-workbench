@@ -12,7 +12,11 @@ test("conditions are parsed strictly and say what they change", () => {
   assert.deepEqual(parseConditions({ uber: true, urine: "yes", nonsense: true }), { ...NO_CONDITIONS, uber: true });
   assert.equal(anyCondition(NO_CONDITIONS), false);
   assert.equal(anyCondition({ ...NO_CONDITIONS, crit: true }), true);
-  assert.equal(CONDITION_KEYS.length, 7);
+  assert.equal(CONDITION_KEYS.length, 8);
+  // a cloaked Spy: his materials' cloak factor (half way by default) and the team's tint of what shows through him
+  assert.deepEqual(materialEffects({ ...NO_CONDITIONS, cloak: true }, 0), { cloak: 0.5, cloakTint: [1, 0.5, 0.4] });
+  assert.equal(materialEffects({ ...NO_CONDITIONS, cloak: true }, 1, 0.8)!.cloak, 0.8);
+  assert.equal(materialEffects({ ...NO_CONDITIONS, cloak: true }, 1, 0), undefined);
   assert.equal(materialEffects(NO_CONDITIONS, 0), undefined);
   assert.deepEqual(materialEffects({ ...NO_CONDITIONS, urine: true }, 0)!.yellow, [6, 9, 2]);
   assert.deepEqual(materialEffects({ ...NO_CONDITIONS, urine: true }, 1)!.yellow, [7, 5, 1]);
