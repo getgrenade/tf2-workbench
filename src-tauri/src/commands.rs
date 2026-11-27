@@ -1060,6 +1060,26 @@ pub fn remove_promo(app: tauri::AppHandle, id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Deletes the images of a kept promo board that its `board.json` no longer names (`keep`): a shot taken again, a layer rasterized or
+/// deleted, leaves its old image behind. Only the board's own `image-*.png` files are touched. Returns how many were deleted.
+#[tauri::command]
+pub fn prune_promo(app: tauri::AppHandle, id: String, keep: Vec<String>) -> Result<usize, String> {
+    let dir = promo_path(&app, &id, None)?;
+    let Ok(entries) = std::fs::read_dir(&dir) else { return Ok(0) };
+    let keep: std::collections::HashSet<String> = keep.into_iter().collect();
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let Some(name) = entry.file_name().to_str().map(String::from) else { continue };
+        if !(name.starts_with("image-") && name.ends_with(".png")) || keep.contains(&name) || !entry.path().is_file() {
+            continue;
+        }
+        if std::fs::remove_file(entry.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
 /// The folder of the saved poses: `poses` next to the program, so the folder travels with the app and poses can be shared by copying
 /// files in and out of it. When that place cannot be written to (a program installed under Program Files, say) the app's config
 /// folder is used instead. Poses saved there by earlier versions are copied over once.

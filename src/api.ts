@@ -279,6 +279,8 @@ export const savePromoFile = (id: string, name: string, bytes: Uint8Array) =>
 export const readPromoFile = (id: string, name: string) => invoke<ArrayBuffer>("read_promo_file", { id, name });
 export const listPromos = () => invoke<string[]>("list_promos");
 export const removePromo = (id: string) => invoke<void>("remove_promo", { id });
+/** Deletes a kept board's images that are not in `keep` (the files its board.json names); resolves to how many were deleted. */
+export const prunePromo = (id: string, keep: string[]) => invoke<number>("prune_promo", { id, keep });
 
 /** The pose library (files in the app's config folder): names newest first, save, load and delete. */
 /** Rescans the workshop importer's zips (tf/workshop/import_source) without reindexing the game. */

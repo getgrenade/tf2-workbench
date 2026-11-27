@@ -3,7 +3,7 @@
  * (the pictures, their layers and shots, and the set) and the layers' images as PNG files. A board is written a moment after it
  * changes, images only when they are new (a shot taken again), and read back at startup beside the scenes of the last session.
  */
-import { listPromos, readPromoFile, removePromo, savePromoFile } from "../api";
+import { listPromos, prunePromo, readPromoFile, removePromo, savePromoFile } from "../api";
 import type { Backdrop, ChartCellRect, ChartSpec, LayerBlend, OverlaySpec, PromoLayer, PromoPicture, ShotSpec, TextSpec } from "./promo";
 import { shadowApart, shadowOf, solidOf } from "./promo";
 import { parseMask, partsOf, type LayerMask } from "./promoMask";
@@ -148,7 +148,12 @@ export interface LoadedBoard {
 /** Reads a board back: its pictures with their images; linked layers get one shot and one image again. */
 export async function loadBoard(id: string): Promise<LoadedBoard> {
   const saved = JSON.parse(new TextDecoder().decode(await readPromoFile(id, "board.json"))) as SavedBoard;
-  return { id, saved, ...(await boardPictures(saved, (name) => readPromoFile(id, name))) };
+  const loaded = { id, saved, ...(await boardPictures(saved, (name) => readPromoFile(id, name))) };
+  // the images it no longer names are deleted (the old image of a shot taken again, of a layer rasterized or deleted): read back whole, no
+  // undo can bring them back any more
+  const keep = saved.pictures.flatMap((p) => p.layers.flatMap((l) => [l.image, l.parts, l.solid, l.shadow])).filter((n): n is string => !!n);
+  void prunePromo(id, keep).catch((err) => console.warn(`could not tidy the promo board ${id}:`, err));
+  return loaded;
 }
 
 /** A board's pictures from its JSON, its images read with `get`. */

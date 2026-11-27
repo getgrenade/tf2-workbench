@@ -96,6 +96,7 @@ fn main() {
             commands::read_promo_file,
             commands::list_promos,
             commands::remove_promo,
+            commands::prune_promo,
             commands::refresh_workshop,
             commands::mount_item_zips,
             commands::list_maps,
