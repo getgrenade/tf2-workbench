@@ -157,16 +157,19 @@ const HEADS_KEY = "tf2workbench.headsLayout";
 const modelPath = (e: { cls: string; hwm?: boolean }, cls = e.cls) => (e.hwm && CLASSES.some(([, m]) => m === cls) ? `models/player/hwm/${cls}.mdl` : classPath(cls));
 
 const CLASSES: [label: string, mdl: string, gameClass: string][] = [
-  ["Soldier", "soldier", "soldier"],
+  // (the game's own order: the class menu's and the scoreboard's)
   ["Scout", "scout", "scout"],
-  ["Sniper", "sniper", "sniper"],
-  ["Demoman", "demo", "demoman"],
-  ["Medic", "medic", "medic"],
-  ["Heavy", "heavy", "heavy"],
+  ["Soldier", "soldier", "soldier"],
   ["Pyro", "pyro", "pyro"],
-  ["Spy", "spy", "spy"],
+  ["Demoman", "demo", "demoman"],
+  ["Heavy", "heavy", "heavy"],
   ["Engineer", "engineer", "engineer"],
+  ["Medic", "medic", "medic"],
+  ["Sniper", "sniper", "sniper"],
+  ["Spy", "spy", "spy"],
 ];
+/** The class a new character starts as (a new scene's single Soldier). */
+const DEFAULT_CLASS = "soldier";
 
 interface Els {
   wrap: HTMLElement;
@@ -3929,9 +3932,9 @@ export function createViewTab(els: Els) {
 
   /** Adds a character next to the others, of the selected one's class and team, and selects it. */
   /** `inPlace`: the copy takes the place, turn and size of the one it copies (a paste), instead of a free spot in the row. */
-  /** The class a new character has: the selected one's when that is a merc, else the first class. */
+  /** The class a new character has: the selected one's when that is a merc, else a Soldier. */
   function addedClass(): string {
-    return selected && CLASSES.some(([, m]) => m === selected!.cls) ? selected.cls : CLASSES[0][1];
+    return selected && CLASSES.some(([, m]) => m === selected!.cls) ? selected.cls : DEFAULT_CLASS;
   }
 
   /** With `at` (a point of the view, where an entry of the Add menu was dropped) the character stands on the floor there. */
@@ -3941,10 +3944,10 @@ export function createViewTab(els: Els) {
     if (base) saveUi(base);
     const copiedPose = copy && base ? base.actor.snapshotCustomPose() : null;
     const pose = copiedPose && base ? { ...copiedPose, bones: base.actor.boneNames, editing: base.actor.isPosing } : undefined;
-    // a character is a merc: of the selected one's class, unless that is no merc (an NPC, a building, a prop), when it is the first class;
+    // a character is a merc: of the selected one's class, unless that is no merc (an NPC, a building, a prop), when it is a Soldier;
     // Ctrl copies whatever is selected
     const merc = base && (copy || CLASSES.some(([, m]) => m === base.cls)) ? base : null;
-    const e = newEntity(v.addActor(), merc?.cls ?? CLASSES[0][1], merc?.team ?? 0);
+    const e = newEntity(v.addActor(), merc?.cls ?? DEFAULT_CLASS, merc?.team ?? 0);
     const dropAt = at ? v.floorPointAt(at.clientX, at.clientY) : null;
     if (dropAt) v.placeActorAt(e.actor, dropAt.x, 0, dropAt.z);
     e.group = hierarchy().activeGroup() ?? (copy ? base?.group : undefined);
@@ -7519,7 +7522,7 @@ export function createViewTab(els: Els) {
 
   /** A board of one blank page (the board's backdrop and border, nothing on it), for the selected character's class, to fill by hand. */
   function newBlankBoard(show = true): PromoSession | null {
-    const cls = selected && !isBuildingCls(selected.cls) ? selected.cls : CLASSES[0][1];
+    const cls = selected && !isBuildingCls(selected.cls) ? selected.cls : DEFAULT_CLASS;
     const mine = newSession("Custom board", [], cls);
     sessions.add(mine);
     const pictures: PromoPicture[] = [{ name: "Page_1", kind: "Page 1", w: 1920, h: 1080, layers: [], texts: [], backdrop: null }];
@@ -8233,7 +8236,7 @@ export function createViewTab(els: Els) {
     selected = null;
     gizmoEntity = null;
     v.setActorGizmo(null);
-    const e = newEntity(v.addActor(), CLASSES[0][1], 0);
+    const e = newEntity(v.addActor(), DEFAULT_CLASS, 0);
     entities.push(e);
     selected = e;
     v.select(e.actor);
@@ -8308,7 +8311,7 @@ export function createViewTab(els: Els) {
   async function inspectItem(item: ItemInfo, weapon: boolean) {
     const current = selected;
     const usable = (cls: string) => itemUsableBy(item, gameClassOf(cls));
-    const cls = current && usable(current.cls) ? current.cls : CLASSES.find((c) => itemUsableBy(item, c[2]))?.[1] ?? current?.cls ?? CLASSES[0][1];
+    const cls = current && usable(current.cls) ? current.cls : CLASSES.find((c) => itemUsableBy(item, c[2]))?.[1] ?? current?.cls ?? DEFAULT_CLASS;
     const team = current?.team ?? 0;
     await openTab(null, item.displayName, undefined, async () => {
       const v = ensureViewer();
@@ -9071,7 +9074,7 @@ export function createViewTab(els: Els) {
     }
     await restoreBoards();
     if (entities.length === 0) {
-      const e = newEntity(v.addActor(), CLASSES[0][1], 0);
+      const e = newEntity(v.addActor(), DEFAULT_CLASS, 0);
       entities.push(e);
       selected = e;
       restoreUi(e);
