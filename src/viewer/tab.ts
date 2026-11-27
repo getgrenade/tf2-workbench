@@ -83,6 +83,7 @@ import { EXPORT_SIZES, boardShotEffects, showBoard, type BoardHost, type ShownBo
 import { boardFileText, forgetBoard, loadBoards, readBoardFile, saveBoard, type Written } from "./promoStore";
 import type { PaintChartOpts } from "./viewer";
 import { isJunkSequence } from "./sequenceFilter";
+import { weaponForSequence } from "./sequenceWeapon";
 import { paramsToSetup } from "../compiler/jiggleBones";
 import { turnTowards } from "../compiler/boneAxes";
 import type { JiggleParams } from "./jiggle";
@@ -370,6 +371,8 @@ interface Entity {
   tauntFxToken?: number;
   /** What the character played before a taunt was picked (it comes back when the taunt is put away). */
   beforeTaunt?: SavedAnimation;
+  /** The held weapon is the stock stand-in of the sequence picked (see holdForSequence), not one picked by hand. */
+  autoHeld?: boolean;
 }
 
 /** The "Viewer" tab: class picker, light controls and the 3D view. */
@@ -698,7 +701,27 @@ export function createViewTab(els: Els) {
       if (e.held?.workshop && e.held.slot === "taunt") void applyLoadout(e, e.applied);
       else anim.rebake(e.actor, e.anim);
     }
+  }, (actor, sequence) => {
+    const e = entities.find((x) => x.actor === actor);
+    if (e) void holdForSequence(e, sequence);
   });
+  /**
+   * With Settings → Hold a weapon for weapon animations on, a sequence picked from the list that is played with a weapon (stand_PRIMARY,
+   * run_MELEE_ALLCLASS, a competitive pose) puts the weapon of its animation set (see sequenceWeapon.ts) in the hands when they are empty; it is the character's until another sequence is picked (one of another slot
+   * swaps it for that slot's, one of none puts it away). A weapon picked by hand is never touched, and picking one ends the stand-in.
+   */
+  async function holdForSequence(e: Entity, sequence: string) {
+    if (!settings().autoStockWeapon || isBuildingCls(e.cls) || (e.held && !e.autoHeld)) return;
+    const game = gameClassOf(e.cls);
+    const db = await loadItemDb();
+    const stock = weaponForSequence(db.weapons, sequence, game);
+    if ((stock?.id ?? null) === (e.held?.id ?? null)) return;
+    if (e.held && !e.autoHeld) return; // (a weapon was picked by hand while the catalog loaded)
+    e.held = stock;
+    e.autoHeld = !!stock;
+    if (e === selected) weapons.load(stock);
+    await applyLoadout(e, e.applied); // (the sequence picked stays: no idle is switched to)
+  }
   const flex = createFlexUi(els.flex, (globals) => {
     selected?.actor.setFlexControllers(globals);
     selected?.face?.touch(); // paused, the sliders are the face; it is theirs now
@@ -1215,6 +1238,7 @@ export function createViewTab(els: Els) {
   function playWeaponAnimation(e: Entity, weapon: ItemInfo | null) {
     const cls = gameClassOf(e.cls);
     if (!weapon || !itemUsableBy(weapon, cls)) return;
+    if (e.autoHeld && weapon === e.held) return; // (held for the sequence picked, which keeps playing)
     if ((weapon.workshop && weapon.slot === "taunt") || e.anim.targetPath) return;
     // A taunt plays its own animation (always, it is the point of picking one) instead of a weapon idle.
     const taunt = weapon.slot === "taunt" ? tauntSequence(weapon.tauntScenes[cls] ?? "", cls, anim.sequenceNames(e.anim), itemModelFor(weapon, cls) ?? undefined) : null;
@@ -1227,6 +1251,7 @@ export function createViewTab(els: Els) {
     changed: (weapon, picked) => {
       const e = selected;
       if (!picked || !e) return; // class switches reapply the loadout through the cosmetics browser
+      e.autoHeld = false; // a weapon picked (or put away) by hand: the stock stand-in of a sequence is over
       const wasTaunt = e.held?.slot === "taunt";
       // a taunt is picked: what the character was playing is kept, to go back to when the taunt is put away
       if (weapon?.slot === "taunt" && !wasTaunt && !e.actor.isPosing && !e.actor.holdsPose) e.beforeTaunt = animationOf(e);

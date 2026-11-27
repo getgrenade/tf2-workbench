@@ -17,6 +17,7 @@ export interface Settings {
   matchHlmvColors: boolean;
   /** Picking a weapon switches the animation to the matching stand_* sequence. */
   autoWeaponAnimation: boolean;
+  autoStockWeapon: boolean;
   /** Smooth camera movement and navigation-axis transitions. */
   cameraSmoothing: boolean;
   /** Leaving a camera's view puts the viewport back where it was before entering it. */

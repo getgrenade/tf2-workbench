@@ -70,7 +70,7 @@ export async function bakeClip(path: string, seq: number, params: number[], targ
  * side (port of the SDK's bone setup) at their native frame rate and played back by the viewer. Each character keeps its own
  * {@link AnimState}; `show` switches the controls over to another one.
  */
-export function createAnimUi(els: AnimEls, getViewer: () => Viewer | null, getActor: () => Actor | null, getAllActors: () => Actor[] = () => [], onBlendChange: () => void = () => {}) {
+export function createAnimUi(els: AnimEls, getViewer: () => Viewer | null, getActor: () => Actor | null, getAllActors: () => Actor[] = () => [], onBlendChange: () => void = () => {}, onPicked: (actor: Actor, sequence: string) => void = () => {}) {
   const infos = new Map<string, AnimInfo>();
   /** The state the controls edit (the selected character's). */
   let cur: AnimState = newAnimState();
@@ -276,7 +276,10 @@ export function createAnimUi(els: AnimEls, getViewer: () => Viewer | null, getAc
   };
   els.list.onchange = () => {
     const actor = getActor();
-    if (actor) select(actor, cur, Number(els.list.value));
+    if (!actor) return;
+    select(actor, cur, Number(els.list.value));
+    // (a sequence the user picked from the list, not one a weapon or a taunt switched to)
+    onPicked(actor, cur.info?.sequences.find((s) => s.index === Number(els.list.value))?.name ?? "");
   };
   els.play.title = "Play or pause. Ctrl+click plays or pauses every character at once (to start several taunts together).";
   els.play.onclick = (event) => {

@@ -9,3 +9,4 @@ const JUNK = /aimmatrix|gesture|reload|ragdoll|attack_?swim|attackstand|attackcr
 export function isJunkSequence(name: string): boolean {
   return JUNK.test(name);
 }
+

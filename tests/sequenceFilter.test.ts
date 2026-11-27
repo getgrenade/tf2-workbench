@@ -10,3 +10,4 @@ test("the sequences of no use for showing a character are junk", () => {
 test("the ones that show a character are not", () => {
   for (const name of ["stand_PRIMARY", "run_MELEE", "taunt03", "Crouch_SECONDARY", "ref", "jump_float_melee", "layer_taunt03", "stand_MELEE_ALLCLASS", "Attack_Stand_MELEE", "latest_taunt", "airwalk_PRIMARY", "stand_MELEE", "run_MELEE", "Melee_idle"]) assert.equal(isJunkSequence(name), false, name);
 });
+

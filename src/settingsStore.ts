@@ -5,6 +5,7 @@ import { setHotkeyOverrides } from "./hotkeys";
 export const DEFAULTS: Settings = {
   matchHlmvColors: true,
   autoWeaponAnimation: true,
+  autoStockWeapon: false,
   cameraSmoothing: true,
   restoreViewportOnCameraExit: false,
   playHitReactions:true,
