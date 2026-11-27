@@ -16,6 +16,7 @@ import { bodyMaskTexture } from "./bodyMasks";
 import { PoseHistory, clonePose, poseToClip, sampleClip, type PoseData } from "./poseRig";
 import type { Rgb } from "./proxies";
 import { DEFAULT_CLOAK, NO_CONDITIONS, anyCondition, materialEffects, type Conditions } from "./conditions";
+import { sheenFrame } from "./killstreak";
 import type { SourceMaterials } from "./sourceMaterials";
 
 /** A mesh whose vertices follow the flex weights of the model it belongs to. */
@@ -1017,6 +1018,7 @@ export class Actor {
     this.boneOverride.clear();
     const classIndex = new Map(this.classData.bones.map((b, i) => [b.name.toLowerCase(), i]));
     for (const [index, { data, paint, skin, clip, idle, loop }] of list.entries()) {
+      let weaponFrame: ReturnType<typeof sheenFrame> | undefined;
       const rig = new Rig(data.bones);
       const bones = data.bones.map((info) => {
         const b = new THREE.Bone();
@@ -1049,6 +1051,8 @@ export class Actor {
           const material = this.ctx.mats.material(this.materials.get(path) ?? null, undefined, paint);
           const mesh = this.makeSkinnedMesh(m, material, skeleton, data, this.flexCosmetic);
           mesh.userData.source = { data: this.materials.get(path) ?? null, paint, skins: override ? [override] : m.materials, base: override ?? m.material };
+          // (the held weapon's meshes: a killstreak's sheen sweeps along its length, see setSheen)
+          if (list[index].weapon) mesh.userData.sheenFrame = weaponFrame ??= sheenFrame(data);
           mesh.userData.cosmeticSlot = index + 1; // 1.. in the order of the list; 0 / unset is the class's own mesh
           // (what hiding by hand keys the item's triangles by: the same item keeps them when it is rebuilt)
           mesh.userData.meshData = m;
@@ -1063,6 +1067,37 @@ export class Actor {
     this.updateCosmetics();
     if (this.heldHidden) this.applyHeldHidden();
     if (anyCondition(this.conditions)) this.applyConditions();
+    this.applySheen();
+    this.changed = true;
+  }
+
+  /** The sheen of the held weapon's killstreak (null: none): its colour, whether it is an Australium's, and the wait between sweeps. */
+  private sheen: { tint: Rgb; index: number; wait: number; speed?: number } | null = null;
+  setSheen(sheen: { tint: Rgb; index: number; wait: number; speed?: number } | null) {
+    if (JSON.stringify(sheen) === JSON.stringify(this.sheen)) return;
+    this.sheen = sheen;
+    this.applySheen();
+  }
+
+  /** Gives the held weapon's meshes the sheen pass over them (a mesh of their own on the same geometry and skeleton), or takes it off. */
+  private applySheen() {
+    const meshes: THREE.SkinnedMesh[] = [];
+    this.cosmeticGroup?.traverse((o) => { if (o instanceof THREE.SkinnedMesh && o.userData.sheenFrame) meshes.push(o); });
+    for (const mesh of meshes) {
+      for (const child of [...mesh.children]) if (child.userData.sheenPass) mesh.remove(child);
+      const frame = mesh.userData.sheenFrame as ReturnType<typeof sheenFrame>;
+      const source = mesh.userData.source as { data: MaterialData | null } | undefined;
+      const material = this.sheen ? this.ctx.mats.sheenMaterial(source?.data ?? null, { ...this.sheen, ...frame }) : null;
+      if (!material) continue;
+      const pass = new THREE.SkinnedMesh(mesh.geometry, material);
+      pass.bindMode = mesh.bindMode;
+      pass.bind(mesh.skeleton, mesh.bindMatrix);
+      pass.frustumCulled = false;
+      pass.renderOrder = 1;
+      pass.userData.sheenPass = true;
+      pass.raycast = () => {}; // (clicks go to the weapon under it)
+      mesh.add(pass);
+    }
     this.changed = true;
   }
 

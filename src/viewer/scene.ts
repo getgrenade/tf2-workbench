@@ -11,6 +11,7 @@ import { parseRimLight, type RimLightState } from "./rimLight";
 import { parseUnusualSettings, type UnusualSettings } from "./particles/assets";
 import { parseWeaponSnapshot, type WeaponParticleSnapshot } from "./particles/weaponSnapshot";
 import { parseConditions, type Conditions } from "./conditions";
+import { parseKillstreak, type Killstreak } from "./killstreak";
 import { parseCameras, type CameraCollection } from "./cameraData";
 import { readFx, type BuildingFx } from "./buildingFx";
 import { parseGroups, type HierarchyGroup } from "./hierarchyTree";
@@ -34,6 +35,8 @@ export interface SceneEntity {
   activeItem: number | null;
   /** The held weapon or taunt. */
   held: number | null;
+  /** The killstreaks of its weapons, by item id (see killstreak.ts). */
+  killstreaks?: Record<string, Killstreak>;
   /** Flex controller values by name. */
   flex: Record<string, number>;
   anim: { sequence: string | null; encoded: number[] };
@@ -157,6 +160,11 @@ export function parseScene(text: string): SceneFile {
         : [],
       activeItem: isNum(e.activeItem) ? e.activeItem : null,
       held: isNum(e.held) ? e.held : null,
+      ...(() => {
+        const out: Record<string, Killstreak> = {};
+        if (e.killstreaks && typeof e.killstreaks === "object") for (const [id, k] of Object.entries(e.killstreaks as object)) { const v = parseKillstreak(k); if (v && /^\d+$/.test(id)) out[id] = v; }
+        return Object.keys(out).length ? { killstreaks: out } : {};
+      })(),
       inspectOnly: e.inspectOnly === true ? true : undefined,
       bodyTris: e.bodyTris && typeof e.bodyTris === "object" ? Object.fromEntries(Object.entries(e.bodyTris).filter(([, v]) => typeof v === "string")) : undefined,
       itemTris: e.itemTris && typeof e.itemTris === "object" ? Object.fromEntries(Object.entries(e.itemTris).filter(([, v]) => typeof v === "string")) : undefined,

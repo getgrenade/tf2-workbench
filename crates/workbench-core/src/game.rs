@@ -356,8 +356,12 @@ pub fn unusual_effects(vpk: &VpkSet) -> Result<Vec<UnusualEffectDto>, String> {
     }
     let mut result = Vec::new();
     // ("other": the effects some items always show, such as the Cheater's Lament's halo; not offered as an unusual effect, but found by id)
-    for (category, kind) in [("cosmetic_unusual_effects", "hat"), ("taunt_unusual_effects", "taunt"), ("other_particles", "other")] {
-        let entries = kv::find(particles, category).and_then(kv::Node::block).ok_or("Missing unusual category")?;
+    // ("killstreak_eyeglows": a Professional Killstreak's eye effects, found by system as the items' own are)
+    for (category, kind) in [("cosmetic_unusual_effects", "hat"), ("taunt_unusual_effects", "taunt"), ("other_particles", "other"), ("killstreak_eyeglows", "other")] {
+        let Some(entries) = kv::find(particles, category).and_then(kv::Node::block) else {
+            if category == "killstreak_eyeglows" { continue; }
+            return Err("Missing unusual category".into());
+        };
         for entry in entries {
             let Ok(id) = entry.key.parse::<u32>() else { continue; };
             let Some(system) = entry.block().and_then(|b| kv::find(b, "system")).and_then(kv::Node::as_str) else { continue; };

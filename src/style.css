@@ -1566,3 +1566,12 @@ body.dndActive.dndRefused * { cursor: no-drop !important; }
 /* the Effects panel's Cloak amount, under the toggles while a Spy is cloaked */
 .conditions .cloakAmount { flex: 1 0 100%; display: grid; grid-template-columns: auto 1fr 3.5em; align-items: center; gap: 8px; margin-top: 4px; }
 .conditions .cloakAmount .dim { text-align: right; font-variant-numeric: tabular-nums; }
+/* the Weapons panel's killstreak (Sheen, Killstreaker, streak), under the slot buttons while a weapon is held */
+.killstreakRow { display: flex; flex-direction: column; gap: 4px; padding: 6px 0; border-bottom: 1px solid var(--line, rgba(255, 255, 255, 0.08)); margin-bottom: 4px; }
+.killstreakRow[hidden] { display: none; }
+.killstreakRow > label:not(.ksHigh) { display: grid; grid-template-columns: 82px 1fr; align-items: center; gap: 6px; }
+.killstreakRow > label.ksSpeed { grid-template-columns: 82px 1fr 3.5em; }
+.killstreakRow .ksSpeed .dim { text-align: right; font-variant-numeric: tabular-nums; }
+.killstreakRow > label > span { opacity: 0.75; }
+.killstreakRow select { min-width: 0; width: 100%; }
+.killstreakRow .ksHigh { display: flex; align-items: center; gap: 6px; cursor: pointer; }

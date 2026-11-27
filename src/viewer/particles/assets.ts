@@ -18,7 +18,7 @@ export interface UnusualSettings {
    * The effects the worn items always show, each on its own item (`item` null: on the character's own model, the Spy's cigarette): by
    * effect id, or a system by name at an attachment. Not kept: worked out from what is worn.
    */
-  items?: { item: number | null; effect?: number; system?: string; attachment?: string }[];
+  items?: { item: number | null; effect?: number; system?: string; attachment?: string; colors?: number[] }[];
 }
 export const blankUnusuals = (): UnusualSettings => ({ silver: false, arctic: false, hatItem: null });
 export function parseUnusualSettings(value: unknown): UnusualSettings {

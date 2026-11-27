@@ -382,3 +382,57 @@ ${bodyMaskDiscard}
   #include <colorspace_fragment>
 }
 `;
+
+/**
+ * The weapon sheen pass (weapon_sheen_pass_ps2x.fxc), drawn as the engine draws it: a second pass over the weapon's meshes, blended over
+ * them (SRC_ALPHA, ONE_MINUS_SRC_ALPHA). A hard reflection of the sheen cubemap by the mesh's own normal, tinted and scaled by ten, where
+ * the mask's frame (laid along the weapon in its own space) lets it through. (A pass of its own keeps the material shader within the
+ * sixteen textures a graphics card lets one shader read.)
+ */
+export const sheenVertexShader = /* glsl */ `
+#include <skinning_pars_vertex>
+varying vec3 vModelPos;
+varying vec3 vWorldPos;
+varying vec3 vN;
+void main() {
+  vModelPos = position;
+  vec3 objectNormal = vec3(normal);
+  #include <skinbase_vertex>
+  #include <skinnormal_vertex>
+  vec3 transformed = vec3(position);
+  #include <skinning_vertex>
+  vec4 wp = modelMatrix * vec4(transformed, 1.0);
+  vWorldPos = wp.xyz;
+  vN = mat3(modelMatrix) * objectNormal;
+  gl_Position = projectionMatrix * viewMatrix * wp;
+}
+`;
+
+export const sheenFragmentShader = /* glsl */ `
+uniform float uSheen;
+uniform vec3 uSheenTint;
+uniform float uSheenIndex;
+uniform float uSheenDir;
+uniform vec2 uSheenScale;
+uniform vec2 uSheenOffset;
+uniform samplerCube tSheenCube;
+uniform sampler2D tSheenMask;
+varying vec3 vModelPos;
+varying vec3 vWorldPos;
+varying vec3 vN;
+void main() {
+  if (uSheen < 0.5) discard;
+  vec3 V = normalize(cameraPosition - vWorldPos);
+  vec3 N = normalize(vN);
+  vec3 R = 2.0 * N * dot(N, V) - V;
+  vec3 env = textureCube(tSheenCube, vec3(R.z, R.x, R.y)).rgb * uSheenTint * 10.0;
+  vec2 st = uSheenDir < 0.5 ? vModelPos.zy : (uSheenDir < 1.5 ? vModelPos.zx : vModelPos.yx);
+  st = (st - uSheenOffset) / uSheenScale;
+  st.y = 1.0 - st.y;
+  vec4 mask = texture2D(tSheenMask, st);
+  vec4 sheen = vec4(env * mask.rgb, max(max(env.r, env.g), env.b) * mask.r);
+  if (uSheenIndex > 0.5) sheen *= 1.8;
+  gl_FragColor = vec4(sheen.rgb, clamp(sheen.a, 0.0, 1.0));
+  #include <colorspace_fragment>
+}
+`;

@@ -3,8 +3,10 @@ import { particleBlending } from "./particles/blending";
 import { eyeFragmentShader, eyeVertexShader } from "./eyeShader";
 import { parseColor, parseVec, resolvePhongTint, type EyeballData, type MaterialData, type TextureData } from "./payload";
 import { animationFrame, baseTextureAnimation, evaluateMaterialVars, hasTimeProxies, type FrameAnimation, type MaterialEffects, modulationColor, textureTransform, type Rgb } from "./proxies";
-import { fragmentShader, vertexShader } from "./sourceShader";
-import { loadTextureFrames } from "../api";
+import { fragmentShader, sheenFragmentShader, sheenVertexShader, vertexShader } from "./sourceShader";
+import { loadMaterial, loadTextureFrames } from "../api";
+import { parseMaterial } from "./payload";
+import { CUBEMAP_MATERIAL } from "./reflection";
 
 /** The frames of an animated detail texture from the bytes of `loadTextureFrames`: width, height, count (u32 little endian), then RGBA8 frames. */
 export function parseTextureFrames(buffer: ArrayBuffer): TextureData[] {
@@ -51,6 +53,11 @@ export class SourceMaterials {
   private dynamic: DynamicMaterial[] = [];
   /** Animated detail textures by name, once loaded (null: loading or unavailable). */
   private readonly detailFrames = new Map<string, THREE.Texture[] | null>();
+  /** What every weapon's sheen pass is drawn from (all the game's weapons name the same): the cubemap and the frames of the sweeping mask. */
+  private sheenAssets: { cube: THREE.CubeTexture | null; mask: THREE.Texture[] } | null = null;
+  private sheenLoading: Promise<void> | null = null;
+  /** The materials drawing a sheen, whose mask frame follows the clock. */
+  private sheened: { material: THREE.ShaderMaterial; wait: number; speed: number }[] = [];
   /** Materials shared by every mesh that uses the same VMT and paint (they hold no per-entity state). */
   private cache = new Map<string, THREE.ShaderMaterial>();
 
@@ -154,6 +161,61 @@ export class SourceMaterials {
       this.cache.set(key, mat);
     }
     return mat;
+  }
+
+  /** Starts loading the sheen's cubemap and mask (once): cubemaps/cubemap_sheen001 and effects/animatedsheen/animatedsheen0, as every weapon VMT names them. */
+  private loadSheen(cubeName: string, maskName: string) {
+    this.sheenLoading ??= (async () => {
+      const [cubeData, maskBuffer] = await Promise.all([
+        loadMaterial(CUBEMAP_MATERIAL(cubeName.toLowerCase())).then(parseMaterial),
+        loadTextureFrames(maskName.toLowerCase()),
+      ]);
+      const mask = parseTextureFrames(maskBuffer).map((frame) => {
+        const t = makeTexture(frame, "linear");
+        t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+        return t;
+      });
+      this.sheenAssets = { cube: this.cubemap(cubeData), mask };
+    })().catch((error) => console.error("Weapon sheen unavailable", error));
+  }
+
+  /**
+   * The sheen pass of a killstreak weapon's material (one whose VMT has $sheenpassenabled; null for any other): drawn over the weapon's
+   * mesh by a mesh of its own, sharing its geometry and skeleton. One per sheen (its colour, and where its mask lies on that weapon).
+   */
+  sheenMaterial(m: MaterialData | null, sheen: NonNullable<MaterialEffects["sheen"]>): THREE.ShaderMaterial | null {
+    const p = m?.params ?? {};
+    if (!m || Math.trunc(Number(p["$sheenpassenabled"] ?? 0)) === 0) return null;
+    this.loadSheen(p["$sheenmap"] ?? "cubemaps/cubemap_sheen001", p["$sheenmapmask"] ?? "effects/animatedsheen/animatedsheen0");
+    // (one material per colour and place on the weapon: its timing is set on it, so a speed being dragged does not make new ones)
+    const { wait, speed, ...look } = sheen;
+    const key = `sheen|${JSON.stringify(look)}`;
+    let material = this.cache.get(key);
+    if (!material) {
+      material = new THREE.ShaderMaterial({
+        vertexShader: sheenVertexShader,
+        fragmentShader: sheenFragmentShader,
+        userData: { noShadow: true, shared: true },
+        transparent: true,
+        depthWrite: false,
+        depthFunc: THREE.LessEqualDepth,
+        uniforms: {
+          uSheen: { value: 0 },
+          uSheenTint: { value: new THREE.Vector3(...sheen.tint) },
+          uSheenIndex: { value: sheen.index },
+          uSheenDir: { value: sheen.dir },
+          uSheenScale: { value: new THREE.Vector2(...sheen.scale) },
+          uSheenOffset: { value: new THREE.Vector2(...sheen.offset) },
+          tSheenCube: { value: this.emptyCube },
+          tSheenMask: { value: this.white },
+        },
+      });
+      this.cache.set(key, material);
+      this.sheened.push({ material, wait, speed: speed ?? 1 });
+    }
+    const timing = this.sheened.find((d) => d.material === material);
+    if (timing) { timing.wait = wait; timing.speed = speed ?? 1; }
+    return material;
   }
 
   /** Starts loading the frames of a detail texture (once); materials that use it pick them up on their next update. */
@@ -399,6 +461,21 @@ export class SourceMaterials {
 
   /** Re-runs the time driven proxies and pushes their results into the shader uniforms. */
   updateDynamic(time: number) {
+    // the sheen sweeps at tf_sheen_framerate (25 frames a second) through the mask's frames, then waits (none on a high streak)
+    this.sheened = this.sheened.filter((d) => !d.material.userData.disposed);
+    const sheen = this.sheenAssets;
+    if (sheen?.cube && sheen.mask.length) {
+      for (const { material, wait, speed } of this.sheened) {
+        // (the speed scales the sweep and the wait after it alike)
+        const rate = 25 * speed;
+        const cycle = sheen.mask.length / rate + wait / speed;
+        const frame = Math.floor((((time % cycle) + cycle) % cycle) * rate);
+        const u = material.uniforms;
+        u.uSheen.value = frame < sheen.mask.length ? 1 : 0;
+        u.tSheenCube.value = sheen.cube;
+        u.tSheenMask.value = sheen.mask[Math.min(frame, sheen.mask.length - 1)];
+      }
+    }
     this.dynamic = this.dynamic.filter((d) => !d.material.userData.disposed);
     for (const { material, data, paint, fx, frames, anim, bumpFrames, bumpAnim, detail, detailAnim } of this.dynamic) {
       if (anim && frames.length > 1) material.uniforms.tBase.value = frames[animationFrame(anim, time, frames.length)];

@@ -65,10 +65,10 @@ export class ActorEffects {
       effect.world = !(settings.arctic && !settings.tauntEffect);
       effect.updateFrame();
       // what plays: the hat effect (on the hat picked), the taunt effect, and the effect each worn item always shows (on that item)
-      const lanes: { kind: "hat" | "taunt"; item: number | null; selected: number | undefined; system?: string; attachment?: string; preset: UnusualId | null; chosen: boolean }[] = [
+      const lanes: { kind: "hat" | "taunt"; item: number | null; selected: number | undefined; system?: string; attachment?: string; colors?: number[]; preset: UnusualId | null; chosen: boolean }[] = [
         { kind: "hat", item: settings.hatItem, selected: settings.hatEffect, preset: settings.silver ? "silver" : null, chosen: true },
         { kind: "taunt", item: null, selected: settings.tauntEffect, preset: settings.arctic ? "arctic" : null, chosen: true },
-        ...own.map((x) => ({ kind: "hat" as const, item: x.item, selected: x.effect, system: x.system, attachment: x.attachment, preset: null, chosen: false })),
+        ...own.map((x) => ({ kind: "hat" as const, item: x.item, selected: x.effect, system: x.system, attachment: x.attachment, colors: x.colors, preset: null, chosen: false })),
       ];
       for (const lane of lanes) {
         const { kind, selected } = lane;
@@ -105,7 +105,7 @@ export class ActorEffects {
         };
         // Keep the visually confirmed Arctic backend; new effects use Valve's complete operator set.
         const native = !(settings.arctic && !selected && kind === "taunt")
-          ? await NativeSimulation.create(definitions, queries.controlPoint, onError, file, root, () => nativeHitboxes(actor, model, effect.world ? effect.toWorld : undefined), "refire" in config ? config.refire : 0, [], [], 1, () => [], () => [], () => (effect.world ? floor() : null), (273 + seed) >>> 0) : null;
+          ? await NativeSimulation.create(definitions, queries.controlPoint, onError, file, root, () => nativeHitboxes(actor, model, effect.world ? effect.toWorld : undefined), "refire" in config ? config.refire : 0, [], lane.colors ?? [], 1, () => [], () => [], () => (effect.world ? floor() : null), (273 + seed) >>> 0) : null;
         if (native && id === "silver") effect.nativeSilver = true;
         if (!native) validateDefinitions(definitions, root);
         const sim = native ?? new ParticleSimulation(definitions.get(root)!, definitions, queries, ((selected ?? ("id" in config ? config.id : id === "silver" ? 273 : 3141)) + seed) >>> 0);
