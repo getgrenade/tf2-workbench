@@ -1,6 +1,7 @@
 import type { Settings } from "./api";
 import { attachNumberDrag } from "./viewer/numberDrag";
-import { clearTauntCache, tauntCachePath } from "./api";
+import { clearTauntCache, openReleasePage, tauntCachePath } from "./api";
+import { appVersion, checkForUpdates, RELEASES_PAGE } from "./updates";
 import { loadSettings, onSettingsChange, settings as currentSettings, updateSetting, updateSettings } from "./settingsStore";
 import { DEFAULT_ACCENT, DEFAULT_BASE, normaliseAccent, normaliseBase } from "./theme";
 import { UI_FONTS } from "./uiFont";
@@ -176,6 +177,44 @@ export async function createSettingsUi(root: HTMLElement) {
     return row("Screenshot size", "Relative to the size of the 3D view (very large sizes are capped by the graphics card).", select);
   }
 
+  /** The version this is, and the check for a newer release on GitHub (with a link to it when there is one). */
+  function aboutGroup(): HTMLElement {
+    const check = document.createElement("button");
+    check.type = "button";
+    check.textContent = "Check for updates";
+    const open = document.createElement("button");
+    open.type = "button";
+    open.textContent = "Open releases page";
+    let url = RELEASES_PAGE;
+    open.onclick = () => { void openReleasePage(url).catch((error) => { status.textContent = `Could not open the page: ${String(error)}`; }); };
+    const status = document.createElement("span");
+    status.className = "dim";
+    status.setAttribute("role", "status");
+    const buttons = document.createElement("div");
+    buttons.className = "row2";
+    buttons.append(check, open);
+    const el = row("Version", "The version of TF2 Workbench you are running. Check for updates asks GitHub for the latest release.", buttons);
+    const plain = document.createElement("div"); // (a label would turn a click on the row into a click on the first button)
+    plain.className = el.className;
+    plain.append(...el.childNodes);
+    const version = document.createElement("span");
+    version.className = "dim";
+    version.textContent = "…";
+    plain.querySelector(".setText")!.append(version, status);
+    void appVersion().then((v) => { version.textContent = v ? ` TF2 Workbench ${v}. ` : ""; });
+    check.onclick = async () => {
+      check.disabled = true;
+      status.textContent = "Checking…";
+      try {
+        const result = await checkForUpdates();
+        url = result.url;
+        status.textContent = result.newer ? `A newer version is out: ${result.latest}. Open the releases page to download it.` : `You have the latest version (${result.latest || result.current}).`;
+      } catch (error) { status.textContent = `Could not check for updates: ${error instanceof Error ? error.message : String(error)}`; }
+      finally { check.disabled = false; }
+    };
+    return group("About", plain);
+  }
+
   function cacheGroup(): HTMLElement {
     const clear = document.createElement("button");
     clear.type = "button";
@@ -207,7 +246,7 @@ export async function createSettingsUi(root: HTMLElement) {
   }
 
   const builders: Record<SectionId, () => HTMLElement[]> = {
-    general: () => [group("", ...toggles("general"))],
+    general: () => [aboutGroup(), group("", ...toggles("general"))],
     interface: () => [group("Size", scaleRow()), group("Style", templateRow(), fontRow()), createThemeSection(), group("Display", ...toggles("interface"))],
     viewport: () => [group("Navigation", ...toggles("viewport").slice(0, 2), scrollRow()), group("Screenshots", screenshotRow(), ...toggles("viewport").slice(2))],
     hotkeys: () => [createHotkeysSection()],

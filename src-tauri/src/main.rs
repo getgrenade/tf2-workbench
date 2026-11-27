@@ -116,6 +116,7 @@ fn main() {
             commands::save_light_setup,
             commands::delete_light_setup,
             commands::open_light_setups_folder,
+            commands::open_release_page,
         ])
         .setup(|app| {
             use tauri::Manager;
@@ -129,7 +130,7 @@ fn main() {
             // which are fixed once the web view exists, can be applied.
             let settings = settings::load(app.handle());
             tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
-                .title("TF2 Workbench")
+                .title(format!("TF2 Workbench {}", app.package_info().version))
                 .inner_size(1280.0, 800.0)
                 .min_inner_size(800.0, 500.0)
                 .maximized(true)

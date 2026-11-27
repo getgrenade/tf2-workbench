@@ -341,3 +341,5 @@ export const readTextureFile = (path: string) => invoke<ArrayBuffer>("read_textu
 export const readMaterialText = (path: string) => invoke<string>("read_material_text", { path });
 /** A material made from edited VMT text (decode with `parseMaterial`); fails with the parse error. */
 export const materialFromText = (path: string, text: string) => invoke<ArrayBuffer>("material_from_text", { path, text });
+/** Opens a page of the app's releases on GitHub in the default browser. */
+export const openReleasePage = (url: string) => invoke<void>("open_release_page", { url });

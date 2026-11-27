@@ -1259,3 +1259,13 @@ pub async fn material_from_text(state: State<'_, AppState>, path: String, text: 
     }).await.map_err(|e| e.to_string())??;
     Ok(tauri::ipc::Response::new(bytes))
 }
+
+/// Opens a page of the app's releases on GitHub in the default browser (only those pages: the update check links there).
+#[tauri::command]
+pub fn open_release_page(url: String) -> Result<(), String> {
+    if !url.starts_with("https://github.com/getgrenade/tf2-workbench/") || url.contains(['"', ' ', '\n']) {
+        return Err("Not a release page of TF2 Workbench".into());
+    }
+    std::process::Command::new("explorer").arg(&url).spawn().map_err(|e| e.to_string())?;
+    Ok(())
+}
