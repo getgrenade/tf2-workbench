@@ -167,6 +167,9 @@ function halton(i: number, base: number): number {
   return x;
 }
 
+/** A map's light at a place: its ambient cube (+X -X +Y -Y +Z -Z of the view) and its strongest light (direction toward it, colour). */
+export interface WorldLight { cube: THREE.Vector3[]; keyDir: THREE.Vector3 | null; keyColor: THREE.Vector3 }
+
 export class Viewer {
   readonly cameras: CameraRig;
   readonly cameraOverlay: CameraOverlay;
@@ -868,11 +871,32 @@ void main() {
       this.updatePointLight();
       const floor = this.actorList.reduce((y, a) => Math.min(y, a.floorY), Infinity);
       const floorY = Number.isFinite(floor) ? floor : 0;
+      // a map has its own floor: no grid, ground plane or floor reflection then, and the camera sees across it
+      const world = !!this.world?.visible;
+      if (world && this.camera.far < this.worldFar) {
+        this.camera.far = this.worldFar;
+        this.camera.updateProjectionMatrix();
+      }
+      if (world && this.floorGrid.visible) {
+        this.gridHiddenForWorld = true;
+        this.floorGrid.visible = false;
+      } else if (!world && this.gridHiddenForWorld) {
+        this.gridHiddenForWorld = false;
+        this.floorGrid.visible = true;
+      }
       if (this.floorGrid.visible) this.floorGrid.update(this.center.x, this.center.z, floorY, this.radius);
       this.facingMarker.position.y = floorY + 0.14;
-      this.ground.update(this.groundState, this.center.x, this.center.z, floorY, Math.max(1, this.actorList.reduce((h, a) => Math.max(h, a.bindHeight), 0)));
+      this.ground.update(world ? { ...this.groundState, enabled: false } : this.groundState, this.center.x, this.center.z, floorY, Math.max(1, this.actorList.reduce((h, a) => Math.max(h, a.bindHeight), 0)));
       this.updateShadows(floorY, moved);
-      this.updateReflection(floorY);
+      if (world) {
+        // the map's floors take the characters' shadow themselves (the decal would lie flat at the characters' feet, through the map)
+        const shadow = this.groundShadows.find((s) => s.cast);
+        for (const s of this.groundShadows) s.quad.visible = false;
+        this.onWorldFrame(this.camera, !!shadow?.cast);
+      }
+      this.applyActorWorldLights();
+      if (!world) this.updateReflection(floorY);
+      else this.reflection.mesh.visible = false;
       this.renderLightShadows(moved);
       this.ensureSceneDepth(this.fogOn || this.ao.enabled || this.look.dof?.enabled === true);
       this.updateParticleDepth(this.camera, this.sceneTarget.width, this.sceneTarget.height);
@@ -1029,11 +1053,13 @@ void main() {
 
   /** Whether the floor grid is shown (it is not part of screenshots). */
   get gridVisible(): boolean {
-    return this.floorGrid.visible;
+    return this.floorGrid.visible || this.gridHiddenForWorld;
   }
 
   set gridVisible(v: boolean) {
-    this.floorGrid.visible = v;
+    // (while a map is shown the grid stays hidden; this is whether it comes back)
+    if (this.world?.visible) this.gridHiddenForWorld = v;
+    else this.floorGrid.visible = v;
   }
 
   get actors(): readonly Actor[] {
@@ -1396,7 +1422,33 @@ void main() {
    * when there is nothing to push against.
    */
   collidePlayer(position: THREE.Vector3, velocity: THREE.Vector3): THREE.Vector3 | null {
-    return this.propSim ? this.propSim.world.pushOut(position, 22, 82, velocity) : null;
+    let at = this.propSim ? this.propSim.world.pushOut(position, 22, 82, velocity) : null;
+    // a map's walls: kept a player's half width (24) from what is ahead at the knees and the chest, sliding along it
+    if (this.world?.visible && this.worldRaycast) {
+      const p = (at ?? position).clone();
+      const flat = new THREE.Vector3(velocity.x, 0, velocity.z);
+      if (flat.lengthSq() > 1e-6) {
+        flat.normalize();
+        let moved = false;
+        for (const h of [24, 60]) {
+          const from = p.clone().add(new THREE.Vector3(0, h, 0)).addScaledVector(flat, -24);
+          const hit = this.worldRaycast(from, flat, 48);
+          if (!hit || Math.abs(hit.normal.y) > 0.7) continue;
+          const n = new THREE.Vector3(hit.normal.x, 0, hit.normal.z).normalize();
+          const gap = new THREE.Vector3().subVectors(p.clone().setY(hit.point.y), hit.point).dot(n);
+          if (gap < 24) { p.addScaledVector(n, 24 - gap); moved = true; }
+        }
+        if (moved) at = p;
+      }
+    }
+    return at;
+  }
+
+  /** With a map: how high its floor is under a point (view units; looked for from a step above `y` down), or null (no map, nothing under). */
+  groundAt(x: number, y: number, z: number): number | null {
+    if (!this.world?.visible || !this.worldRaycast) return null;
+    const hit = this.worldRaycast(new THREE.Vector3(x, y + 20, z), new THREE.Vector3(0, -1, 0), 8192);
+    return hit ? hit.point.y : null;
   }
 
   /** The splash of a drink at the can (the lunchbox's `drink_spray` attachment). */
@@ -1841,11 +1893,25 @@ void main() {
   }
 
   /** The point of the floor (the plane at height `y`) under a position of the screen, or null when that part of the view looks away from it. */
+  /** The ray of the view through a point of the page, null off the view. */
+  rayAt(clientX: number, clientY: number): THREE.Raycaster | null {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return null;
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(new THREE.Vector2((clientX - rect.left) / rect.width * 2 - 1, 1 - (clientY - rect.top) / rect.height * 2), this.camera);
+    return ray;
+  }
+
   floorPointAt(clientX: number, clientY: number, y = 0): THREE.Vector3 | null {
     const rect = this.renderer.domElement.getBoundingClientRect();
     if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return null;
     const ray = new THREE.Raycaster();
     ray.setFromCamera(new THREE.Vector2((clientX - rect.left) / rect.width * 2 - 1, 1 - (clientY - rect.top) / rect.height * 2), this.camera);
+    // with a map: the surface of the map under the pointer (a floor, a ledge, a roof)
+    if (this.world?.visible && this.worldRaycast) {
+      const hit = this.worldRaycast(ray.ray.origin, ray.ray.direction, this.camera.far);
+      if (hit) return hit.point;
+    }
     return ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -y), new THREE.Vector3());
   }
 
@@ -2992,7 +3058,14 @@ void main() {
     // Same conversion as the light colour: the picker value is a display colour, converted to linear, times the level.
     const [ar, ag, ab] = [1, 3, 5].map((i) => Math.pow(parseInt(ambientColor.slice(i, i + 2), 16) / 255, 2.2) * ambient);
     for (const a of this.shared.uAmbient.value) a.set(ar, ag, ab);
-    this.shared.uAverageAmbient.value = Math.max(0, Math.min(0.2126 * ar + 0.7152 * ag + 0.0722 * ab, 1));
+    const avg = (this.shared.uAmbient.value as THREE.Vector3[]).reduce((s, a) => s + 0.2126 * a.x + 0.7152 * a.y + 0.0722 * a.z, 0) / 6;
+    this.shared.uAverageAmbient.value = Math.max(0, Math.min(avg, 1));
+    // the light settings' (each character's light of a map is set as its meshes are drawn: see applyActorWorldLights)
+    this.baseLight.dir.copy(this.shared.uLightDir.value);
+    this.baseLight.color.copy(this.shared.uLightColor.value);
+    (this.shared.uAmbient.value as THREE.Vector3[]).forEach((a, i) => this.baseLight.ambient[i].copy(a));
+    this.baseLight.average = this.shared.uAverageAmbient.value;
+    this.appliedLight = null;
 
     const bulb = this.gizmo.getObjectByName("bulb") as THREE.Mesh;
     const ray = this.gizmo.getObjectByName("ray") as THREE.Line;
@@ -3093,6 +3166,137 @@ void main() {
   }
 
   /** The plane at the floor (see groundPlane.ts). */
+  /** Called every frame while a map is shown, before it is drawn: the camera, and whether the characters cast shadows (Ground shadows). */
+  onWorldFrame: (camera: THREE.Camera, shadows: boolean) => void = () => {};
+
+  /** Where the characters that are shown are (a sphere around them all) and the tallest one's height, for their shadows on a map; null: none. */
+  shadowCasterBounds(): { sphere: THREE.Sphere; height: number } | null {
+    const box = new THREE.Box3();
+    let height = 0;
+    for (const a of this.actorList) {
+      if (!a.meshes().some((m) => m.visible)) continue;
+      const h = Math.max(a.bindHeight, 16);
+      height = Math.max(height, h);
+      box.expandByPoint(a.offset.clone().add(new THREE.Vector3(-h * 0.5, 0, -h * 0.5)));
+      box.expandByPoint(a.offset.clone().add(new THREE.Vector3(h * 0.5, h * 1.1, h * 0.5)));
+    }
+    return box.isEmpty() ? null : { sphere: box.getBoundingSphere(new THREE.Sphere()), height };
+  }
+
+  /** Draws the characters alone (their depth) with `camera` into `target`: the picture their shadows on a map are made from. */
+  private readonly casterMaterial = new THREE.MeshBasicMaterial({ colorWrite: false });
+  drawShadowCasters(camera: THREE.Camera, target: THREE.WebGLRenderTarget) {
+    const scene = this.scene;
+    // the top-level objects that hold a character's meshes stay; the rest (the map, the floor, the gizmos) is hidden meanwhile
+    const keep = new Set<THREE.Object3D>();
+    for (const a of this.actorList) {
+      for (const m of a.meshes()) {
+        let o: THREE.Object3D = m;
+        while (o.parent && o.parent !== scene) o = o.parent;
+        keep.add(o);
+      }
+    }
+    const hidden: THREE.Object3D[] = [];
+    for (const child of scene.children) {
+      if (!keep.has(child) && child.visible) { child.visible = false; hidden.push(child); }
+    }
+    // within a character, only its solid models cast (its body, items and props: skinned meshes); its particle sprites, see-through
+    // layers and helpers would cast squares
+    for (const root of keep) {
+      root.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh || !o.visible) return;
+        const mat = (Array.isArray(m.material) ? m.material[0] : m.material) as THREE.Material | undefined;
+        const solid = (o as THREE.SkinnedMesh).isSkinnedMesh && !!mat && !mat.transparent && mat.blending === THREE.NormalBlending && mat.depthWrite && !mat.userData.noShadow;
+        if (!solid) { o.visible = false; hidden.push(o); }
+      });
+    }
+    const background = scene.background, override = scene.overrideMaterial, before = this.renderer.getRenderTarget();
+    scene.background = null;
+    scene.overrideMaterial = this.casterMaterial;
+    this.renderer.setRenderTarget(target);
+    this.renderer.clear(true, true, false);
+    this.renderer.render(scene, camera);
+    this.renderer.setRenderTarget(before);
+    scene.overrideMaterial = override;
+    scene.background = background;
+    for (const o of hidden) o.visible = true;
+  }
+  /**
+   * The map's light where the characters are (in place of the light settings' ambient and main light, as the game lights a model):
+   * the ambient cube (+X -X +Y -Y +Z -Z of the view) and the key light (direction toward it, colour); null: the light settings.
+   */
+  private worldLight: WorldLight | null = null;
+  setWorldLight(light: WorldLight | null) {
+    this.worldLight = light;
+  }
+
+  /**
+   * Each character's own light of the map, where it stands (as the game lights each model by the light where it is): the light of one
+   * moved with the others before (hiding one, the light of the rest changed). Its meshes take it as they are drawn; one without takes the
+   * map's light of setWorldLight.
+   */
+  private readonly actorWorldLights = new Map<Actor, WorldLight>();
+  setActorWorldLight(actor: Actor, light: WorldLight | null) {
+    if (light) this.actorWorldLights.set(actor, light);
+    else this.actorWorldLights.delete(actor);
+  }
+  /** The light the shared uniforms hold now (null: the light settings'): a mesh with another sets its own before it is drawn. */
+  private appliedLight: WorldLight | null = null;
+  private baseLight = { dir: new THREE.Vector3(), color: new THREE.Vector3(), ambient: Array.from({ length: 6 }, () => new THREE.Vector3()), average: 0 };
+  private useLight(light: WorldLight | null): boolean {
+    if (light === this.appliedLight) return false;
+    this.appliedLight = light;
+    const u = this.shared;
+    if (!light) {
+      u.uLightDir.value.copy(this.baseLight.dir);
+      u.uLightColor.value.copy(this.baseLight.color);
+      (u.uAmbient.value as THREE.Vector3[]).forEach((a, i) => a.copy(this.baseLight.ambient[i]));
+      u.uAverageAmbient.value = this.baseLight.average;
+      return true;
+    }
+    (u.uAmbient.value as THREE.Vector3[]).forEach((a, i) => a.copy(light.cube[i]));
+    if (light.keyDir) u.uLightDir.value.copy(light.keyDir);
+    else u.uLightDir.value.copy(this.baseLight.dir);
+    u.uLightColor.value.copy(light.keyDir ? light.keyColor : new THREE.Vector3());
+    const avg = light.cube.reduce((s, a) => s + 0.2126 * a.x + 0.7152 * a.y + 0.0722 * a.z, 0) / 6;
+    u.uAverageAmbient.value = Math.max(0, Math.min(avg, 1));
+    return true;
+  }
+  /** Gives every character's meshes their light for this frame (with a map shown; without, the light settings'). */
+  private applyActorWorldLights() {
+    const shown = !!this.world?.visible;
+    for (const actor of this.actorList) {
+      const light = shown ? this.actorWorldLights.get(actor) ?? this.worldLight : null;
+      for (const mesh of actor.meshes()) {
+        mesh.userData.worldLight = light;
+        if (!mesh.userData.worldLightHooked) {
+          mesh.userData.worldLightHooked = true;
+          const viewer = this;
+          mesh.onBeforeRender = function (this: THREE.Mesh, _r, _s, _c, _g, material) {
+            if (viewer.useLight((this.userData.worldLight as WorldLight | null) ?? null) && (material as THREE.ShaderMaterial).isShaderMaterial) {
+              (material as THREE.ShaderMaterial).uniformsNeedUpdate = true;
+            }
+          };
+        }
+      }
+    }
+  }
+
+  /** The map in the scene (one at a time; null: none) and how far the camera must see to take it in. */
+  private world: THREE.Object3D | null = null;
+  private worldFar = 0;
+  /** The grid was on when a map came in (it comes back when the map goes). */
+  private gridHiddenForWorld = false;
+  /** What a ray meets in the map (see MapScene.raycast); null: no map. */
+  worldRaycast: ((origin: THREE.Vector3, dir: THREE.Vector3, max: number) => { point: THREE.Vector3; normal: THREE.Vector3; distance: number } | null) | null = null;
+  setWorld(world: THREE.Object3D | null, far = 0) {
+    if (this.world && this.world !== world) this.scene.remove(this.world);
+    this.world = world;
+    this.worldFar = far;
+    if (world && world.parent !== this.scene) this.scene.add(world);
+  }
+
   setGround(state: GroundState) {
     this.groundState = { ...state };
   }

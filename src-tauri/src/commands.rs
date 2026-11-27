@@ -190,6 +190,48 @@ pub fn mount_item_zips(state: State<'_, AppState>, paths: Vec<String>) -> Result
     state.mount_item_zips(paths.into_iter().map(PathBuf::from).collect())
 }
 
+/// The maps in the game's `maps` folder.
+#[tauri::command]
+pub async fn list_maps(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    workbench_core::map::list_maps(&state)
+}
+
+/// A map's geometry, lightmap, props and spawn points (see `workbench_core::map::load_map`).
+#[tauri::command]
+pub async fn load_map(state: State<'_, AppState>, name: String) -> Result<tauri::ipc::Response, String> {
+    Ok(tauri::ipc::Response::new(workbench_core::map::load_map(&state, &name)?))
+}
+
+/// The light of the loaded map at points: per point an ambient cube and a key light, as the game would light a character there.
+#[tauri::command]
+pub async fn map_light_at(name: String, points: Vec<[f32; 3]>) -> Result<serde_json::Value, String> {
+    workbench_core::map::light_at(&name, &points)
+}
+
+/// A map's sounds (see `workbench_core::map::map_sounds`).
+#[tauri::command]
+pub async fn map_sounds(state: State<'_, AppState>, name: String) -> Result<serde_json::Value, String> {
+    workbench_core::map::map_sounds(&state, &name)
+}
+
+/// The lighting a map baked into its static props (see `workbench_core::map::load_map_prop_light`).
+#[tauri::command]
+pub async fn load_map_prop_light(state: State<'_, AppState>, map: String, path: String, indices: Vec<u32>) -> Result<tauri::ipc::Response, String> {
+    Ok(tauri::ipc::Response::new(workbench_core::map::load_map_prop_light(&state, &map, &path, &indices)?))
+}
+
+/// A model as a map places it: posed by its first sequence (see `workbench_core::map::load_map_model`).
+#[tauri::command]
+pub async fn load_map_model(state: State<'_, AppState>, path: String) -> Result<tauri::ipc::Response, String> {
+    Ok(tauri::ipc::Response::new(workbench_core::map::load_map_model(&state, &path)?))
+}
+
+/// A map material: its shader, parameters and base textures no bigger than `max_size`.
+#[tauri::command]
+pub async fn load_map_material(state: State<'_, AppState>, name: String, max_size: u32) -> Result<tauri::ipc::Response, String> {
+    Ok(tauri::ipc::Response::new(workbench_core::map::map_material(&state, &name, max_size)?))
+}
+
 /// A value that changes when the importer's zips do, so the interface can tell when a refresh is due.
 #[tauri::command]
 pub fn workshop_stamp(state: State<'_, AppState>) -> Result<String, String> {
@@ -219,6 +261,8 @@ pub async fn index_tf2(app: tauri::AppHandle, state: State<'_, AppState>, tf_dir
     let _ = cubemaps_folder(&app); // the user's cubemaps (a scene can name one before the list is asked for)
     // the addons of the game's own custom folder, and the folders the user mounted earlier
     let _ = vpk.mount_custom(&PathBuf::from(&tf_dir).join("custom"), true);
+    // and the workshop items Source Filmmaker downloaded (each item a folder of models and materials, like an addon)
+    for dir in source_formats::steam::sfm_workshop_dirs(&PathBuf::from(&tf_dir)) { let _ = vpk.mount_custom_as(&dir, true, Some("Source Filmmaker workshop")); }
     for saved in saved_custom_content(&app) { let _ = vpk.mount_custom(&saved, false); }
     state.set_vpk(vpk);
     Ok(IndexDto {
@@ -341,6 +385,26 @@ fn keep_custom_content(app: &tauri::AppHandle, state: &State<'_, AppState>, adde
 #[tauri::command]
 pub fn list_custom_content(state: State<'_, AppState>) -> Result<Vec<CustomDto>, String> {
     Ok(state.vpk()?.custom_mounts().into_iter().map(custom_dto).collect())
+}
+
+/// Reads the folders of loose files again (the game's custom folder, Source Filmmaker's workshop items, the folders the user mounted): what
+/// was downloaded or built since is found. Returns whether anything changed (an item more or less, files more or less).
+#[tauri::command]
+pub async fn refresh_custom_content(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
+    let vpk = state.vpk()?;
+    let saved = saved_custom_content(&app);
+    tauri::async_runtime::spawn_blocking(move || {
+        let sum = |v: &source_formats::VpkSet| v.custom_mounts().iter().map(|m| (m.name.clone(), m.files)).collect::<Vec<_>>();
+        let before = sum(&vpk);
+        if let Some(tf) = vpk.game_root().map(|p| p.to_path_buf()) {
+            let _ = vpk.mount_custom(&tf.join("custom"), true);
+            for dir in source_formats::steam::sfm_workshop_dirs(&tf) { let _ = vpk.mount_custom_as(&dir, true, Some("Source Filmmaker workshop")); }
+        }
+        for dir in saved { let _ = vpk.mount_custom(&dir, false); }
+        sum(&vpk) != before
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// Mounts a folder of loose files (an addon, or a folder of them) and keeps it for the next launch; returns what was mounted.

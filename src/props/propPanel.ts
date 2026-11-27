@@ -3,7 +3,7 @@
  * the button) puts one in front of the camera, and dragging one onto the view puts it where it is dropped.
  */
 import { open } from "@tauri-apps/plugin-dialog";
-import { addCustomContent, listCustomContent, listModels, removeCustomContent, type CustomContent } from "../api";
+import { addCustomContent, listCustomContent, listModels, refreshCustomContent, removeCustomContent, type CustomContent } from "../api";
 import { FILE_DROP_EVENT, type FileDropDetail } from "../fileDrop";
 import { acceptedPath } from "../filePaths";
 import { filterProps, isCustomGame, parsePropPaths, propFolders, propGames, type PropEntry } from "./propList";
@@ -24,6 +24,7 @@ export function createPropPanel(root: HTMLElement, host: PropHost) {
   root.innerHTML = `<div class="propBar">
   <input class="text propSearch" placeholder="Search props…" spellcheck="false" />
   <select class="propGame" title="Which game's props to list, or which folder of loose files (an addon, a map's content)"></select>
+  <button class="propRefresh" title="Look for newly downloaded or built props (Source Filmmaker's workshop, tf/custom, your folders). This is also done when you come back to the window">↻</button>
   <button class="propFolderAdd" title="Add a folder of loose files with models and materials in it (an addon, a folder of props you made); its models are listed under its name. You can also drop the folder here">+ Folder</button>
   <button class="propFolderRemove" title="Take this folder away (the files stay where they are)" hidden>Remove</button>
   <button class="propAdd" title="Put the selected prop in front of the camera (or double-click it)" disabled>Add</button>
@@ -37,6 +38,14 @@ export function createPropPanel(root: HTMLElement, host: PropHost) {
   const add = root.querySelector<HTMLButtonElement>(".propAdd")!;
   const gameBox = root.querySelector<HTMLSelectElement>(".propGame")!;
   const addFolder = root.querySelector<HTMLButtonElement>(".propFolderAdd")!;
+  const refreshButton = root.querySelector<HTMLButtonElement>(".propRefresh")!;
+  refreshButton.onclick = () => {
+    refreshButton.disabled = true;
+    void refreshCustomContent()
+      .then((changed) => { if (changed) document.dispatchEvent(new CustomEvent("workbench:custom-content-changed", { detail: {} })); else reload(); })
+      .catch(() => reload())
+      .finally(() => { refreshButton.disabled = false; });
+  };
   const removeFolder = root.querySelector<HTMLButtonElement>(".propFolderRemove")!;
   /** The folders of loose files that are mounted, by their name. */
   let mounts = new Map<string, CustomContent>();

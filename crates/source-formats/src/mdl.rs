@@ -7,6 +7,8 @@
 use crate::binary::{count, cstr_at, fail, half_to_f32, i32_at, offset, Reader, Result};
 
 pub const MDL_VERSION: i32 = 48;
+/// The newest version read: 49 is Source Filmmaker's (its studiomdl, and the workshop's models made with it), laid out as 48.
+pub const MDL_READ_VERSION: i32 = 49;
 
 const STUDIOHDR_BONE_INDEX: usize = 160;
 const SIZEOF_BONE: usize = 216;
@@ -198,8 +200,8 @@ pub fn parse(data: &[u8]) -> Result<Mdl> {
     let version = r.i32()?;
     // Studio_ConvertStudioHdrToNewVersion preserves the geometry/bone layouts;
     // old shell/gib models only need these fields, not the replaced animation/lighting flags.
-    if !(44..=MDL_VERSION).contains(&version) {
-        return fail(format!("unsupported MDL version {version} (expected 44–{MDL_VERSION})"));
+    if !(44..=MDL_READ_VERSION).contains(&version) {
+        return fail(format!("unsupported MDL version {version} (expected 44–{MDL_READ_VERSION})"));
     }
     let checksum = r.i32()?;
     let name = r.fixed_str(64)?;

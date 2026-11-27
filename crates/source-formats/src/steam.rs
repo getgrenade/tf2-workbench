@@ -43,6 +43,29 @@ pub fn find_tf2() -> Option<PathBuf> {
     None
 }
 
+/// Where Source Filmmaker keeps the workshop items it downloaded, in any Steam library (found from TF2's `tf` folder: the library it is
+/// in and the others that library lists): `SourceFilmmaker/game/workshop` (the items SFM itself unpacks, which its gameinfo mounts) and
+/// Steam's `workshop/content/1840/<item>` (SFM is app 1840). Only the folders that exist.
+pub fn sfm_workshop_dirs(tf: &Path) -> Vec<PathBuf> {
+    let Some(library) = tf.parent().and_then(Path::parent).and_then(Path::parent).and_then(Path::parent) else { return Vec::new() };
+    let mut libs = vec![library.to_path_buf()];
+    libs.extend(library_folders(library));
+    if let Some(root) = registry_steam_path() {
+        libs.push(root.clone());
+        libs.extend(library_folders(&root));
+    }
+    let mut out: Vec<PathBuf> = Vec::new();
+    for lib in libs {
+        for dir in [lib.join("steamapps/common/SourceFilmmaker/game/workshop"), lib.join("steamapps/workshop/content/1840")] {
+            let canonical = std::fs::canonicalize(&dir).unwrap_or(dir.clone());
+            if dir.is_dir() && !out.iter().any(|d| std::fs::canonicalize(d).unwrap_or(d.clone()) == canonical) {
+                out.push(dir);
+            }
+        }
+    }
+    out
+}
+
 /// Extracts `"path"` values from `steamapps/libraryfolders.vdf`.
 fn library_folders(steam_root: &Path) -> Vec<PathBuf> {
     let vdf = steam_root.join("steamapps/libraryfolders.vdf");

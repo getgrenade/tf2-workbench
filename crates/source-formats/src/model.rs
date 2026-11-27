@@ -40,6 +40,9 @@ pub struct Mesh {
     pub bone_indices: Vec<u8>,
     pub bone_weights: Vec<f32>,
     pub indices: Vec<u32>,
+    /// Each vertex's number in the mesh's hardware vertices (its LOD 0 strip groups' vertices, one after another): what the map's
+    /// baked prop lighting is listed by.
+    pub vertex_ids: Vec<u32>,
 }
 
 /// The vertex deltas of one flex descriptor on a mesh (see `mdl::MdlFlex`).
@@ -226,6 +229,7 @@ pub fn build(
                 let mut out = Mesh { material: materials[0].clone(), materials, ..Default::default() };
                 let first = model_base + mesh.vertex_offset as usize;
                 let mut remap: HashMap<usize, u32> = HashMap::new();
+                let mut group_base = 0u32;
                 for g in groups {
                     for tri in g.triangles().chunks_exact(3) {
                         let mut ids = [0u32; 3];
@@ -242,6 +246,7 @@ pub fn build(
                                     })?;
                                     let i = out.vertex_count() as u32;
                                     push_vertex(&mut out, v, vvd.tangents[global]);
+                                    out.vertex_ids.push(group_base + local as u32);
                                     remap.insert(global, i);
                                     i
                                 }
@@ -250,6 +255,7 @@ pub fn build(
                         // Source winds clockwise; flip to counter-clockwise.
                         out.indices.extend_from_slice(&[ids[0], ids[2], ids[1]]);
                     }
+                    group_base += g.orig_mesh_vert_ids.len() as u32;
                 }
                 for flex in &mesh.flexes {
                     let mut mf = MeshFlex { desc: flex.desc.max(0) as u32, targets: flex.targets, vertices: Vec::new(), deltas: Vec::new(), normal_deltas: Vec::new() };

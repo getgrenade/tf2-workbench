@@ -105,6 +105,9 @@ pub struct VpkSet {
     custom: RwLock<Vec<CustomMount>>,
     /// Item zips the user dropped onto the view, mounted in place for this session (read-only; nothing is copied into the game folder).
     extra_item_zips: RwLock<Vec<PathBuf>>,
+    /// The files packed in maps (`tf/maps/<name>.bsp`), mounted when a model only a map has is wanted (Versus Saxton Hale's bosses): read
+    /// after everything else, so a map cannot change the game's own files.
+    maps: RwLock<Vec<(String, ZipFile)>>,
 }
 
 /// A folder of loose files with a `models/` and a `materials/` folder in it, indexed by the paths the game would ask for.
@@ -365,7 +368,7 @@ impl VpkSet {
     }
 
     pub fn open_dirs(paths: &[PathBuf]) -> Result<Self, VpkError> {
-        let mut set = VpkSet { loose_root: None, dirs: Vec::new(), files: HashMap::new(), sorted: Vec::new(), workshop: RwLock::new(Mount::default()), workshop_dir: None, effects_dir: RwLock::new(None), custom: RwLock::new(Vec::new()), extra_item_zips: RwLock::new(Vec::new()) };
+        let mut set = VpkSet { loose_root: None, dirs: Vec::new(), files: HashMap::new(), sorted: Vec::new(), workshop: RwLock::new(Mount::default()), workshop_dir: None, effects_dir: RwLock::new(None), custom: RwLock::new(Vec::new()), extra_item_zips: RwLock::new(Vec::new()), maps: RwLock::new(Vec::new()) };
         for p in paths {
             set.add_dir(p, false)?;
         }
@@ -493,6 +496,12 @@ impl VpkSet {
     /// Mounts a folder of loose files (or, when it has none of its own, each folder in it that has: `tf/custom`). A folder that is the `models` or
     /// `materials` folder of an addon mounts the addon. Returns what was mounted; a folder that is mounted already is read again (it has new files).
     pub fn mount_custom(&self, root: &Path, auto: bool) -> Result<Vec<CustomInfo>, String> {
+        self.mount_custom_as(root, auto, None)
+    }
+
+    /// As [`Self::mount_custom`], under a name of its own (`label`; each addon in it: `label · <its folder>`), such as Source Filmmaker's
+    /// workshop, whose folders are named only by a number.
+    pub fn mount_custom_as(&self, root: &Path, auto: bool, label: Option<&str>) -> Result<Vec<CustomInfo>, String> {
         let mut root = root.to_path_buf();
         if !root.is_dir() { return Err(format!("{} is not a folder", root.display())); }
         if !has_content(&root) {
@@ -520,7 +529,13 @@ impl VpkSet {
                     continue;
                 }
             }
-            let base = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "custom".into());
+            let folder = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "custom".into());
+            // (one addon in the folder: the label alone; one of several: the label and its folder)
+            let base = match label {
+                Some(l) if dir == root => l.to_string(),
+                Some(l) => format!("{l} · {folder}"),
+                None => folder,
+            };
             let mut mounts = self.custom.write().unwrap();
             let mut name = base.clone();
             let mut n = 2;
@@ -551,6 +566,75 @@ impl VpkSet {
         out
     }
 
+    /// Mounts the files a map packs (`tf/maps/<name>.bsp`), once. Errors when the game folder has no such map.
+    pub fn mount_map(&self, name: &str) -> std::io::Result<()> {
+        let name = name.trim_end_matches(".bsp").to_ascii_lowercase();
+        let bad = || std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a map name");
+        if self.maps.read().unwrap().iter().any(|(n, _)| *n == name) { return Ok(()); }
+        let path = self.map_path(&name).ok_or_else(bad)?;
+        if !path.is_file() { return Err(std::io::Error::new(std::io::ErrorKind::NotFound, format!("{name}.bsp is not in the game folder"))); }
+        let zip = ZipFile::open_bsp(&path)?;
+        let mut maps = self.maps.write().unwrap();
+        if !maps.iter().any(|(n, _)| *n == name) { maps.push((name, zip)); }
+        Ok(())
+    }
+
+    /// The paths (lower case) of the game's files and of the mounted maps' packed files that start with `prefix`, sorted.
+    pub fn files_with_prefix(&self, prefix: &str) -> Vec<String> {
+        let prefix = Self::norm(prefix);
+        let start = self.sorted.partition_point(|p| p.as_str() < prefix.as_str());
+        let mut out: Vec<String> = self.sorted[start..].iter().take_while(|p| p.starts_with(&prefix)).cloned().collect();
+        for (_, zip) in self.maps.read().unwrap().iter() {
+            out.extend(zip.paths().filter(|p| p.starts_with(&prefix)).map(str::to_string));
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// A file of a mounted map's pakfile.
+    /// Where a map is, by its name: the game's own (`cp_dustbowl`: tf/maps), or one of the others by its path from tf/ without `.bsp`
+    /// (`download/maps/x`, a server's; `custom/<pack>/maps/x`; `maps/workshop/<id>/x`), or a Steam Workshop download
+    /// (`steam-workshop/<id>/x`: steamapps/workshop/content/440). None for a name that is none of these (or climbs out with `..`).
+    pub fn map_path(&self, name: &str) -> Option<PathBuf> {
+        let root = self.loose_root.as_ref()?;
+        let name = name.trim_end_matches(".bsp");
+        let parts: Vec<&str> = name.split('/').collect();
+        let fine = |p: &str| !p.is_empty() && p != "." && p != ".." && !p.contains('\\') && !p.contains(':');
+        if parts.iter().any(|p| !fine(p)) {
+            return None;
+        }
+        match parts.as_slice() {
+            [map] if map.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.') => Some(root.join("maps").join(format!("{map}.bsp"))),
+            ["download", "maps", map] => Some(root.join("download").join("maps").join(format!("{map}.bsp"))),
+            ["custom", pack, "maps", map] => Some(root.join("custom").join(pack).join("maps").join(format!("{map}.bsp"))),
+            ["maps", "workshop", rest @ ..] if !rest.is_empty() => {
+                let mut p = root.join("maps").join("workshop");
+                for r in &rest[..rest.len() - 1] { p = p.join(r); }
+                Some(p.join(format!("{}.bsp", rest[rest.len() - 1])))
+            }
+            ["steam-workshop", id, map] => Some(steam_workshop(root)?.join(id).join(format!("{map}.bsp"))),
+            // Source Filmmaker's workshop: the maps of the items it unpacked, and of those Steam keeps (in their maps folder or not)
+            ["sfm", map] => crate::steam::sfm_workshop_dirs(root).into_iter().map(|d| d.join("maps").join(format!("{map}.bsp"))).find(|p| p.is_file()),
+            ["sfm-workshop", id, map] => crate::steam::sfm_workshop_dirs(root).into_iter().flat_map(|d| [d.join(id).join("maps").join(format!("{map}.bsp")), d.join(id).join(format!("{map}.bsp"))]).find(|p| p.is_file()),
+            _ => None,
+        }
+    }
+
+    /// A file of one mounted map's own files (see [`Self::mount_map`]), not of the others.
+    pub fn map_file(&self, map: &str, key: &str) -> Option<Vec<u8>> {
+        let map = map.trim_end_matches(".bsp").to_ascii_lowercase();
+        self.maps.read().unwrap().iter().find(|(n, _)| *n == map).and_then(|(_, z)| z.read(key))
+    }
+
+    fn map_read(&self, key: &str) -> Option<Vec<u8>> {
+        self.maps.read().unwrap().iter().find(|(_, z)| z.contains(key)).and_then(|(_, z)| z.read(key))
+    }
+
+    fn map_size(&self, key: &str) -> Option<u64> {
+        self.maps.read().unwrap().iter().find_map(|(_, z)| z.size_of(key))
+    }
+
     fn custom_path(&self, key: &str) -> Option<PathBuf> {
         self.custom.read().unwrap().iter().find_map(|m| m.files.get(key).cloned())
     }
@@ -575,7 +659,7 @@ impl VpkSet {
     }
 
     pub fn contains(&self, path: &str) -> bool {
-        self.compiled_path(path).is_some() || self.files.contains_key(&Self::norm(path)) || self.loose_path(path).is_some() || self.workshop.read().unwrap().files.contains_key(&Self::norm(path)) || self.custom_path(&Self::norm(path)).is_some()
+        self.compiled_path(path).is_some() || self.files.contains_key(&Self::norm(path)) || self.loose_path(path).is_some() || self.workshop.read().unwrap().files.contains_key(&Self::norm(path)) || self.custom_path(&Self::norm(path)).is_some() || self.map_size(&Self::norm(path)).is_some()
     }
 
     pub fn size_of(&self, path: &str) -> Option<u64> {
@@ -589,7 +673,7 @@ impl VpkSet {
                 return mount.zips[z].size_of(&key);
             }
         }
-        self.files.get(&key).map(Entry::size).or_else(|| self.custom_path(&key).and_then(|p| std::fs::metadata(p).ok()).map(|m| m.len()))
+        self.files.get(&key).map(Entry::size).or_else(|| self.custom_path(&key).and_then(|p| std::fs::metadata(p).ok()).map(|m| m.len())).or_else(|| self.map_size(&key))
     }
 
     /// Lists the immediate children of `dir` ("" for the root).
@@ -676,6 +760,10 @@ impl VpkSet {
                 File::open(&p).map_err(io_err(&p))?.take(max as u64).read_to_end(&mut out).map_err(io_err(&p))?;
                 return Ok(out);
             }
+            if let Some(mut bytes) = self.map_read(&key) {
+                bytes.truncate(max);
+                return Ok(bytes);
+            }
             return Err(VpkError::NotFound(path.to_string()));
         };
         let d = &self.dirs[e.dir as usize];
@@ -705,4 +793,10 @@ impl VpkSet {
         }
         Ok(out)
     }
+}
+
+/// The Steam Workshop downloads of TF2 (steamapps/workshop/content/440), from its tf folder (steamapps/common/Team Fortress 2/tf).
+pub fn steam_workshop(tf: &Path) -> Option<PathBuf> {
+    let steamapps = tf.parent()?.parent()?.parent()?;
+    Some(steamapps.join("workshop").join("content").join("440"))
 }

@@ -56,6 +56,8 @@ export interface PlayHost {
   switchSlot: (slot: PlaySlot) => void;
   /** Where the character ends up when it walks into something solid: given where it is (feet, viewer space) and how fast it goes, the corrected place on the floor, or null when nothing is in the way. */
   collide?: (x: number, y: number, z: number, vx: number, vz: number) => { x: number; z: number } | null;
+  /** With a map: how high its floor is under a point (view units, looked for from a step above `y` down); null: the flat floor. */
+  ground?: (x: number, y: number, z: number) => number | null;
   /** Called every frame with where the character is on the floor (viewer units) and the way it faces. */
   onFrame?: (x: number, z: number, yaw: number) => void;
   /** Play mode ended by the player (Escape). */
@@ -82,6 +84,8 @@ export interface PlayHost {
 
 const FADE_TIME = 0.15;
 const MOUSE_DEGREES_PER_PIXEL = 0.25;
+/** How high a step the character walks up or down without jumping or falling (the game's 18 units). */
+const STEP = 18;
 const GROUND_KINDS: ReadonlySet<Locomotion> = new Set(["stand", "crouch", "run", "crouch_walk"]);
 const ONE_SHOT: ReadonlySet<Locomotion> = new Set(["jump_start", "jumpland", "taunt"]);
 
@@ -136,6 +140,8 @@ export class PlayController {
   private meleeClock=0;
   private meleeHits:{at:number;profile:WeaponProfile}[]=[];
   private jumpQueued = false;
+  /** The floor under the character (view units): where the height is measured from (a map's floor, else the start's). */
+  private floorY: number | null = null;
   /** The attack / reload layer and the voice-command gesture layer: two slots like the game's, each playing one thing at a time. */
   private fight: Gesture | null = null;
   private healing=false;
@@ -548,9 +554,28 @@ export class PlayController {
     if (this.scoped && !grounded(m)) this.scoped = false;
     stepFeet(m, isMoving(m, run), dt);
     const o = this.startPose;
-    const blocked = this.host.collide?.(o.x + m.x, o.y + m.h, o.z + m.z, m.vx, m.vz);
+    // the height is over the floor under the feet: the start's, or a map's where the character is
+    this.floorY ??= o.y;
+    let y = this.floorY + m.h;
+    const blocked = this.host.collide?.(o.x + m.x, y, o.z + m.z, m.vx, m.vz);
     if (blocked) { m.x = blocked.x - o.x; m.z = blocked.z - o.z; }
-    this.host.actor.setPlacement(o.x + m.x, o.y + m.h, o.z + m.z, m.feetYaw);
+    const ground = this.host.ground?.(o.x + m.x, y, o.z + m.z);
+    if (ground !== undefined && ground !== null) {
+      const onGround = grounded(m);
+      if (ground >= y) {
+        // a step up (or a landing): onto it
+        y = ground;
+        if (m.vy < 0) m.vy = 0;
+      } else if (onGround && ground >= y - STEP) {
+        // down a step or a slope: the feet follow the floor
+        y = ground;
+      }
+      // (more than a step below: off a ledge, falling from where it is)
+      this.floorY = ground;
+      m.h = Math.max(0, y - ground);
+      if (m.h > 0 && m.vy === 0 && onGround) m.vy = -1e-3;
+    }
+    this.host.actor.setPlacement(o.x + m.x, this.floorY + m.h, o.z + m.z, m.feetYaw);
     this.host.onFrame?.(o.x + m.x, o.z + m.z, m.yaw);
 
     this.chooseAnimation(run);

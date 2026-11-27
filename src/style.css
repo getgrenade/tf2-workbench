@@ -877,7 +877,8 @@ td.n { text-align: right; font-variant-numeric: tabular-nums; }
 #viewSelect button.once { border-style: dashed; }
 
 /* Drop-down menus with sub-menus (the outliner's Add menu) */
-.popMenu { position: fixed; z-index: 2000; min-width: 190px; padding: 4px; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--ui-line-strong); border-radius: var(--ui-radius-l); box-shadow: 0 8px 22px var(--ui-shade-3); }
+.popMenu { position: fixed; z-index: 2000; min-width: 190px; max-height: calc(100vh - 16px); overflow-y: auto; padding: 4px; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--ui-line-strong); border-radius: var(--ui-radius-l); box-shadow: 0 8px 22px var(--ui-shade-3); }
+.popMenu > * { flex-shrink: 0; }
 .popItem { display: flex; align-items: center; gap: 8px; height: var(--ui-h-bar); padding: 0 8px 0 6px; border: 0; border-radius: var(--ui-radius); background: transparent; color: var(--fg); text-align: left; cursor: pointer; }
 .popItem:hover, .popItem:focus-visible, .popItem.open { background: var(--ui-hover); outline: none; }
 .popItem:disabled { opacity: .4; cursor: default; }

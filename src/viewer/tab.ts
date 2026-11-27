@@ -11,7 +11,7 @@ import { propLabel } from "../props/propList";
 import { forgetThumbnail } from "../props/propThumbs";
 import { decodeTga, encodeTga, iconProblem, ICON_SAFE_ROWS } from "../compiler/tga";
 import { fadeAmount, maskIcon, type IconFade } from "../compiler/iconMask";
-import { searchPaths, importSourceDir, readItemSession, readPropSession, saveItemIcon, buildItem, buildProp, loadTextureFrames, readSourceFile, revealFile, sourceSiblings, sourceStamp, mountItemZips } from "../api";
+import { searchPaths, importSourceDir, readItemSession, readPropSession, saveItemIcon, buildItem, buildProp, loadTextureFrames, readSourceFile, revealFile, sourceSiblings, sourceStamp, mountItemZips, listMaps, mapLightAt, refreshCustomContent } from "../api";
 import { FILE_DROP_EVENT, type FileDropDetail } from "../fileDrop";
 import { parseTextureFrames } from "./sourceMaterials";
 import { getWeaponProfile, importEffectZip, removeCustomEffect, type WeaponProfile, type UnusualEffectInfo } from "../api";
@@ -21,6 +21,7 @@ import { FaceDriver, type FaceLine } from "./faceDriver";
 import type { FlexGlobals } from "./flex";
 import type { LipSync, PhonemeClasses, SceneData } from "./faceScene";
 import { loadVoice, setVoiceMuted, stopAll as stopVoices, voiceMuted } from "./voicePlayer";
+import { MapSounds } from "./mapSounds";
 import { materialFromText, readMaterialText, readTextureFile } from "../api";
 import { VmtEdits } from "./vmtEdits";
 import { editsFor, loadMaterialEdits, saveMaterialEdits } from "./materialEditsStore";
@@ -58,6 +59,7 @@ import { createOverlayPanel } from "./overlayPanel";
 import { createGroundUi } from "./groundUi";
 import { DEFAULT_GROUND, type GroundState } from "./groundPlane";
 import { DEFAULT_SKY, loadSkyTexture, type SkyState } from "./skybox";
+import { MapScene } from "./mapScene";
 import { countOf, newPostId, POST_KINDS, statesOf, type PostItem, type PostKind } from "./postStack";
 import { entityHidden, isInside, newGroupName, parseGroups, withDescendants, type HierarchyGroup } from "./hierarchyTree";
 import { createBodyPicker, createHideTools, type HideTool } from "./bodyPicker";
@@ -354,6 +356,26 @@ export function createViewTab(els: Els) {
   let lightingUi: ReturnType<typeof createLightingUi> | null = null;
   // the skybox behind the scene (its pictures are made when it is picked and kept while it is shown)
   let sky: SkyState = { ...DEFAULT_SKY };
+  /** The map in the scene (one at a time), and the sky from before it brought its own. */
+  let worldMap: MapScene | null = null;
+  let skyBeforeMap: SkyState | null = null;
+  /** The game's maps (asked for once). */
+  let mapNames: string[] | null = null;
+  let mapNamesLoading: Promise<void> | null = null;
+  const fetchMapNames = () => (mapNamesLoading ??= listMaps().then((m) => { mapNames = m; }).catch(() => { mapNamesLoading = null; }));
+  // newly downloaded content (Source Filmmaker's workshop, tf/custom, the user's folders, workshop maps) is found when the window comes
+  // back (from Steam or SFM, where it was downloaded): at most every ten seconds; the prop browser and the map list then have it
+  let contentChecked = 0;
+  const checkNewContent = () => {
+    if (performance.now() - contentChecked < 10_000) return;
+    contentChecked = performance.now();
+    mapNamesLoading = null;
+    void refreshCustomContent().then((changed) => {
+      if (changed) document.dispatchEvent(new CustomEvent("workbench:custom-content-changed", { detail: {} }));
+    }).catch(() => undefined);
+  };
+  window.addEventListener("focus", checkNewContent);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") checkNewContent(); });
   let skyUi: ReturnType<typeof createSkyUi> | null = null;
   let skyShown: { name: string; texture: import("three").CubeTexture } | null = null;
   let skyToken = 0;
@@ -3443,6 +3465,14 @@ export function createViewTab(els: Els) {
       renderEntities();
     },
     selectRig: (id) => selectRig(id),
+    mapOff: (off) => {
+      if (!worldMap) return;
+      worldMap.group.visible = !off;
+      // (a hidden map is silent)
+      if (off && viewer) worldSounds?.update(viewer.camera, false);
+      syncMapRow();
+    },
+    mapRemove: () => removeWorldMap(),
     newGroup: (parent) => {
       const id = crypto.randomUUID();
       groups = [...groups, { id, name: newGroupName(groups), ...(parent ? { parent } : {}) }];
@@ -4247,6 +4277,7 @@ export function createViewTab(els: Els) {
         const at = v.collidePlayer(new THREE.Vector3(x, y, z), new THREE.Vector3(vx, 0, vz));
         return at ? { x: at.x, z: at.z } : null;
       },
+      ground: (x, y, z) => v.groundAt(x, y, z),
       setHeldHidden: (hidden) => e.actor.setHeldHidden(hidden),
       onMeal: (event, profile) => {
         const c = profile.consumable;
@@ -7320,7 +7351,13 @@ export function createViewTab(els: Els) {
   /** The view's right-click menu. */
   function viewMenu(x: number, y: number) {
     const ents = sendTargets();
+    const ray = worldMap ? viewer?.rayAt(x, y) : null;
+    const mapProp = ray && worldMap ? worldMap.propAt(ray) : null;
+    const mapPropModel = mapProp !== null ? worldMap?.propPlacement(mapProp)?.model : undefined;
     openMenu({ x, y }, [
+      ...(mapProp !== null && mapPropModel
+        ? [{ label: "Make this prop movable", icon: "move" as const, hint: mapPropModel.replace(/^models\//, "").replace(/\.mdl$/, ""), separator: true, run: () => void moveMapProp(mapProp) }]
+        : []),
       {
         label: ents.length > 1 ? `Send ${ents.length} characters to promo board` : "Send to promo board",
         icon: "send",
@@ -7529,7 +7566,8 @@ export function createViewTab(els: Els) {
       light: v.getLight(),
       pointLight: v.getPointLight(),
       ...capturePost(),
-      sky: { ...sky },
+      sky: { ...(skyBeforeMap ?? sky) },
+      ...(worldMap ? { map: worldMap.name, ...(worldMap.hiddenPropList.length ? { mapMoved: worldMap.hiddenPropList } : {}) } : {}),
       reflection: { ...reflection },
       ground: { ...ground },
       background: bgInput.value,
@@ -7687,7 +7725,12 @@ export function createViewTab(els: Els) {
     els.fov.oninput?.(new Event("input"));
     applyLights(scene.light, scene.pointLight);
     setPostItems(postItemsOf(scene));
-    void setSkyState(scene.sky ?? DEFAULT_SKY).catch(() => {});
+    // (the scene's sky is the one from before its map: a map that goes now does not give back the last one's)
+    skyBeforeMap = null;
+    if (!scene.map) removeWorldMap();
+    void setSkyState(scene.sky ?? DEFAULT_SKY).catch(() => {}).then(() => {
+      if (scene.map) void loadWorldMap(scene.map, scene.mapMoved ?? []);
+    });
     void setReflectionState(scene.reflection ?? DEFAULT_REFLECTION).catch(() => {});
     setGroundState(scene.ground ?? DEFAULT_GROUND);
     setBackgroundColor(scene.background ?? DEFAULT_BACKGROUND);
@@ -8735,7 +8778,7 @@ export function createViewTab(els: Els) {
   // The Add menu of the outliner: a character, a buildable, a light or a camera
   const ICON = {
     character: "userRound", buildable: "wrench", prop: "box", light: "lightbulb", camera: "video", sun: "sun", point: "circleDot", spot: "flashlight",
-    area: "rectangleHorizontal", folder: "folder", classes: "users", heads: "scanFace",
+    area: "rectangleHorizontal", folder: "folder", classes: "users", heads: "scanFace", map: "map",
   } as const satisfies Record<string, IconName>;
   const propsRoot = document.getElementById("propsPane");
   if (propsRoot) createPropPanel(propsRoot, { add: (path, at) => void addProp(path, at) });
@@ -8752,6 +8795,172 @@ export function createViewTab(els: Els) {
     e.preventDefault();
     viewMenu(e.clientX, e.clientY);
   });
+  /** The map's row in the outliner (its name, whether it is hidden, what it is loading). */
+  let mapStatus = "";
+  function syncMapRow() {
+    hierarchy().setMap(worldMap ? { name: mapLabel(worldMap.name), off: !worldMap.group.visible, ...(mapStatus ? { status: mapStatus } : {}) } : null);
+  }
+  /** Loads a map into the scene in place of the one there (its sky with it); a spawn point of it is where the characters stand. */
+  /** The sounds of the map in the scene (null: none). */
+  let worldSounds: MapSounds | null = null;
+  async function loadWorldMap(name: string, moved: number[] = []) {
+    const v = viewer;
+    if (!v) return;
+    if (worldMap?.name === name) {
+      for (const n of worldMap.hiddenPropList) if (!moved.includes(n)) worldMap.setPropHidden(n, false);
+      for (const n of moved) worldMap.setPropHidden(n, true);
+      return;
+    }
+    removeWorldMap();
+    const map = new MapScene(name);
+    worldMap = map;
+    // its sounds around the camera, while the sound is on
+    worldSounds?.dispose();
+    const sounds = new MapSounds(name, (p) => new THREE.Vector3(...p).applyMatrix4(map.group.matrix), (from, to) => {
+      const d = to.clone().sub(from);
+      const len = d.length();
+      if (len < 1) return false;
+      const hit = map.raycast(from, d.normalize(), len);
+      return !!hit && hit.distance < len - 16;
+    });
+    worldSounds = sounds;
+    v.setWorld(map.group, 1e5);
+    v.worldRaycast = (o, d, max) => map.raycast(o, d, max);
+    // every frame: the eye for its reflections, the characters' shadow on its floors, and (now and then) its light where each stands
+    let lightAsked = 0;
+    const lightAt = new Map<Actor, THREE.Vector3>();
+    v.onWorldFrame = (camera, shadows) => {
+      if (worldMap !== map) return;
+      map.setEye(camera);
+      map.tick(performance.now());
+      sounds.update(camera, !voiceMuted());
+      map.renderShadow(shadows ? v.shadowCasterBounds() : null, (c, t) => v.drawShadowCasters(c, t));
+      const now = performance.now();
+      if (now - lightAsked < 250 || !map.exposure) return;
+      // each character lit where it stands (at its middle), as the game lights each model: asked again when it has moved
+      const asked: { actor: Actor; at: THREE.Vector3 }[] = [];
+      for (const e of entities) {
+        const at = e.actor.offset.clone();
+        at.y += e.actor.bindHeight * 0.5;
+        const before = lightAt.get(e.actor);
+        if (before && before.distanceTo(at) < 4) continue;
+        asked.push({ actor: e.actor, at });
+      }
+      if (!asked.length) return;
+      lightAsked = now;
+      for (const { actor, at } of asked) lightAt.set(actor, at);
+      void mapLightAt(name, asked.map(({ at }) => { const p = map.toMap(at); return [p.x, p.y, p.z] as [number, number, number]; })).then((r) => {
+        if (worldMap !== map || !r) return;
+        // the map's cube faces (+X -X +Y -Y +Z -Z, z up) as the view's (+X -X +Y -Y +Z -Z, y up)
+        const order = [2, 3, 4, 5, 0, 1];
+        asked.forEach(({ actor }, k) => {
+          const at = r[k];
+          if (!at) return;
+          const cube = order.map((i) => new THREE.Vector3(...(at.cube[i] ?? [0, 0, 0])).multiplyScalar(map.exposure));
+          const keyDir = at.key ? MapScene.toView(at.key.dir).normalize() : null;
+          const keyColor = at.key ? new THREE.Vector3(...at.key.color).multiplyScalar(map.exposure) : new THREE.Vector3();
+          const light = { cube, keyDir, keyColor };
+          v.setActorWorldLight(actor, light);
+          // (and the light of what is not a character, the selected one's)
+          if (actor === (selected?.actor ?? asked[0].actor)) v.setWorldLight(light);
+        });
+      }).catch(() => undefined);
+    };
+    mapStatus = "loading";
+    syncMapRow();
+    try {
+      await map.load((text) => {
+        if (worldMap !== map) return;
+        els.info.textContent = text;
+        mapStatus = text ? text.replace(`${name}: `, "").replace(/^Reading .*/, "reading") : "";
+        syncMapRow();
+      });
+      mapStatus = "";
+      syncMapRow();
+      if (worldMap !== map) return;
+      for (const n of moved) map.setPropHidden(n, true);
+      v.setWorld(map.group, Math.max(20000, map.extent * 1.5));
+      if (map.sky) {
+        skyBeforeMap ??= { ...sky };
+        await setSkyState({ ...sky, name: map.sky });
+      }
+    } catch (err) {
+      if (worldMap === map) {
+        removeWorldMap();
+        els.info.textContent = `Could not load ${name}: ${String(err)}`;
+      }
+    }
+  }
+  /** Takes the map out of the scene (and gives back the sky from before it). */
+  function removeWorldMap() {
+    if (!worldMap) return;
+    worldSounds?.dispose();
+    worldSounds = null;
+    worldMap.dispose();
+    worldMap = null;
+    mapStatus = "";
+    viewer?.setWorld(null);
+    viewer?.setWorldLight(null);
+    if (viewer) viewer.worldRaycast = null;
+    syncMapRow();
+    if (skyBeforeMap) {
+      const before = skyBeforeMap;
+      skyBeforeMap = null;
+      void setSkyState(before).catch(() => {});
+    }
+  }
+  /** The Add menu's Map entry: the game's maps by game mode (the part of the name before the first "_"), and taking the map out. */
+  function mapMenu(): MenuItem {
+    void fetchMapNames();
+    // the game's own maps by their mode (cp, koth, ...); the custom ones (a server's downloads, the custom folders') and the workshop's
+    // in groups of their own, each by mode too
+    const official = new Map<string, string[]>(), custom = new Map<string, string[]>(), workshop = new Map<string, string[]>(), sfm = new Map<string, string[]>();
+    for (const name of mapNames ?? []) {
+      const kind = mapKind(name);
+      const into = kind === "sfm" ? sfm : kind === "workshop" ? workshop : kind === "custom" ? custom : official;
+      const base = mapLabel(name);
+      const mode = base.includes("_") ? base.slice(0, base.indexOf("_")) : "other";
+      into.set(mode, [...(into.get(mode) ?? []), name]);
+    }
+    const modes = (groups: Map<string, string[]>): MenuItem[] =>
+      [...groups].sort(([a], [b]) => a.localeCompare(b)).map(([mode, names]) => ({
+        label: mode,
+        hint: String(names.length),
+        children: names.map((name) => ({ label: mapLabel(name), hint: mapSource(name), checked: worldMap?.name === name, run: () => void loadWorldMap(name) })),
+      }));
+    const count = (groups: Map<string, string[]>) => String([...groups.values()].reduce((n, l) => n + l.length, 0));
+    const children: MenuItem[] = mapNames
+      ? [
+          ...modes(official),
+          ...(custom.size ? [{ label: "Custom", hint: count(custom), separator: true, children: modes(custom) }] : []),
+          ...(workshop.size ? [{ label: "Workshop", hint: count(workshop), separator: !custom.size, children: modes(workshop) }] : []),
+          ...(sfm.size ? [{ label: "Source Filmmaker workshop", hint: count(sfm), separator: !custom.size && !workshop.size, children: modes(sfm) }] : []),
+        ]
+      : [{ label: "Reading the maps folder…", disabled: true }];
+    // (the list read again: a map downloaded since, from the workshop or a server, is in it)
+    if (mapNames) children.unshift({ label: "Refresh the list", hint: "new downloads", run: () => { mapNamesLoading = null; mapNames = null; void fetchMapNames(); } });
+    if (worldMap) {
+      if (children[0]) children[0] = { ...children[0], separator: true };
+      children.unshift({ label: `Remove ${mapLabel(worldMap.name)}`, run: () => removeWorldMap() });
+    }
+    return { label: "Map", icon: ICON.map, hint: worldMap ? mapLabel(worldMap.name) : "one at a time", separator: true, children };
+  }
+  /** A map's own name (the last part of a custom or workshop map's path). */
+  function mapLabel(name: string): string { return name.split("/").pop() ?? name; }
+  /** Where a map comes from: the game's, a custom one (a server's download, a custom folder's) or the workshop's. */
+  function mapKind(name: string): "game" | "custom" | "workshop" | "sfm" {
+    if (name.startsWith("sfm/") || name.startsWith("sfm-workshop/")) return "sfm";
+    return name.startsWith("maps/workshop/") || name.startsWith("steam-workshop/") ? "workshop" : name.includes("/") ? "custom" : "game";
+  }
+  /** A short note of where a custom or workshop map is (the custom folder, "download", the workshop item). */
+  function mapSource(name: string): string | undefined {
+    const p = name.split("/");
+    if (p[0] === "download") return "download";
+    if (p[0] === "sfm-workshop") return p[1];
+    if (p[0] === "custom") return p[1];
+    if (p[0] === "steam-workshop" || (p[0] === "maps" && p.length > 3)) return p[p.length - 2];
+    return undefined;
+  }
   els.entities.add.onclick = () => {
     openMenu(els.entities.add, [
       { label: "Character", icon: ICON.character, hint: "Ctrl: copy of the selected", run: ({ ctrl }) => void addEntity(ctrl) },
@@ -8786,6 +8995,7 @@ export function createViewTab(els: Els) {
       },
       { label: "Camera", icon: ICON.camera, run: () => addCameraFromView() },
       { label: "Folder", icon: ICON.folder, run: () => hierarchy().newFolder() },
+      mapMenu(),
     ]);
   };
 
@@ -8909,7 +9119,7 @@ export function createViewTab(els: Els) {
     const e = newEntity(v.addActor(), cls, 0);
     e.group = hierarchy().activeGroup();
     const place = (at ? v.floorPointAt(at.clientX, at.clientY) : null) ?? v.floorInFront();
-    v.placeActorAt(e.actor, place.x, 0, place.z);
+    v.placeActorAt(e.actor, place.x, place.y, place.z);
     entities.push(e);
     selected = e;
     soleSelection(e);
@@ -8919,7 +9129,44 @@ export function createViewTab(els: Els) {
     recordAdd("Add prop", [{ kind: "character", id: String(e.id) }]);
     await show(e, e.cls);
     // it stands on the floor, wherever the model keeps its origin
-    v.placeActorAt(e.actor, place.x, -e.actor.bindMinY, place.z);
+    v.placeActorAt(e.actor, place.x, place.y - e.actor.bindMinY, place.z);
+  }
+
+  /** Swaps a prop of the map for a prop of the scene in its place (same model, skin, turn and size), which can be moved. */
+  async function moveMapProp(n: number) {
+    const map = worldMap;
+    const info = map?.propPlacement(n);
+    if (!map || !info) return;
+    const v = ensureViewer();
+    const base = selected;
+    if (base) saveUi(base);
+    const cls = info.model.replace(/^models\//i, "").replace(/\.mdl$/i, "");
+    const e = newEntity(v.addActor(), cls, Math.max(0, info.skin));
+    e.group = hierarchy().activeGroup();
+    const place = () => {
+      e.actor.setScale(new THREE.Vector3(info.scale, info.scale, info.scale));
+      v.placeActorAt(e.actor, info.position.x, info.position.y, info.position.z);
+      e.actor.setPlacement(info.position.x, info.position.y, info.position.z, info.yaw);
+      e.actor.setTilt(info.pitch, info.roll);
+    };
+    place();
+    map.setPropHidden(n, true);
+    entities.push(e);
+    selected = e;
+    soleSelection(e);
+    v.select(e.actor);
+    restoreUi(e);
+    renderEntities();
+    // undone, the map's own prop comes back (deleted, the prop is gone from the map: a way to clear the map's props)
+    let caps: Captured[] = [];
+    const picks: Pick[] = [{ kind: "character", id: String(e.id) }];
+    editHistory.push({
+      label: "Make map prop movable",
+      undo: () => { caps = capturePicks(picks); removeCaptured(caps); if (worldMap === map) map.setPropHidden(n, false); },
+      redo: () => { reinstate(caps); if (worldMap === map) map.setPropHidden(n, true); },
+    });
+    await show(e, e.cls);
+    place();
   }
 
   async function addBuilding(kind: BuildingKind) {

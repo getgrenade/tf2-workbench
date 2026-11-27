@@ -64,11 +64,23 @@ export interface HierarchyHooks {
   nestGroup: (id: string, parent: string | undefined, before?: string) => void;
   /** A three-point light rig's folder was clicked: the properties show its controller. */
   selectRig: (id: string) => void;
+  /** The map's row: shows or hides it, takes it out of the scene. */
+  mapOff?: (off: boolean) => void;
+  mapRemove?: () => void;
+}
+
+/** The map in the scene, as its row at the top of the outliner shows it. */
+export interface OutlinerMap {
+  name: string;
+  /** Hidden. */
+  off: boolean;
+  /** Still loading (what it is doing). */
+  status?: string;
 }
 
 const ICONS = {
   folder: "folder", eye: "eye", hidden: "eyeOff", plus: "plus", fog: "cloudFog", reset: "rotateCcw", cross: "x", search: "search", bulb: "lightbulb",
-  camera: "video", viewfinder: "focus",
+  camera: "video", viewfinder: "focus", map: "map",
 } as const satisfies Record<string, IconName>;
 const icon = (name: keyof typeof ICONS) => svgIcon(ICONS[name]);
 
@@ -430,7 +442,33 @@ export function createHierarchy(host: HTMLElement, hooks: HierarchyHooks) {
     return row;
   }
 
+  /** The map's row: at the top, with its eye and its ×. */
+  function mapRow(m: OutlinerMap): HTMLElement {
+    const row = document.createElement("div");
+    row.setAttribute("role", "treeitem");
+    row.style.setProperty("--depth", "0");
+    row.className = "hierRow hierEntity hierObject hierMap" + (m.off ? " dimmed" : "");
+    row.dataset.key = "map";
+    const glyph = span("hierIcon");
+    glyph.innerHTML = icon("map");
+    const label = span("hierLabel", m.name);
+    label.title = `Map: ${m.name}`;
+    row.append(glyph, label, span("hierCount", m.status || "Map"));
+    if (hooks.mapRemove) row.append(button("hierTool hierRemove", "Take the map out of the scene", icon("cross"), () => hooks.mapRemove!()));
+    if (hooks.mapOff) row.append(button("hierEye", m.off ? "Show the map" : "Hide the map", icon(m.off ? "hidden" : "eye"), () => hooks.mapOff!(!m.off), m.off));
+    row.oncontextmenu = (e) => {
+      e.preventDefault();
+      showContextMenu(e.clientX, e.clientY, [
+        ...(hooks.mapOff ? [{ label: m.off ? "Show" : "Hide", run: () => hooks.mapOff!(!m.off) }] : []),
+        ...(hooks.mapRemove ? [{ label: "Remove", run: () => hooks.mapRemove!() }] : []),
+      ]);
+    };
+    return row;
+  }
+
   // --- drawing --------------------------------------------------------------------------------------------------
+
+  let world: OutlinerMap | null = null;
 
   function redraw() {
     if (renaming) return;
@@ -443,6 +481,7 @@ export function createHierarchy(host: HTMLElement, hooks: HierarchyHooks) {
       search.value,
     );
     tree.replaceChildren();
+    if (world) tree.append(mapRow(world));
     visible = [];
     for (const item of items) {
       if (item.kind === "group") tree.append(groupRow(item));
@@ -453,7 +492,7 @@ export function createHierarchy(host: HTMLElement, hooks: HierarchyHooks) {
         tree.append(nodeRow(n, item.depth, item.dimmed));
       }
     }
-    if (!items.length) {
+    if (!items.length && !world) {
       const empty = document.createElement("div");
       empty.className = "hierEmpty";
       empty.textContent = search.value.trim() ? "No matches" : "Nothing in the scene";
@@ -513,6 +552,12 @@ export function createHierarchy(host: HTMLElement, hooks: HierarchyHooks) {
       selectedRig = nextRig;
       byKey.clear();
       for (const n of nodes) byKey.set(keyOf(n), n);
+      redraw();
+    },
+    /** The map in the scene (null: none). */
+    setMap(next: OutlinerMap | null) {
+      if (JSON.stringify(next) === JSON.stringify(world)) return;
+      world = next;
       redraw();
     },
     /** The folder new characters, lights and cameras go into (absent: none). */

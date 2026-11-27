@@ -2,6 +2,7 @@
 
 pub mod anim;
 pub mod binary;
+pub mod bsp;
 pub mod choreo;
 pub mod itemcompile;
 pub mod propcompile;

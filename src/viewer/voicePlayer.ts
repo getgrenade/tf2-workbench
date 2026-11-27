@@ -19,6 +19,9 @@ export function setVoiceMuted(on: boolean) {
   if (on) stopAll();
 }
 
+/** The audio of the program (shared by the voice lines and a map's sounds). */
+export const audioContext = () => audio();
+
 function audio(): AudioContext {
   ctx ??= new AudioContext();
   if (ctx.state === "suspended") void ctx.resume();

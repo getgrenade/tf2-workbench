@@ -218,6 +218,8 @@ export const readPropSession = (path: string) => invoke<string>("read_prop_sessi
 /** The folders of loose files that are mounted (the game's `tf/custom` addons, and the ones the user added). */
 export interface CustomContent { name: string; root: string; auto: boolean; files: number; models: number }
 export const listCustomContent = () => invoke<CustomContent[]>("list_custom_content");
+/** Reads the folders of loose files again (tf/custom, Source Filmmaker's workshop items, the user's folders): whether anything changed. */
+export const refreshCustomContent = () => invoke<boolean>("refresh_custom_content");
 /** Mounts a folder of loose files (or a folder of such folders); the mounts it made. */
 export const addCustomContent = (path: string) => invoke<CustomContent[]>("add_custom_content", { path });
 export const removeCustomContent = (root: string) => invoke<void>("remove_custom_content", { root });
@@ -258,6 +260,26 @@ export const refreshWorkshop = () => invoke<void>("refresh_workshop");
 
 /** Takes dropped item zips to mount in place (read-only, this session only): the next workshop refresh shows them under the Workshop filter. */
 export const mountItemZips = (paths: string[]) => invoke<void>("mount_item_zips", { paths });
+/** The maps in the game's maps folder (names without .bsp). */
+export const listMaps = () => invoke<string[]>("list_maps");
+/** A map's geometry, lightmap, props and spawn points (binary; see mapScene.ts). */
+export const loadMap = (name: string) => invoke<ArrayBuffer>("load_map", { name });
+/** The light of the loaded map at points (map units): per point its ambient cube (+X -X +Y -Y +Z -Z) and its key light. */
+export interface MapLightAt { cube: [number, number, number][]; key: { dir: [number, number, number]; color: [number, number, number] } | null }
+export const mapLightAt = (name: string, points: [number, number, number][]) => invoke<MapLightAt[] | null>("map_light_at", { name, points });
+/** A model as a map places it: posed by its first sequence (binary, as loadModel). */
+export const loadMapModel = (path: string) => invoke<ArrayBuffer>("load_map_model", { path });
+/** The light a map baked into its static props of a model (`indices`: their numbers): RGBA per vertex of the model's meshes, all zero for none. */
+/** A map's sounds: its ambient_generics, its soundscape zones and the soundscapes they play (see `workbench_core::map::map_sounds`). */
+export interface MapSoundsJson {
+  ambients: { origin: [number, number, number]; waves: string[]; radius: number; volume: number; pitch: number; everywhere: boolean; silent: boolean; looped: boolean }[];
+  zones: { origin: [number, number, number]; radius: number; soundscape: string }[];
+  soundscapes: Record<string, { looping: { wave: string; volume: number; pitch: number }[]; random: { waves: string[]; time: [number, number]; volume: [number, number]; pitch: [number, number] }[] }>;
+}
+export const mapSounds = (name: string) => invoke<MapSoundsJson>("map_sounds", { name });
+export const loadMapPropLight = (map: string, path: string, indices: number[]) => invoke<ArrayBuffer>("load_map_prop_light", { map, path, indices });
+/** A map material's shader, parameters and base textures no bigger than `maxSize` (binary; see mapScene.ts). */
+export const loadMapMaterial = (name: string, maxSize: number) => invoke<ArrayBuffer>("load_map_material", { name, maxSize });
 /** A value that changes when those zips do. */
 export const workshopStamp = () => invoke<string>("workshop_stamp");
 export const listPoses = () => invoke<string[]>("list_poses");
