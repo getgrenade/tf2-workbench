@@ -2102,6 +2102,16 @@ export function createViewTab(els: Els) {
         gizmoToTarget(kind, id);
         renderEntities();
       };
+      // the "Following" chip: shown while the view keeps on a character (double click or "."), with a button to let go
+      const followChip = document.getElementById("viewFollow");
+      if (followChip) {
+        followChip.querySelector<HTMLButtonElement>(".followStop")!.onclick = () => viewer?.stopFollowing();
+        viewer.onFollowChange = (actor) => {
+          const e = actor ? entities.find((x) => x.actor === actor) : null;
+          followChip.hidden = !e;
+          if (e) followChip.querySelector(".followName")!.textContent = e.name || classLabelOf(e.cls);
+        };
+      }
       viewer.onPick = (actor, hit, additive) => {
         const e = entities.find((x) => x.actor === actor);
         if (additive) {

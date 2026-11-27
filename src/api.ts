@@ -33,6 +33,10 @@ export interface Settings {
   pasteInPlace: boolean;
   /** Entering the compiler pauses every character; leaving it puts back what was playing. */
   pauseInCompiler: boolean;
+  /** Items in the browsers show a backpack-like tooltip in place of the plain title. */
+  itemTooltips: boolean;
+  /** The paint picker offers the Halloween spell paints. */
+  spellPaints: boolean;
   /** Interface colours of the 3D view ("#rrggbb" display colours and opacities 0..1): the wireframe overlay and the floor grid. */
   /** The base tone of the interface and its highlight ("#rrggbb"). */
   uiBase: string;

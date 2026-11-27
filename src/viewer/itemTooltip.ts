@@ -7,6 +7,7 @@
 import { loadMaterial } from "../api";
 import { parseMaterial, type ItemInfo, type PaintInfo } from "./payload";
 import { ensureOverlayFont, overlayFontFamily } from "./overlayFonts";
+import { settings } from "../settingsStore";
 
 /** The game's quality colours (clientscheme.res QualityColor*) and the word it puts before the name. */
 export const QUALITIES: Record<string, { color: string; prefix: string }> = {
@@ -107,11 +108,21 @@ function show(lines: TooltipLine[], e: MouseEvent) {
 
 export function hideItemTooltip() { if (tip) tip.hidden = true; }
 
-/** Shows the item's tooltip while the pointer is over `el` (in place of the plain title). */
+/**
+ * Shows the item's tooltip while the pointer is over `el`, in place of its plain title, when Item tooltips is on (Settings, Interface);
+ * off, the plain title stays.
+ */
 export function attachItemTooltip(el: HTMLElement, lines: () => TooltipLine[]) {
-  el.removeAttribute("title");
-  el.addEventListener("mouseenter", (e) => show(lines(), e));
-  el.addEventListener("mousemove", place);
+  const plain = el.getAttribute("title");
+  el.addEventListener("mouseenter", (e) => {
+    if (!settings().itemTooltips) {
+      if (plain !== null) el.setAttribute("title", plain);
+      return;
+    }
+    el.removeAttribute("title");
+    show(lines(), e);
+  });
+  el.addEventListener("mousemove", (e) => { if (tip && !tip.hidden) place(e); });
   el.addEventListener("mouseleave", hideItemTooltip);
   el.addEventListener("mousedown", hideItemTooltip);
 }

@@ -197,6 +197,7 @@ app.innerHTML = `
       </div>
       </div>
       <div id="viewActions" hidden></div>
+      <div id="viewFollow" role="status" hidden><span class="followKey">Following</span><span class="followName"></span><button class="followStop" title="Stop following (the camera stays where it is). A double click on empty space does the same" aria-label="Stop following">×</button></div>
       <div id="viewPlayHint" role="status" hidden><kbd aria-label="Escape key">Esc</kbd><span>TO EXIT PLAY MODE</span></div>
       <div id="viewTools">
       </div>

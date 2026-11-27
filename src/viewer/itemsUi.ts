@@ -3,6 +3,7 @@ import { loadItemDb, reloadItemDb } from "./itemCatalog";
 import { itemMatches } from "./itemSearch";
 import { attachItemTooltip, itemTooltipLines } from "./itemTooltip";
 import { spellPaints, spellSwatch } from "./spellPaints";
+import { settings } from "../settingsStore";
 import { itemIcon } from "./itemIcons";
 import { createBrowserSort, createBrowserView, makeTile, setTileImage } from "./browserView";
 import { itemImageFor, itemUsableBy, newestFirst, styleLabel, type ItemDb, type ItemInfo, type PaintInfo } from "./payload";
@@ -199,7 +200,9 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
       // the eye: the item is taken off for the moment and stays in the loadout (the ✕ takes it out)
       const eye = `<b class="eye" title="${e.hidden ? "Show it again" : "Hide it (it stays in the loadout)"}">${e.hidden ? "◌" : "●"}</b>`;
       card.innerHTML = `<div class="equipIcon">${dot}${eye}<b class="x" title="Remove">✕</b></div><div class="equipName">${escapeHtml(e.item.displayName)}</div>`;
-      attachItemTooltip(card, () => itemTooltipLines(e.item, { paint: e.paint, hint: e.item.paintable ? "Click to pick a paint (Shift + click selects several)" : "Cannot be painted" }));
+      const cardHint = e.item.paintable ? "Click to pick a paint (Shift + click selects several)" : "Cannot be painted";
+      card.title = cardHint;
+      attachItemTooltip(card, () => itemTooltipLines(e.item, { paint: e.paint, hint: cardHint }));
       const image = itemImageFor(e.item, e.style);
       if (image) {
         const icon = card.querySelector<HTMLElement>(".equipIcon")!;
@@ -443,7 +446,8 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
     palette.style.justifyContent = "center";
     menu.style.width = `${cols * 22 + 14}px`;
     menu.appendChild(palette);
-    // the Halloween spell paints, apart from the paint cans: their colour moves through a cycle
+    // the Halloween spell paints, apart from the paint cans: their colour moves through a cycle (when offered: Settings, General)
+    if (!settings().spellPaints) return;
     const spellHead = document.createElement("div");
     spellHead.className = "paintSpellHead";
     spellHead.textContent = "Halloween spells";

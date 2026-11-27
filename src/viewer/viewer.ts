@@ -3546,7 +3546,17 @@ void main() {
   }
 
   /** The character the view follows since it was double-clicked, and where it was then (the view moves as much as it moves). */
-  private followed: { actor: Actor; at: THREE.Vector3 } | null = null;
+  private followState: { actor: Actor; at: THREE.Vector3 } | null = null;
+  private get followed() { return this.followState; }
+  private set followed(f: { actor: Actor; at: THREE.Vector3 } | null) {
+    const was = this.followState?.actor ?? null;
+    this.followState = f;
+    if ((f?.actor ?? null) !== was) this.onFollowChange(f?.actor ?? null);
+  }
+  /** The character the view starts or stops following (null: none now), for the view's "Following" chip. */
+  onFollowChange: (actor: Actor | null) => void = () => {};
+  /** Lets go of the character the view follows (the camera stays where it is). */
+  stopFollowing() { this.followed = null; }
 
   /** Frames a character (zoomed in on it, from where the camera looks now) and keeps the view on it until something else moves the view. */
   focusActor(actor: Actor) {

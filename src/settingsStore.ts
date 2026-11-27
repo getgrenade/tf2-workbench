@@ -14,6 +14,8 @@ export const DEFAULTS: Settings = {
   allowOverlappingCosmetics: false,
   pasteInPlace: true,
   pauseInCompiler: true,
+  itemTooltips: false,
+  spellPaints: false,
   uiBase: "#222226",
   uiScale: 0,
   uiAccent: "#e08a3c",

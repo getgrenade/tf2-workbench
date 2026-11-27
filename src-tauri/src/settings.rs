@@ -32,6 +32,11 @@ pub struct Settings {
     pub paste_in_place: bool,
     /// Entering the compiler pauses every character; leaving it puts back what was playing (on by default).
     pub pause_in_compiler: bool,
+    /// Items in the browsers show a tooltip like the game's backpack (name, level and type, paint, description) in place of the plain
+    /// title (off by default).
+    pub item_tooltips: bool,
+    /// The paint picker offers the Halloween spell paints, whose colour moves (off by default; scenes that use one still show it).
+    pub spell_paints: bool,
     /// The base tone of the interface and its highlight ("#rrggbb"); every colour of the interface is mixed from these two.
     pub ui_base: String,
     /// The size of the interface: 0 fits it to the screen (the layout is made for 1440p), otherwise a factor (0.5–2).
@@ -72,6 +77,8 @@ impl Default for Settings {
             allow_overlapping_cosmetics: false,
             paste_in_place: true,
             pause_in_compiler: true,
+            item_tooltips: false,
+            spell_paints: false,
             ui_base: "#222226".into(),
             ui_scale: 0.0,
             ui_accent: "#e08a3c".into(),
