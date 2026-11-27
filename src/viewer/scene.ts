@@ -12,6 +12,7 @@ import { parseUnusualSettings, type UnusualSettings } from "./particles/assets";
 import { parseWeaponSnapshot, type WeaponParticleSnapshot } from "./particles/weaponSnapshot";
 import { parseConditions, type Conditions } from "./conditions";
 import { parseKillstreak, type Killstreak } from "./killstreak";
+import { spyMaskFamily } from "./spyMask";
 import { parseCameras, type CameraCollection } from "./cameraData";
 import { readFx, type BuildingFx } from "./buildingFx";
 import { parseGroups, type HierarchyGroup } from "./hierarchyTree";
@@ -55,6 +56,8 @@ export interface SceneEntity {
   conditions?: Conditions;
   /** How far the Cloak effect has a Spy gone (0..1). */
   cloak?: number;
+  /** A Spy's disguise mask: the class whose face it shows. */
+  spyMask?: string;
   /** Drawn in plain grey (RGB 115; the GRAY switch of the properties). */
   gray?: boolean;
   /** Authored visibility group ids; scenes without bodyMaskVersion use the older anatomical regions. */
@@ -175,6 +178,7 @@ export function parseScene(text: string): SceneFile {
       bodyMaskVersion: e.bodyMaskVersion === 1 ? 1 : undefined,
       conditions: e.conditions && typeof e.conditions === "object" ? parseConditions(e.conditions) : undefined,
       ...(isNum(e.cloak) ? { cloak: Math.max(0, Math.min(1, e.cloak)) } : {}),
+      ...(typeof e.spyMask === "string" && spyMaskFamily(e.spyMask) !== null ? { spyMask: e.spyMask } : {}),
       lod: isNum(e.lod) && e.lod >= 1 && e.lod <= 7 ? Math.floor(e.lod) : undefined,
       bodygroups: e.bodygroups && typeof e.bodygroups === "object" ? Object.fromEntries(Object.entries(e.bodygroups).filter(([, v]) => isNum(v))) : undefined,
       flex: e.flex && typeof e.flex === "object" ? Object.fromEntries(Object.entries(e.flex).filter(([, v]) => isNum(v))) : {},
