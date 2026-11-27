@@ -11,7 +11,8 @@ fn db() -> Option<items::ItemDb> {
 fn loads_a_large_cosmetic_catalog() {
     let Some(db) = db() else { return };
     assert!(db.items.len() > 800, "only {} cosmetics", db.items.len());
-    assert!(db.items.iter().all(|i| i.model.is_some() || !i.per_class.is_empty()));
+    // every cosmetic has a model: its own, or its styles' (the Tin Pot's two helmets are only in its styles)
+    assert!(db.items.iter().all(|i| i.model.is_some() || !i.per_class.is_empty() || i.styles.iter().any(|s| s.model.is_some() || !s.per_class.is_empty())));
 }
 
 #[test]

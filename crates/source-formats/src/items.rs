@@ -820,7 +820,9 @@ pub fn parse_with_schema(text: &str, names: &HashMap<String, String>, workshop: 
             let wearable = item.item_class.starts_with("tf_wearable") && !item.item_class.contains("_vm");
             // (the Demoman's shields are wearables of the secondary slot: they hang on the arm whatever is in the hand, so they are cosmetics)
             let cosmetic_slot = matches!(item.slot.as_str(), "head" | "misc") || item.item_class == "tf_wearable_demoshield";
-            if wearable && cosmetic_slot && (item.model.is_some() || !item.per_class.is_empty()) {
+            // (an item can have its models only in its styles: the Tin Pot's two helmets)
+            let has_model = item.model.is_some() || !item.per_class.is_empty() || item.styles.iter().any(|s| s.model.is_some() || !s.per_class.is_empty());
+            if wearable && cosmetic_slot && has_model {
                 items.push(item);
             } else if is_held_weapon(&item) {
                 weapons.push(item);
