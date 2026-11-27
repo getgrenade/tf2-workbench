@@ -1028,7 +1028,7 @@ export function createViewTab(els: Els) {
     // (a promo shot's weapon can be held for its pose and not drawn: see ShotSpec.weaponHidden)
     const everything: Equipped[] = weapon && !e.weaponHidden ? [...loadout, { item: weapon, paint: null, style: 0 }] : loadout;
     /** Loads a model (cached) and its materials for a skin family, then adds it to the bonemerged list. */
-    const add = async (path: string, rgb: number | null, skin: number, clip: ClipData | null = null, itemId?: number, idle = false, loop = false, material?: string, tauntClip: ClipData | null = null, spell?: number) => {
+    const add = async (path: string, rgb: number | null, skin: number, clip: ClipData | null = null, itemId?: number, idle = false, loop = false, material?: string, tauntClip: ClipData | null = null, spell?: number, buildClip: ClipData | null = null) => {
       let data = models.get(path);
       if (!data) {
         try {
@@ -1046,10 +1046,10 @@ export function createViewTab(els: Els) {
       if (skin >= data!.skinCount) skin = team < data!.skinCount ? team : 0;
       if (material) await loadMaterials([material]);
       else await ensureMaterials(data!, skin);
-      list.push({ data: data!, paint: rgb === null ? null : unpackRgb(rgb), skin, clip, itemId, idle, loop, material, tauntClip, ...(spell !== undefined ? { spell: { index: spell, blu: team === 1 } } : {}) });
+      list.push({ data: data!, paint: rgb === null ? null : unpackRgb(rgb), skin, clip, itemId, idle, loop, material, tauntClip, buildClip, ...(spell !== undefined ? { spell: { index: spell, blu: team === 1 } } : {}) });
     };
     let prop: { data: ModelData; skin: number; clip: ClipData | null } | null = null;
-    for (const { item: it, paint, style, skin: forced } of everything) {
+    for (const { item: it, paint, style, skin: forced, pose } of everything) {
       // (a cosmetic can be worn in the other team's skin: its paint takes that team's colour too)
       const team = forced ?? e.team;
       if (imported && it === weapon) {
@@ -1088,6 +1088,8 @@ export function createViewTab(els: Els) {
       // while its wearer taunts, an item with a `playback_activity` plays that activity's sequence in step with the taunt (the Infernal
       // Orchestrina's drum turns), whichever taunt it is
       const tauntClip = it !== weapon && it.tauntActivity ? await cosmeticActivityClip(path, it.tauntActivity) : null;
+      // an item with a `start_building` pose held in it by its Pose menu (the Hotrod's mask down over the Engineer's face)
+      const buildClip = it !== weapon && pose === "down" && it.buildActivity ? await cosmeticActivityClip(path, it.buildActivity, true) : null;
       // the items that play an animation of their own all the time: a sequence the game runs on its own clock (a style without it has none:
       // it is posed as the others are)
       if (!weaponClip && it !== weapon) { weaponClip = await cosmeticClockClip(path); loop = !!weaponClip; }
@@ -1095,7 +1097,8 @@ export function createViewTab(els: Els) {
       // Circuit's arm_attach_R onto the forearm; without it the gauntlet floats at its bind pose)
       if (!weaponClip) { weaponClip = await cosmeticIdleClip(path, e.cls); idle = !!weaponClip; }
       // an item drawn in one material of its own whatever its model says (the Golden Wrench's gold)
-      await add(path, rgb, skin, weaponClip, it.id, idle, loop, itemMaterialOverride(it) ?? undefined, tauntClip, paint?.spell);
+      await add(path, rgb, skin, weaponClip, it.id, idle, loop, itemMaterialOverride(it) ?? undefined, tauntClip, paint?.spell, buildClip);
+      if (buildClip && pose && list.length) list[list.length - 1].buildPose = pose;
       if (it === weapon && list.length) list[list.length - 1].weapon = true;
       // Models that travel with the item (a weapon's backpack, an attached part) share its paint and skin.
       for (const extra of it.extraModels ?? []) await add(extra, rgb, skin, null, it.id);
@@ -1266,14 +1269,14 @@ export function createViewTab(els: Els) {
 
   const activityClips = new Map<string, Promise<ClipData | null>>();
   /** A worn item's sequence of an activity (`playback_activity`), baked; null when its model has none. */
-  async function cosmeticActivityClip(path: string, activity: string): Promise<ClipData | null> {
-    const key = `${path}|${activity}`;
+  async function cosmeticActivityClip(path: string, activity: string, still = false): Promise<ClipData | null> {
+    const key = `${path}|${activity}|${still}`;
     let clip = activityClips.get(key);
     if (!clip) {
       clip = (async () => {
         const info = parseAnimInfo(await listSequences(path));
         const seq = activitySequence(info.sequences, activity);
-        return seq && seq.frames > 1 ? await bakeClip(path, seq.index, info.poseParams.map((p) => p.default)) : null;
+        return seq && (still || seq.frames > 1) ? await bakeClip(path, seq.index, info.poseParams.map((p) => p.default)) : null;
       })().catch(() => null);
       activityClips.set(key, clip);
     }
@@ -1384,6 +1387,7 @@ export function createViewTab(els: Els) {
           touched = true;
           const next: Equipped = { ...w, ...("paint" in change ? { paint: change.paint ?? null } : {}), ...(change.style !== undefined ? { style: change.style } : {}), ...(change.hidden !== undefined ? { hidden: change.hidden } : {}) };
           if (change.skin === null) delete next.skin; else if (change.skin !== undefined) next.skin = change.skin;
+          if (change.pose === null) delete next.pose; else if (change.pose !== undefined) next.pose = change.pose;
           return next;
         });
         if (!touched) continue;
@@ -6355,7 +6359,7 @@ export function createViewTab(els: Els) {
     const paints = new Map([...db.paints, ...spellPaints()].map((p) => [p.id, p] as const));
     const loadout: Equipped[] = spec.loadout.flatMap((x) => {
       const item = byId.get(x.item);
-      return item ? [{ item, paint: x.paint !== null ? paints.get(x.paint) ?? null : null, style: x.style, ...(x.hidden ? { hidden: true } : {}) }] : [];
+      return item ? [{ item, paint: x.paint !== null ? paints.get(x.paint) ?? null : null, style: x.style, ...(x.hidden ? { hidden: true } : {}), ...(x.pose ? { pose: x.pose } : {}) }] : [];
     });
     const dress = dressKey(spec);
     if (promo().dressed.get(spec.role) !== dress) {
@@ -6458,7 +6462,7 @@ export function createViewTab(els: Els) {
   const teamOf = (spec: ShotSpec) => spec.team ?? (spec.role === 1 ? 1 : 0);
   /** What a shot's character wears, holds, its team and how it stands, as a key (the character is dressed again only when it changes). */
   const dressKey = (spec: ShotSpec) =>
-    JSON.stringify([spec.cls ?? null, spec.loadout.map((x) => [x.item, x.paint, x.style, !!x.hidden]), spec.weapon, !!spec.weaponHidden, spec.warPaint ?? null, shotRegions(spec), spec.hiddenRegions ?? null, spec.bodyTris ?? null, spec.itemTris ?? null, spec.cig ?? null, spec.bodygroups ?? null, teamOf(spec), spec.pose ? spec.pose.quat.slice(0, 64).map((q) => Math.round(q * 1e4)) : null, spec.flex ?? null]);
+    JSON.stringify([spec.cls ?? null, spec.loadout.map((x) => [x.item, x.paint, x.style, !!x.hidden, x.pose ?? null]), spec.weapon, !!spec.weaponHidden, spec.warPaint ?? null, shotRegions(spec), spec.hiddenRegions ?? null, spec.bodyTris ?? null, spec.itemTris ?? null, spec.cig ?? null, spec.bodygroups ?? null, teamOf(spec), spec.pose ? spec.pose.quat.slice(0, 64).map((q) => Math.round(q * 1e4)) : null, spec.flex ?? null]);
 
   /**
    * Gives a shot a random pose, as the random loadouts do: a taunt (held) or an animation, half the time each, stopped on a frame where
@@ -7002,7 +7006,7 @@ export function createViewTab(els: Els) {
 
   function takePart(part: ShotSpec, e: Entity) {
     const game = gameClassOf(e.cls);
-    part.loadout = e.items.loadout.filter((x) => itemUsableBy(x.item, game)).map((x) => ({ item: x.item.id, name: x.item.displayName, paintable: x.item.paintable, paint: x.paint?.id ?? null, style: x.style, ...(x.hidden ? { hidden: true } : {}) }));
+    part.loadout = e.items.loadout.filter((x) => itemUsableBy(x.item, game)).map((x) => ({ item: x.item.id, name: x.item.displayName, paintable: x.item.paintable, paint: x.paint?.id ?? null, style: x.style, ...(x.hidden ? { hidden: true } : {}), ...(x.pose ? { pose: x.pose } : {}) }));
     part.weapon = e.held?.id ?? null;
     part.warPaint = warPaintSpecOf(e);
     part.team = e.team;
@@ -7691,7 +7695,7 @@ export function createViewTab(els: Els) {
       const game = gameClassOf(e.cls);
       const p: ShotSpec = {
         role: 0, cls: e.cls, team: e.team, weapon: e.held?.id ?? null, warPaint: warPaintSpecOf(e), regions: null, yaw: 0, pitch: 0, fill: 1, w: 1, h: 1,
-        loadout: e.items.loadout.filter((x) => itemUsableBy(x.item, game)).map((x) => ({ item: x.item.id, name: x.item.displayName, paintable: x.item.paintable, paint: x.paint?.id ?? null, style: x.style, ...(x.hidden ? { hidden: true } : {}) })), // (an item hidden with its eye comes as a hidden model of the shot: Models shows it again)
+        loadout: e.items.loadout.filter((x) => itemUsableBy(x.item, game)).map((x) => ({ item: x.item.id, name: x.item.displayName, paintable: x.item.paintable, paint: x.paint?.id ?? null, style: x.style, ...(x.hidden ? { hidden: true } : {}), ...(x.pose ? { pose: x.pose } : {}) })), // (an item hidden with its eye comes as a hidden model of the shot: Models shows it again)
       };
       if (e.bodyManual.size) p.bodygroups = Object.fromEntries(e.bodyManual);
       p.hiddenRegions = hiddenRegionsOf(e, null); // (the parts of the body hidden in the view: a head alone, say)
@@ -8045,7 +8049,7 @@ export function createViewTab(els: Els) {
         ...(e.group ? { group: e.group } : {}),
         ...(e.hidden ? { hidden: true } : {}),
         placement: { x: e.actor.offset.x, y: e.actor.offset.y, z: e.actor.offset.z, yaw: e.actor.yaw, ...(e.actor.pitch !== 0 ? { pitch: e.actor.pitch } : {}), ...(e.actor.roll !== 0 ? { roll: e.actor.roll } : {}), scale: e.actor.scale.toArray() as [number, number, number], placed: v.isPlaced(e.actor) },
-        loadout: e.items.loadout.map((l) => ({ item: l.item.id, paint: l.paint?.id ?? null, style: l.style, ...(l.hidden ? { hidden: true } : {}), ...(l.skin !== undefined ? { skin: l.skin } : {}) })),
+        loadout: e.items.loadout.map((l) => ({ item: l.item.id, paint: l.paint?.id ?? null, style: l.style, ...(l.hidden ? { hidden: true } : {}), ...(l.skin !== undefined ? { skin: l.skin } : {}), ...(l.pose ? { pose: l.pose } : {}) })),
         activeItem: e.items.activeId,
         held: e.held?.id ?? null,
         ...(e.killstreaks?.size ? { killstreaks: Object.fromEntries([...e.killstreaks].map(([id, k]) => [String(id), k])) } : {}),
@@ -8128,7 +8132,7 @@ export function createViewTab(els: Els) {
       e.actor.setBodygroups(Object.fromEntries(e.bodyManual));
       const loadout: Equipped[] = s.loadout.flatMap((l) => {
         const item = byId.get(l.item);
-        return item ? [{ item, paint: l.paint !== null ? paints.get(l.paint) ?? null : null, style: l.style, ...(l.hidden ? { hidden: true } : {}), ...(l.skin !== undefined ? { skin: l.skin } : {}) }] : [];
+        return item ? [{ item, paint: l.paint !== null ? paints.get(l.paint) ?? null : null, style: l.style, ...(l.hidden ? { hidden: true } : {}), ...(l.skin !== undefined ? { skin: l.skin } : {}), ...(l.pose ? { pose: l.pose } : {}) }] : [];
       });
       e.items = { loadout, activeId: loadout.some((x) => x.item.id === s.activeItem) ? s.activeItem : loadout.at(-1)?.item.id ?? null };
       e.held = s.held !== null ? byId.get(s.held) ?? null : null;

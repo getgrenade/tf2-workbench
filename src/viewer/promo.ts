@@ -164,7 +164,7 @@ export interface ShotSpec extends ShotAim {
   /** The class (its model name, as `scout`); absent: the board's. */
   cls?: string;
   /** What it wears: item ids, paint ids (null: unpainted), styles; `name` and `paintable` for the board. */
-  loadout: { item: number; name: string; paintable: boolean; paint: number | null; style: number; /** kept on it but not drawn (the layer's Models) */ hidden?: boolean }[];
+  loadout: { item: number; name: string; paintable: boolean; paint: number | null; style: number; /** kept on it but not drawn (the layer's Models) */ hidden?: boolean; /** in its building pose (the Hotrod's mask down) */ pose?: "down" }[];
   weapon: number | null;
   /** The weapon is held (its pose stays) but not drawn (the layer's Models). */
   weaponHidden?: boolean;

@@ -510,6 +510,8 @@ struct ItemJson<'a> {
     /// The activity the item's model plays while its wearer taunts (`visuals/playback_activity`), upper case.
     #[serde(skip_serializing_if = "str::is_empty")]
     taunt_activity: &'a str,
+    #[serde(skip_serializing_if = "str::is_empty")]
+    build_activity: &'a str,
     workshop: bool,
     /// A workshop item: when its zip was last written (seconds since 1970).
     #[serde(skip_serializing_if = "is_zero")]
@@ -586,6 +588,7 @@ fn item_json(i: &source_formats::items::Item) -> ItemJson<'_> {
         taunt_attack_time: i.taunt_attack_time,
         taunt_sounds: i.taunt_sounds.iter().map(|t| ItemSoundJson { name: &t.name, offset: t.offset, looping: t.looping }).collect(),
         taunt_activity: &i.taunt_activity,
+        build_activity: &i.build_activity,
         workshop: i.workshop,
         added: i.added,
         styles: i
