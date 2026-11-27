@@ -820,7 +820,9 @@ export class Actor {
         if (!eye && material.userData.shared) mesh.userData.source = { data: this.materials.get(path) ?? null, paint: null };
         if (material.uniforms.uBodyHideBits?.value) mesh.userData.bodyMask = { texture: material.uniforms.tBodyMask.value, bits: material.uniforms.uBodyHideBits.value };
         const group = materialBodyGroup(path);
-        if (group) mesh.visible = this.shownRegions.has(group);
+        // (only a class model has these groups: on any other one, an MvM robot's or a prop's, a material named like the head's is no group,
+        // and its shown parts are all of it, "*")
+        if (group && this.maskClass) mesh.visible = this.shownRegions.has("*") || this.shownRegions.has(group);
         mesh.userData.meshData = m;
         mesh.userData.maskKey = `${bp.name}/${modelIndex}/${meshIndex}`;
         // (what the grey is made from: the body's own material data; an eye is plain grey)

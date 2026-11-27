@@ -232,6 +232,13 @@ pub async fn load_map_material(state: State<'_, AppState>, name: String, max_siz
     Ok(tauri::ipc::Response::new(workbench_core::map::map_material(&state, &name, max_size)?))
 }
 
+/// Mounts the files a map packs (`tf/maps/<map>.bsp`): the models only a map has, like Versus Saxton Hale's bosses, which its VScript
+/// game mode gives the players. Mounting a map again does nothing.
+#[tauri::command]
+pub fn mount_map(state: State<'_, AppState>, map: String) -> Result<(), String> {
+    state.vpk()?.mount_map(&map).map_err(|e| e.to_string())
+}
+
 /// A value that changes when the importer's zips do, so the interface can tell when a refresh is due.
 #[tauri::command]
 pub fn workshop_stamp(state: State<'_, AppState>) -> Result<String, String> {
@@ -701,8 +708,14 @@ pub async fn scene_playing(state: State<'_, AppState>, paths: Vec<String>, seque
 
 /// A class's voice lines, from its response rules.
 #[tauri::command]
-pub async fn voice_lines(state: State<'_, AppState>, class: String) -> Result<serde_json::Value, String> {
-    workbench_core::voice::voice_lines(&state, &class)
+pub async fn voice_lines(state: State<'_, AppState>, class: String, robot: Option<String>) -> Result<serde_json::Value, String> {
+    workbench_core::voice::voice_lines(&state, &class, robot.as_deref())
+}
+
+/// An NPC's lines: the waves of the sound script entries named with `sounds` (less those with `skip`) and the sound files under `folders`.
+#[tauri::command]
+pub async fn npc_voice_lines(state: State<'_, AppState>, sounds: Vec<String>, skip: Vec<String>, folders: Vec<String>) -> Result<serde_json::Value, String> {
+    workbench_core::voice::npc_voice_lines(&state, &sounds, &skip, &folders)
 }
 
 /// A class's phoneme mouth shapes (two sets, `plain` and `hwm`: phoneme code -> controller weights).

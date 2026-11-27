@@ -7,15 +7,19 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { createCompilerUi, type PreviewApplication } from "../compiler/compilerUi";
 import { MODEL_EXTENSIONS } from "../compiler/importModel";
 import { createPropPanel, PROP_DRAG_TYPE } from "../props/propPanel";
+import { PlacementGhost } from "./placementGhost";
+
+/** What an entry of the Add menu dragged into the view carries: what it adds (`character`, `building:<kind>`). */
+const ADD_DRAG_TYPE = "application/x-workbench-add";
 import { propLabel } from "../props/propList";
 import { forgetThumbnail } from "../props/propThumbs";
 import { decodeTga, encodeTga, iconProblem, ICON_SAFE_ROWS } from "../compiler/tga";
 import { fadeAmount, maskIcon, type IconFade } from "../compiler/iconMask";
-import { searchPaths, importSourceDir, readItemSession, readPropSession, saveItemIcon, buildItem, buildProp, loadTextureFrames, readSourceFile, revealFile, sourceSiblings, sourceStamp, mountItemZips, listMaps, mapLightAt, refreshCustomContent } from "../api";
+import { searchPaths, importSourceDir, readItemSession, readPropSession, saveItemIcon, buildItem, buildProp, loadTextureFrames, readSourceFile, revealFile, sourceSiblings, sourceStamp, mountItemZips, listMaps, mapLightAt, refreshCustomContent, mountMap } from "../api";
 import { FILE_DROP_EVENT, type FileDropDetail } from "../fileDrop";
 import { parseTextureFrames } from "./sourceMaterials";
 import { getWeaponProfile, importEffectZip, removeCustomEffect, type WeaponProfile, type UnusualEffectInfo } from "../api";
-import { lipSync, loadScene, phonemeClasses, scenePlaying, voiceLines, type VoiceLine } from "../api";
+import { lipSync, loadScene, npcVoiceLines, phonemeClasses, scenePlaying, voiceLines, type VoiceLine } from "../api";
 import { closeVoiceLines, openVoiceLines } from "./voiceLinesUi";
 import { FaceDriver, type FaceLine } from "./faceDriver";
 import type { FlexGlobals } from "./flex";
@@ -91,6 +95,7 @@ import { loadSettings, onSettingsChange, settings, updateSetting } from "../sett
 import { accentHex } from "../theme";
 import { zombieFamily, type Actor } from "./actor";
 import { DISPENSER_MAX_METAL, defaultFx, type BuildingFx } from "./buildingFx";
+import { BOSSES, GIANT_SCALE, HL2_CITIZEN_GROUPS, ROBOTS, bossOf, hl2Keys, robotOf } from "./npcs";
 import { BUILDINGS, buildingCls, buildingLabel, buildingOf, classPath, defaultBuildingSequence, isBuildingCls, type BuildingKind, type BuildingStage, type TeleporterMode } from "./buildings";
 import { bakeClip, blendingTaunts, createAnimUi, newAnimState, type AnimEls, type AnimState } from "./animUi";
 import { createFlexUi, flexGlobalsFor, type FlexEls } from "./flexUi";
@@ -683,10 +688,12 @@ export function createViewTab(els: Els) {
   });
   const eyesFollow = document.getElementById("flexEyesFollow") as HTMLInputElement | null;
   if (eyesFollow) eyesFollow.onchange = () => { selected?.actor.setEyesFollowCamera(eyesFollow.checked); };
-  const gameClassOf = (mdl: string) => CLASSES.find(([, m]) => m === mdl)?.[2] ?? mdl;
+  const gameClassOf = (mdl: string) => robotOf(mdl)?.gameClass ?? CLASSES.find(([, m]) => m === mdl)?.[2] ?? mdl;
   const classLabelOf = (mdl: string) => {
     const building = buildingOf(mdl);
     if (building) return buildingLabel(building);
+    const npc = robotOf(mdl) ?? bossOf(mdl);
+    if (npc) return npc.label;
     // any other model of a path is a prop: it goes by its model's name
     return CLASSES.find(([, m]) => m === mdl)?.[0] ?? (isBuildingCls(mdl) ? propLabel(mdl.split("#")[0]) : "…");
   };
@@ -907,6 +914,28 @@ export function createViewTab(els: Els) {
       // a building wears nothing: its team is its skin
       e.actor.setSkin(e.team);
       applyBuildingFx(e);
+      // a boss has the models the game attaches to it (the Horsemann's axe, the Skeleton King's crown, the tank's tracks)
+      const boss = bossOf(e.cls);
+      if (boss?.attached) {
+        const list: CosmeticSpec[] = [];
+        for (const a of boss.attached) {
+          const path = `models/${a.model}.mdl`;
+          try {
+            let data = models.get(path);
+            if (!data) {
+              data = parsePayload(await loadModel(path));
+              models.set(path, data);
+            }
+            await ensureMaterials(data, 0);
+            const clip = a.loop ? await cosmeticSequenceClip(path, a.loop) : null;
+            list.push({ data, paint: null, skin: 0, clip, loop: !!clip });
+          } catch (err) {
+            console.error(`${path}: ${String(err)}`);
+          }
+        }
+        if (token !== e.loadoutToken || !entities.includes(e)) return;
+        e.actor.setCosmetics(list);
+      }
       return;
     }
     loadout = loadout.filter((x) => !x.hidden); // an item hidden with its eye stays in the loadout but is not worn
@@ -1832,17 +1861,54 @@ export function createViewTab(els: Els) {
     if (!viewer) {
       viewer = new Viewer(els.wrap, () => [models, materials]);
       viewer.setSelectionOutline(document.getElementById("hudOutline")?.classList.contains("on") ?? true);
-      // a prop dragged out of the browser and dropped on the view is put where it is dropped
+      // a prop dragged out of the browser, or an entry of the Add menu, dropped on the view is put where it is dropped; while it is
+      // dragged over the view a see-through ghost of it shows where that is
+      const ghost = new PlacementGhost();
+      viewer.scene.add(ghost.group);
+      /** What is being dragged (read when the drag starts: a drag's data cannot be read while it moves). */
+      let dragged: { model: string; onLowest: boolean; scale?: number } | null = null;
+      const dragModel = (dt: DataTransfer): { model: string; onLowest: boolean; scale?: number } | null => {
+        const prop = dt.getData(PROP_DRAG_TYPE);
+        if (prop) return { model: prop, onLowest: true };
+        const add = dt.getData(ADD_DRAG_TYPE);
+        if (add === "character") return { model: classPath(addedClass()), onLowest: false };
+        if (add.startsWith("building:")) return { model: classPath(buildingCls(add.slice(9) as BuildingKind, 1)), onLowest: false };
+        if (add.startsWith("robot:") && ROBOTS[add.slice(6)]) return { model: classPath(add.slice(6)), onLowest: false, scale: ROBOTS[add.slice(6)].giant ? GIANT_SCALE : 1 };
+        const boss = add.startsWith("boss:") ? BOSSES[add.slice(5)] : undefined;
+        if (boss) {
+          if (boss.map) void mountMap(boss.map).catch(() => undefined);
+          return { model: `models/${boss.model}.mdl`, onLowest: !!boss.floats, scale: boss.scale ?? 1 };
+        }
+        return null;
+      };
+      document.addEventListener("dragstart", (ev) => { dragged = ev.dataTransfer ? dragModel(ev.dataTransfer) : null; });
+      document.addEventListener("dragend", () => { dragged = null; ghost.hide(); });
+      const ours = (dt: DataTransfer | null) => !!dt && (dt.types.includes(PROP_DRAG_TYPE) || dt.types.includes(ADD_DRAG_TYPE));
       els.wrap.addEventListener("dragover", (ev) => {
-        if (!ev.dataTransfer?.types.includes(PROP_DRAG_TYPE)) return;
+        if (!ours(ev.dataTransfer)) return;
         ev.preventDefault();
-        ev.dataTransfer.dropEffect = "copy";
+        ev.dataTransfer!.dropEffect = "copy";
+        void ghost.show(dragged?.model ?? null, viewer?.floorPointAt(ev.clientX, ev.clientY) ?? null, dragged?.onLowest, dragged?.scale);
+      });
+      els.wrap.addEventListener("dragleave", (ev) => {
+        if (!els.wrap.contains(ev.relatedTarget as Node | null)) ghost.hide();
       });
       els.wrap.addEventListener("drop", (ev) => {
+        ghost.hide();
+        const at = { clientX: ev.clientX, clientY: ev.clientY };
         const path = ev.dataTransfer?.getData(PROP_DRAG_TYPE);
-        if (!path) return;
+        if (path) {
+          ev.preventDefault();
+          void addProp(path, at);
+          return;
+        }
+        const add = ev.dataTransfer?.getData(ADD_DRAG_TYPE);
+        if (!add) return;
         ev.preventDefault();
-        void addProp(path, { clientX: ev.clientX, clientY: ev.clientY });
+        if (add === "character") void addEntity(false, true, false, at);
+        else if (add.startsWith("building:")) void addBuilding(add.slice(9) as BuildingKind, at);
+        else if (add.startsWith("robot:") && ROBOTS[add.slice(6)]) void addRobot(add.slice(6), at);
+        else if (add.startsWith("boss:") && BOSSES[add.slice(5)]) void addBoss(add.slice(5), at);
       });
       const boxButton = document.getElementById("boxSelect") as HTMLButtonElement;
       boxButton.innerHTML = svgIcon("squareDashedMousePointer");
@@ -2016,7 +2082,8 @@ export function createViewTab(els: Els) {
       if (left.includes("cig")) void applyUnusuals(e);
     }
     if (e === selected) renderConditions(); // some effects are the toggles of one class
-    if (isBuildingCls(cls)) preset = { ...preset, seqName: preset?.seqName ?? defaultBuildingSequence(cls) };
+    // (an NPC's own standing sequence first: the general default would put a model with an "idle" of one frame, the seal, in that)
+    if (isBuildingCls(cls)) preset = { ...preset, seqName: preset?.seqName ?? (bossOf(cls)?.sequence || defaultBuildingSequence(cls) || "") };
     if (!preset && e.actor.inspectOnly) preset = { seqName: "ref" }; // an item opened alone stays in the reference pose on every class
     const token = ++e.showToken;
     const path = modelPath(e, cls);
@@ -2024,6 +2091,9 @@ export function createViewTab(els: Els) {
     if (!data) {
       if (e === selected) els.info.textContent = `Loading ${path}…`;
       try {
+        // a boss only a map has (Saxton Hale) is read from that map's packed files
+        const map = bossOf(cls)?.map;
+        if (map) await mountMap(map);
         data = parsePayload(await loadModel(path));
       } catch (err) {
         if (e === selected) els.info.textContent = `Failed to load ${path}:\n${String(err)}`;
@@ -2066,6 +2136,7 @@ export function createViewTab(els: Els) {
       const from = preset?.playback?.();
       if (from) Object.assign(e.actor.playback, { time: from.time, speed: from.speed, loopAll: from.loopAll, playing: from.playing });
       applyBuildingFx(e, !preset?.playback);
+      if (bossOf(e.cls)?.attached) void applyLoadout(e, []); // what the game attaches to a boss
       if (e === selected) {
         anim.show(e.anim, e.actor);
         renderBuildingPanel();
@@ -2146,9 +2217,18 @@ export function createViewTab(els: Els) {
    * part is one of the model's bodygroups (the stepper: which of its models shows). The model's bodygroups are the left column, in bold,
    * and the parts that are only drawn or not (the hide groups) the right one.
    */
+  /** Whether a model (a prop's, an NPC's, a building's) has bodygroups to switch: a part with more than one model. */
+  function hasModelBodygroups(e: Entity | null): boolean {
+    const data = e ? models.get(classPath(e.cls)) : null;
+    return !!data?.bodyParts.some((bp) => bp.models.length > 1);
+  }
+
   function renderBodygroups() {
     if (iconTab && activeTab === iconTab) renderIconParts(); // the studio's own list of the parts
     if (!bodyBox) return;
+    // (a prop's or an NPC's: shown once its model, which may have come since the panel was drawn, has bodygroups)
+    const block = document.getElementById("bodyBlock");
+    if (block && selected && isBuildingCls(selected.cls)) block.hidden = !hasModelBodygroups(selected);
     bodyBox.replaceChildren();
     const e = selected;
     const data = e ? models.get(modelPath(e)) : null;
@@ -3086,8 +3166,9 @@ export function createViewTab(els: Els) {
     characterTransform.el.hidden = nothingSelected || propsKind !== "character";
     lightTransform.el.hidden = nothingSelected || propsKind !== "light";
     if (cameraTransformEl) cameraTransformEl.hidden = nothingSelected || propsKind !== "camera";
-    // a building has no class, bodygroups, level of detail or effects
-    for (const id of ["classBlock", "bodyBlock", "effectsBlock"]) propsEl(id).hidden = building;
+    // a building, a prop or an NPC has no class or effects; its bodygroups show when its model has some (see renderBodygroups)
+    for (const id of ["classBlock", "effectsBlock"]) propsEl(id).hidden = building;
+    propsEl("bodyBlock").hidden = building && !hasModelBodygroups(selected);
     els.focusFace.hidden = building;
     syncTransform();
   }
@@ -3693,7 +3774,8 @@ export function createViewTab(els: Els) {
         removable: true,
         // a prop is on no team: it wears a skin, and says so only when it has more than one
         ...(skinsOf(e) === 0 ? { team: e.team } : skinsOf(e) > 1 ? { skin: e.team } : {}),
-        icon: buttons.get(e.cls)?.querySelector("img")?.src ?? "",
+        // (a robot has its class's icon)
+        icon: buttons.get(robotOf(e.cls) ? CLASSES.find(([, , g]) => g === gameClassOf(e.cls))?.[1] ?? e.cls : e.cls)?.querySelector("img")?.src ?? "",
         fogged: e.actor.fogged,
         canClearParticles: !!viewer?.hasFrozenWeaponEffects(e.actor),
       })),
@@ -3717,13 +3799,24 @@ export function createViewTab(els: Els) {
 
   /** Adds a character next to the others, of the selected one's class and team, and selects it. */
   /** `inPlace`: the copy takes the place, turn and size of the one it copies (a paste), instead of a free spot in the row. */
-  async function addEntity(copy = false, record = true, inPlace = false) {
+  /** The class a new character has: the selected one's when that is a merc, else the first class. */
+  function addedClass(): string {
+    return selected && CLASSES.some(([, m]) => m === selected!.cls) ? selected.cls : CLASSES[0][1];
+  }
+
+  /** With `at` (a point of the view, where an entry of the Add menu was dropped) the character stands on the floor there. */
+  async function addEntity(copy = false, record = true, inPlace = false, at?: { clientX: number; clientY: number }) {
     const v = ensureViewer();
     const base = selected;
     if (base) saveUi(base);
     const copiedPose = copy && base ? base.actor.snapshotCustomPose() : null;
     const pose = copiedPose && base ? { ...copiedPose, bones: base.actor.boneNames, editing: base.actor.isPosing } : undefined;
-    const e = newEntity(v.addActor(), base?.cls ?? CLASSES[0][1], base?.team ?? 0);
+    // a character is a merc: of the selected one's class, unless that is no merc (an NPC, a building, a prop), when it is the first class;
+    // Ctrl copies whatever is selected
+    const merc = base && (copy || CLASSES.some(([, m]) => m === base.cls)) ? base : null;
+    const e = newEntity(v.addActor(), merc?.cls ?? CLASSES[0][1], merc?.team ?? 0);
+    const dropAt = at ? v.floorPointAt(at.clientX, at.clientY) : null;
+    if (dropAt) v.placeActorAt(e.actor, dropAt.x, 0, dropAt.z);
     e.group = hierarchy().activeGroup() ?? (copy ? base?.group : undefined);
     if (copy && base) e.actor.setScale(base.actor.scale);
     if (base?.hwm && e.cls === base.cls) e.hwm = true; // (a new merc of the selected one's class is drawn the same)
@@ -5317,10 +5410,17 @@ export function createViewTab(els: Els) {
       void refreshFace(prev);
     }
     const e = selected;
-    if (!line || !e || isBuildingCls(e.cls)) return 0;
-    const scene = await loadSceneCached(line.scene);
+    if (!line || !e || (isBuildingCls(e.cls) && !bossOf(e.cls))) return 0;
+    // an NPC's line has no scene: its sound, said from the start
+    const scene = line.scene
+      ? await loadSceneCached(line.scene)
+      : { path: "", events: [], ramp: [], expressions: {}, sounds: { [line.sound.name.toLowerCase()]: line.sound } };
     if (!scene) return 0;
-    const speaks = scene.events.filter((ev) => ev.kind === "speak").map((ev) => ({ start: ev.start, sound: scene.sounds[ev.params.toLowerCase()] })).filter((s) => s.sound?.waves.length);
+    const speaks = line.scene
+      ? scene.events.filter((ev) => ev.kind === "speak").map((ev) => ({ start: ev.start, sound: scene.sounds[ev.params.toLowerCase()] })).filter((s) => s.sound?.waves.length)
+      : [{ start: 0, sound: line.sound }];
+    // a robot says the line's robot waves (the scene names the class's sound)
+    if (robotOf(e.cls)) for (const s of speaks) if (s.sound.name.toLowerCase() === line.sound.name.toLowerCase()) s.sound = line.sound;
     const [classes, lines] = await Promise.all([
       mouthShapesOf(e),
       Promise.all(speaks.map(async (s) => {
@@ -5356,8 +5456,26 @@ export function createViewTab(els: Els) {
 
   els.face.lines.onclick = () =>
     openVoiceLines({
-      character: () => (selected && !isBuildingCls(selected.cls) ? { label: classLabelOf(selected.cls), game: gameClassOf(selected.cls) } : null),
-      lines: (game) => voiceLines(game),
+      // (the key the lines are asked for with: a class, a robot's class and voice, or an NPC)
+      character: () => {
+        const e = selected;
+        if (!e) return null;
+        const boss = bossOf(e.cls);
+        const bossKey = boss && Object.keys(BOSSES).find((k) => BOSSES[k] === boss);
+        if (bossKey) return BOSSES[bossKey].voice ? { label: boss.label, game: `npc:${bossKey}` } : null;
+        if (isBuildingCls(e.cls)) return null;
+        const robot = robotOf(e.cls);
+        return { label: classLabelOf(e.cls), game: robot ? `${robot.gameClass}|${robot.giant ? "mght" : "norm"}` : gameClassOf(e.cls) };
+      },
+      lines: async (game) => {
+        if (game.startsWith("npc:")) {
+          const boss = BOSSES[game.slice(4)];
+          if (boss.map) await mountMap(boss.map);
+          return boss.voice ? npcVoiceLines(boss.voice) : [];
+        }
+        const [cls, robot] = game.split("|") as [string, "norm" | "mght" | undefined];
+        return voiceLines(cls, robot);
+      },
       play: playVoiceLine,
       seek: (time, playing) => {
         voiceClock = { time, playing, since: performance.now() };
@@ -8778,7 +8896,7 @@ export function createViewTab(els: Els) {
   // The Add menu of the outliner: a character, a buildable, a light or a camera
   const ICON = {
     character: "userRound", buildable: "wrench", prop: "box", light: "lightbulb", camera: "video", sun: "sun", point: "circleDot", spot: "flashlight",
-    area: "rectangleHorizontal", folder: "folder", classes: "users", heads: "scanFace", map: "map",
+    area: "rectangleHorizontal", folder: "folder", classes: "users", heads: "scanFace", map: "map", npc: "bot",
   } as const satisfies Record<string, IconName>;
   const propsRoot = document.getElementById("propsPane");
   if (propsRoot) createPropPanel(propsRoot, { add: (path, at) => void addProp(path, at) });
@@ -8963,7 +9081,7 @@ export function createViewTab(els: Els) {
   }
   els.entities.add.onclick = () => {
     openMenu(els.entities.add, [
-      { label: "Character", icon: ICON.character, hint: "Ctrl: copy of the selected", run: ({ ctrl }) => void addEntity(ctrl) },
+      { label: "Character", icon: ICON.character, hint: "Ctrl: copy of the selected · drag into the view", drag: { type: ADD_DRAG_TYPE, data: "character" }, run: ({ ctrl }) => void addEntity(ctrl) },
       {
         label: "All classes",
         icon: ICON.classes,
@@ -8974,9 +9092,47 @@ export function createViewTab(els: Els) {
         label: "Buildable",
         icon: ICON.buildable,
         children: [
-          { label: "Dispenser", run: () => void addBuilding("dispenser") },
-          { label: "Sentry", run: () => void addBuilding("sentry") },
-          { label: "Teleporter", run: () => void addBuilding("teleporter") },
+          { label: "Dispenser", drag: { type: ADD_DRAG_TYPE, data: "building:dispenser" }, run: () => void addBuilding("dispenser") },
+          { label: "Sentry", drag: { type: ADD_DRAG_TYPE, data: "building:sentry" }, run: () => void addBuilding("sentry") },
+          { label: "Teleporter", drag: { type: ADD_DRAG_TYPE, data: "building:teleporter" }, run: () => void addBuilding("teleporter") },
+        ],
+      },
+      {
+        label: "NPC",
+        icon: ICON.npc,
+        children: [
+          {
+            label: "MvM robot",
+            children: Object.entries(ROBOTS).filter(([, r]) => !r.giant).map(([key, r]) => ({ label: r.label.replace(/^Robot /, ""), drag: { type: ADD_DRAG_TYPE, data: `robot:${key}` }, run: () => void addRobot(key) })),
+          },
+          {
+            label: "MvM giant",
+            children: Object.entries(ROBOTS).filter(([, r]) => r.giant).map(([key, r]) => ({ label: r.label.replace(/^Giant /, ""), drag: { type: ADD_DRAG_TYPE, data: `robot:${key}` }, run: () => void addRobot(key) })),
+          },
+          { label: BOSSES.buster.label, run: () => void addBoss("buster") },
+          { label: BOSSES.tank.label, run: () => void addBoss("tank") },
+          ...(["hatman", "monoculus", "merasmus", "skeleton", "skeletonKing", "ghost", "ghostNoHat"] as const).map((key, i) => ({ label: BOSSES[key].label, separator: i === 0, drag: { type: ADD_DRAG_TYPE, data: `boss:${key}` }, run: () => void addBoss(key) })),
+          ...(["saxton", "santaHale", "hellHale", "krampus"] as const).map((key, i) => ({ label: BOSSES[key].label, separator: i === 0, drag: { type: ADD_DRAG_TYPE, data: `boss:${key}` }, run: () => void addBoss(key) })),
+          // the creatures of the maps
+          ...(["toastmaster", "botler", "botlerMedkit", "salmann", "seal", "sealSmall", "chicken"] as const).map((key, i) => ({ label: BOSSES[key].label, separator: i === 0, drag: { type: ADD_DRAG_TYPE, data: `boss:${key}` }, run: () => void addBoss(key) })),
+          // Half-Life 2's characters, from the HL2 content that comes with TF2
+          {
+            label: "HL2",
+            separator: true,
+            children: [
+              ...(["characters", "combine", "creatures"] as const).map((part) => ({
+                label: { characters: "Characters", combine: "Combine", creatures: "Creatures" }[part],
+                children: hl2Keys(part).map((key) => ({ label: BOSSES[key].label, drag: { type: ADD_DRAG_TYPE, data: `boss:${key}` }, run: () => void addBoss(key) })),
+              })),
+              {
+                label: "Citizens",
+                children: HL2_CITIZEN_GROUPS.map(({ group, label }) => ({
+                  label,
+                  children: hl2Keys("citizens", group).map((key) => ({ label: BOSSES[key].label, drag: { type: ADD_DRAG_TYPE, data: `boss:${key}` }, run: () => void addBoss(key) })),
+                })),
+              },
+            ],
+          },
         ],
       },
       { label: "Prop…", icon: ICON.prop, hint: "opens the prop browser", run: () => document.dispatchEvent(new CustomEvent("workbench:reveal-panel", { detail: "props" })) },
@@ -9169,11 +9325,13 @@ export function createViewTab(els: Els) {
     place();
   }
 
-  async function addBuilding(kind: BuildingKind) {
+  async function addBuilding(kind: BuildingKind, at?: { clientX: number; clientY: number }) {
     const v = ensureViewer();
     const base = selected;
     if (base) saveUi(base);
     const e = newEntity(v.addActor(), buildingCls(kind, 1), base?.team ?? 0);
+    const dropAt = at ? v.floorPointAt(at.clientX, at.clientY) : null;
+    if (dropAt) v.placeActorAt(e.actor, dropAt.x, 0, dropAt.z);
     entities.push(e);
     selected = e;
     soleSelection(e);
@@ -9183,6 +9341,53 @@ export function createViewTab(els: Els) {
     recordAdd("Add building", [{ kind: "character", id: String(e.id) }]);
     await show(e, e.cls);
     v.charactersChanged();
+  }
+
+  /** Puts an MvM robot in the scene: a character of the robot's model (a giant at the miniboss scale), in the selected one's team, with its class's stock primary weapon in hand. */
+  async function addRobot(key: string, at?: { clientX: number; clientY: number }) {
+    const robot = ROBOTS[key];
+    const v = ensureViewer();
+    const base = selected;
+    if (base) saveUi(base);
+    const team = base && !isBuildingCls(base.cls) ? base.team : 1; // the robots are BLU unless a RED one is wanted
+    const e = newEntity(v.addActor(), key, team);
+    const dropAt = at ? v.floorPointAt(at.clientX, at.clientY) : null;
+    if (dropAt) v.placeActorAt(e.actor, dropAt.x, 0, dropAt.z);
+    e.group = hierarchy().activeGroup();
+    if (robot.giant) e.actor.setScale(new THREE.Vector3(GIANT_SCALE, GIANT_SCALE, GIANT_SCALE));
+    const db = await loadItemDb().catch(() => null);
+    const slot = MENU_SLOT[robot.gameClass] ?? "primary"; // (the Medic's medigun, the Engineer's wrench, the Spy's knife)
+    if (db) e.held = db.weapons.find((w) => w.baseItem && itemUsableBy(w, robot.gameClass) && slotForClass(w, robot.gameClass) === slot) ?? null;
+    entities.push(e);
+    selected = e;
+    soleSelection(e);
+    v.select(e.actor);
+    restoreUi(e);
+    renderEntities();
+    recordAdd("Add robot", [{ kind: "character", id: String(e.id) }]);
+    await show(e, e.cls);
+    v.charactersChanged();
+  }
+
+  /** Puts a boss in the scene: a prop of its model, at its size and in its skin, with what the game attaches to it. */
+  async function addBoss(key: string, at?: { clientX: number; clientY: number }) {
+    const boss = BOSSES[key];
+    if (boss.map) {
+      try {
+        await mountMap(boss.map);
+      } catch (err) {
+        els.info.textContent = `${boss.label} is in maps/${boss.map}.bsp, which could not be read:\n${String(err)}`;
+        return;
+      }
+    }
+    await addProp(`models/${boss.model}.mdl`, at);
+    const e = selected;
+    if (!e || e.cls !== boss.model) return;
+    if (boss.scale) e.actor.setScale(new THREE.Vector3(boss.scale, boss.scale, boss.scale));
+    // the game keeps a boss's origin on the ground (its reference pose can reach below it: the Horsemann's, the tank's tracks); one that
+    // floats sits on its lowest point, like a prop
+    ensureViewer().placeActorAt(e.actor, e.actor.offset.x, boss.floats ? -e.actor.bindMinY * (boss.scale ?? 1) : 0, e.actor.offset.z);
+    if (boss.skin && skinsOf(e) > boss.skin) await setTeam(e, boss.skin);
   }
 
   /** Swaps a building's model for another level or stage, keeping its place, team and animation clock. */

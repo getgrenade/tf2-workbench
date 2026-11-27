@@ -7,6 +7,8 @@
  * that level another (`GetFinishedModel` / `GetBuildingModel`).
  */
 
+import { robotOf } from "./npcs";
+
 export type BuildingKind = "dispenser" | "sentry" | "teleporter";
 /** Finished: the building at rest. Building: the model the game shows while it is built or upgraded to the level. */
 export type BuildingStage = "finished" | "building";
@@ -63,8 +65,8 @@ export function buildingCls(kind: BuildingKind, level: number, stage: BuildingSt
 /** A `cls` holding a path is a building (or another prop); a bare name is a player class. */
 export const isBuildingCls = (cls: string) => cls.includes("/");
 
-/** The model path of an entity's `cls`: a class under models/player, a building at its own path. */
-export const classPath = (cls: string) => (isBuildingCls(cls) ? `models/${cls.split("#")[0]}.mdl` : `models/player/${cls}.mdl`);
+/** The model path of an entity's `cls`: a class under models/player, a robot under models/bots (see npcs.ts), a building at its own path. */
+export const classPath = (cls: string) => (isBuildingCls(cls) ? `models/${cls.split("#")[0]}.mdl` : `models/${robotOf(cls)?.model ?? `player/${cls}`}.mdl`);
 
 /** What a `cls` is as a building; null for a class or a model that is none of the table's. */
 export function buildingOf(cls: string): BuildingInfo | null {

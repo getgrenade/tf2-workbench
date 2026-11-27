@@ -165,8 +165,11 @@ export interface VoiceLine {
   /** Seconds. */
   duration: number;
 }
-/** A class's voice lines, from its response rules. */
-export const voiceLines = (className: string) => invoke<VoiceLine[]>("voice_lines", { class: className });
+/** A class's voice lines, from its response rules. With `robot` ("norm", "mght" for a giant), the MvM robot's own waves of the lines (and only the lines the robots have). */
+export const voiceLines = (className: string, robot?: "norm" | "mght") => invoke<VoiceLine[]>("voice_lines", { class: className, robot: robot ?? null });
+/** An NPC's lines, one per wave (no scene): its sound script entries and the sound files under its folders (a map's packed ones too). */
+export const npcVoiceLines = (voice: { sounds?: string[]; skip?: string[]; folders?: string[] }) =>
+  invoke<VoiceLine[]>("npc_voice_lines", { sounds: voice.sounds ?? [], skip: voice.skip ?? [], folders: voice.folders ?? [] });
 /** The lip sync of a wave (the game's phoneme data for its voice lines), or null. */
 export const lipSync = (wave: string) => invoke<import("./viewer/faceScene").LipSync | null>("lip_sync", { wave });
 /** A sound file's bytes (from `sound/`). */
@@ -280,6 +283,8 @@ export const mapSounds = (name: string) => invoke<MapSoundsJson>("map_sounds", {
 export const loadMapPropLight = (map: string, path: string, indices: number[]) => invoke<ArrayBuffer>("load_map_prop_light", { map, path, indices });
 /** A map material's shader, parameters and base textures no bigger than `maxSize` (binary; see mapScene.ts). */
 export const loadMapMaterial = (name: string, maxSize: number) => invoke<ArrayBuffer>("load_map_material", { name, maxSize });
+/** Mounts the files a map packs (`tf/maps/<map>.bsp`), for the models only a map has. */
+export const mountMap = (map: string) => invoke<void>("mount_map", { map });
 /** A value that changes when those zips do. */
 export const workshopStamp = () => invoke<string>("workshop_stamp");
 export const listPoses = () => invoke<string[]>("list_poses");
