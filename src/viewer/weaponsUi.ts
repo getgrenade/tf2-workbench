@@ -45,6 +45,12 @@ const QUALITY_COLOR: Record<string, string> = {
 
 const SLOT_ORDER: Record<string, number> = { primary: 0, secondary: 1, melee: 2, utility: 3 };
 
+/** Where the "Hide multi-class" switch is kept between sessions. */
+const ONE_CLASS_KEY = "tf2workbench.weaponsOneClass";
+
+/** An item more than one class has: an all-class taunt or weapon (no classes listed) or one listed for several (the Shotgun, the Frying Pan). */
+export const isMultiClass = (item: ItemInfo) => item.classes.length !== 1;
+
 /**
  * Weapon browser: the weapons the displayed class can use, as an icon grid filtered by slot and text. A character
  * holds a single weapon, so picking one replaces the previous one whatever its slot; picking the held one again
@@ -56,6 +62,13 @@ export function createWeaponsUi(els: WeaponsEls, hooks: WeaponsHooks) {
   let iconObserver: IntersectionObserver | null = null;
   /** Selected category button: a weapon category or "taunt". */
   let category = "primary";
+  /** Only the items of the displayed class alone: the multi-class taunts and weapons are hidden. */
+  let oneClass = false;
+  try {
+    oneClass = localStorage.getItem(ONE_CLASS_KEY) === "1";
+  } catch {
+    // storage unavailable: everything shows
+  }
 
   const shownHeld = () => (held && itemUsableBy(held, hooks.gameClass()) ? held : null);
 
@@ -68,7 +81,7 @@ export function createWeaponsUi(els: WeaponsEls, hooks: WeaponsHooks) {
     const slot = category;
     // newest first (a workshop taunt by its zip's date, the game's by item id), or by name
     const order = sorter.order() === "newest" ? newestFirst : (a: ItemInfo, b: ItemInfo) => a.displayName.localeCompare(b.displayName);
-    const textMatch = (w: ItemInfo) => !q || w.displayName.toLowerCase().includes(q) || w.name.toLowerCase().includes(q);
+    const textMatch = (w: ItemInfo) => (!oneClass || !isMultiClass(w)) && (!q || w.displayName.toLowerCase().includes(q) || w.name.toLowerCase().includes(q));
     const matches = (category === "taunt"
       ? db.taunts.filter((t) => itemUsableBy(t, cls) && textMatch(t)).sort(order)
       : db.weapons
@@ -113,7 +126,7 @@ export function createWeaponsUi(els: WeaponsEls, hooks: WeaponsHooks) {
       }
       els.list.appendChild(tile);
     }
-    els.count.textContent = `${matches.length} ${category === "taunt" ? "taunt" : "weapon"}${matches.length === 1 ? "" : "s"}`;
+    els.count.textContent = `${matches.length} ${category === "taunt" ? "taunt" : "weapon"}${matches.length === 1 ? "" : "s"}${oneClass ? " (multi-class hidden)" : ""}`;
   }
 
   function pick(w: ItemInfo) {
@@ -125,6 +138,27 @@ export function createWeaponsUi(els: WeaponsEls, hooks: WeaponsHooks) {
   createBrowserView(els.foot, els.list, "weapons");
   const sorter = createBrowserSort(els.foot, "weapons", "alpha", () => render());
   els.search.oninput = render;
+  // Hide multi-class: the all-class taunts and the weapons several classes share leave the list
+  const oneClassBtn = document.createElement("button");
+  oneClassBtn.className = "weaponsOneClass";
+  oneClassBtn.textContent = "Hide multi-class";
+  oneClassBtn.title = "Hide the taunts and weapons more than one class has (the all-class taunts, the Shotgun, the Frying Pan…): only this class's own";
+  const markOneClass = () => {
+    oneClassBtn.classList.toggle("on", oneClass);
+    oneClassBtn.setAttribute("aria-pressed", String(oneClass));
+  };
+  markOneClass();
+  oneClassBtn.onclick = () => {
+    oneClass = !oneClass;
+    try {
+      localStorage.setItem(ONE_CLASS_KEY, oneClass ? "1" : "0");
+    } catch {
+      // storage unavailable: it lasts this session
+    }
+    markOneClass();
+    render();
+  };
+  els.clear.before(oneClassBtn);
   const buttons = [...els.slots.querySelectorAll<HTMLButtonElement>("button")];
   for (const b of buttons) {
     b.onclick = () => {

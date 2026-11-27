@@ -167,6 +167,9 @@ td.n { text-align: right; font-variant-numeric: tabular-nums; }
 /* the HWM model switch under the class buttons */
 .hwmToggle { display: block; width: 100%; margin-top: 6px; min-height: 28px; padding: 4px 8px; }
 .hwmToggle.on { border-color: var(--ui-accent-line); background: var(--ui-accent-soft); }
+/* the weapons pane's Hide multi-class switch, beside Clear */
+.weaponsOneClass { white-space: nowrap; }
+.weaponsOneClass.on { border-color: var(--ui-accent-line); background: var(--ui-accent-soft); }
 #dockRight { display: flex; flex-direction: column; min-height: 0; }
 #dockRight .itemlist { flex: 1 1 auto; }
 .animCol:last-child { overflow-x: hidden; }
