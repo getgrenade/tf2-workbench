@@ -46,6 +46,8 @@ export interface SceneEntity {
   heldByClass?: Record<string, number | null>;
   /** (Older scenes: the held weapon's war paint.) */
   warPaint?: { kit: number; wear: number; seed: string };
+  /** The weapons it has festivized (a Festivizer's lights on them). */
+  festive?: number[];
   /** Flex controller values by name. */
   flex: Record<string, number>;
   anim: { sequence: string | null; encoded: number[] };
@@ -192,6 +194,7 @@ export function parseScene(text: string): SceneFile {
       // each weapon's war paint, by item id, and the weapon each class held
       ...(e.warPaints && typeof e.warPaints === "object" ? { warPaints: Object.fromEntries(Object.entries(e.warPaints).filter(([id]) => /^\d+$/.test(id)).flatMap(([id, p]) => (warPaintOf(p) ? [[id, warPaintOf(p)!]] : []))) } : {}),
       ...(e.heldByClass && typeof e.heldByClass === "object" ? { heldByClass: Object.fromEntries(Object.entries(e.heldByClass).filter(([, v]) => v === null || isNum(v))) as Record<string, number | null> } : {}),
+      ...(Array.isArray(e.festive) && e.festive.every(isNum) && e.festive.length ? { festive: e.festive } : {}),
       inspectOnly: e.inspectOnly === true ? true : undefined,
       bodyTris: e.bodyTris && typeof e.bodyTris === "object" ? Object.fromEntries(Object.entries(e.bodyTris).filter(([, v]) => typeof v === "string")) : undefined,
       itemTris: e.itemTris && typeof e.itemTris === "object" ? Object.fromEntries(Object.entries(e.itemTris).filter(([, v]) => typeof v === "string")) : undefined,

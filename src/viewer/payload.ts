@@ -283,6 +283,8 @@ export interface ItemInfo {
   poseParams: Record<string, number>;
   /** Models shown with the item: its backpack (`extra_wearable`) and attached parts. */
   extraModels: string[];
+  /** What a Festivizer adds to the weapon (its lights); absent when it can't be festivized. */
+  festiveModels?: string[];
   /** `anim_slot` (uppercase): the animation set a weapon uses (`MELEE_ALLCLASS`, `ITEM1`, ...); empty = by slot. */
   animSlot: string;
   /** Per-class slot overrides (`engineer: "primary"` for the shotgun family). */

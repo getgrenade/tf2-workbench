@@ -243,6 +243,7 @@ app.innerHTML = `
           <label class="ksHigh" title="A streak of 10 kills or more: the eye effect at its strongest, and the sheen sweeping without a pause (five seconds apart below five kills)"><input type="checkbox" id="ksHigh" /> 10+ kill streak</label>
         </div>
         <div id="warPaint" hidden></div>
+        <label id="weaponFestive" class="festiveRow" hidden title="Put a Festivizer on the held weapon: its string of lights, as in game"><input type="checkbox" /> Festivized</label>
         <div id="weaponList" class="itemlist"></div>
         <div class="itemFoot" id="weaponFoot"><span id="weaponCount" class="dim hint"></span></div>
       </section>

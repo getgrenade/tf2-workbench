@@ -92,6 +92,8 @@ pub struct Item {
     /// Extra models shown with the item: its `extra_wearable` (a backpack, e.g. the Buff Banner's) and the
     /// `visuals/attached_models` (e.g. the Degreaser's pilot light). Festivizer models are not included.
     pub extra_models: Vec<String>,
+    /// `visuals/attached_models_festive`: what a Festivizer adds to the weapon (its string of lights), for the weapons that can be festivized.
+    pub festive_models: Vec<String>,
     /// Selectable styles in game order (empty for items without any).
     pub styles: Vec<ItemStyle>,
     /// `item_quality` of the definition, lowercase (`unique`, `vintage`, `selfmade`, ...); `unique` when unset.
@@ -261,6 +263,14 @@ fn extra_models(nodes: &[Node]) -> Vec<String> {
         }
     }
     out
+}
+
+/// The models a Festivizer attaches to a weapon (`visuals/attached_models_festive`).
+fn festive_models(nodes: &[Node]) -> Vec<String> {
+    get_block(nodes, "visuals")
+        .and_then(|v| get_block(v, "attached_models_festive"))
+        .map(|block| block.iter().filter_map(|n| n.block().and_then(|b| get_str(b, "model"))).filter(|m| !m.is_empty()).map(|m| m.replace('\\', "/")).collect())
+        .unwrap_or_default()
 }
 
 /// `basename` is a pattern for the per-class models: every `%s` becomes the class's model name.
@@ -464,6 +474,7 @@ fn build_item(id: u32, nodes: &[Node], names: &HashMap<String, String>) -> Item 
         workshop: false,
         added: 0,
         extra_models: extra_models(nodes),
+        festive_models: festive_models(nodes),
         pose_params: get_block(nodes, "visuals")
             .and_then(|v| get_block(v, "player_poseparam"))
             .map(|b| b.iter().filter_map(|n| Some((n.key.to_ascii_lowercase(), n.as_str()?.trim().parse::<f32>().ok()?))).collect())

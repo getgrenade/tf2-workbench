@@ -355,6 +355,8 @@ interface Entity {
   held: ItemInfo | null;
   /** The killstreaks of its weapons (by item id): the held one's sheen and eye effect are shown. */
   killstreaks?: Map<number, Killstreak>;
+  /** The weapons the character has festivized (by item id): a Festivizer's lights are drawn on them while held. */
+  festive?: Set<number>;
   anim: AnimState;
   /** Buildings only: what the building is doing (see buildingFx.ts). */
   fx: BuildingFx;
@@ -1108,6 +1110,8 @@ export function createViewTab(els: Els) {
       if (it === weapon && list.length) list[list.length - 1].weapon = true;
       // Models that travel with the item (a weapon's backpack, an attached part) share its paint and skin.
       for (const extra of it.extraModels ?? []) await add(extra, rgb, skin, null, it.id);
+      // a festivized weapon: the Festivizer's lights, on the weapon's bones (they are not painted)
+      if (it === weapon && e.festive?.has(it.id)) for (const lights of it.festiveModels ?? []) await add(lights, null, skin, null, it.id);
       Object.assign(groups, it.bodygroups, it.styles[style]?.bodygroups);
     }
     // the item being built hides what its Hides chips say, as an item of the game does
@@ -1151,6 +1155,7 @@ export function createViewTab(els: Els) {
     void syncConditions(e);
     refreshTextures(); // (the panel lists every character's models, not only the selected one's)
     if (e === selected) renderJiggles();
+    if (e === selected) refreshFestive();
     if (imported) {
       const target = modelPath(e);
       if (e.anim.modelPath !== imported.animation || e.anim.targetPath !== target) {
@@ -3312,6 +3317,28 @@ export function createViewTab(els: Els) {
     }
   };
 
+  // --- the Festivized switch of the Weapons panel: shown while the held weapon can take a Festivizer ---
+  const festiveRow = document.getElementById("weaponFestive");
+  const festiveBox = festiveRow?.querySelector("input") ?? null;
+  function refreshFestive() {
+    if (!festiveRow || !festiveBox) return;
+    const weapon = selected?.held;
+    const can = !!weapon && weapon.slot !== "taunt" && !!weapon.festiveModels?.length;
+    festiveRow.hidden = !can;
+    festiveBox.checked = can && !!selected!.festive?.has(weapon!.id);
+  }
+  if (festiveBox) festiveBox.onchange = () => {
+    const e = selected, weapon = e?.held;
+    if (!e || !weapon) return;
+    const on = festiveBox.checked;
+    // every selected character holding that weapon, as the other weapon edits go
+    for (const t of entities.filter((x) => x === e || (multi.has(x.id) && x.held?.id === weapon.id))) {
+      t.festive ??= new Set();
+      if (on) t.festive.add(weapon.id); else t.festive.delete(weapon.id);
+      void applyLoadout(t, t.applied);
+    }
+  };
+
   function selectEntity(e: Entity, keepMulti = false) {
     nothingSelected = false;
     if (propsKind !== "character") propsKind = "character";
@@ -3332,6 +3359,7 @@ export function createViewTab(els: Els) {
     viewer?.select(e.actor);
     restoreUi(e);
     refreshKillstreak();
+    refreshFestive();
     renderEntities();
   }
 
@@ -4186,6 +4214,9 @@ export function createViewTab(els: Els) {
       e.unusuals = { ...source.unusuals };
       e.items = { loadout: source.items.loadout.map((x) => ({ ...x })), activeId: source.items.activeId };
       e.held = source.held;
+      if (source.festive) e.festive = new Set(source.festive);
+      if (source.warPaints) e.warPaints = new Map([...source.warPaints].map(([id, p]) => [id, { ...p }]));
+      if (source.killstreaks) e.killstreaks = new Map(source.killstreaks);
       e.flex = new Map(source.flex);
       e.fx = { ...source.fx };
     }
@@ -6493,6 +6524,7 @@ export function createViewTab(els: Els) {
       // the war paint it was sent with, on that weapon (its skin is made before the shot is taken)
       const wp = spec.warPaint;
       e.warPaints = wp ? new Map([[wp.weapon, { kit: wp.kit, wear: wp.wear, seed: wp.seed }]]) : undefined;
+      e.festive = spec.festive !== undefined ? new Set([spec.festive]) : undefined; // (and its festive lights)
       await promoDress(e, loadout, spec.weapon !== null ? byId.get(spec.weapon) ?? null : null, shotRegions(spec), teamOf(spec), spec.hiddenRegions);
       await refreshWarPaint(e);
       // the triangles hidden by hand in 3D, of the body and of what it wears; a Spy's smoke as it was set there
@@ -6586,7 +6618,7 @@ export function createViewTab(els: Els) {
   const teamOf = (spec: ShotSpec) => spec.team ?? (spec.role === 1 ? 1 : 0);
   /** What a shot's character wears, holds, its team and how it stands, as a key (the character is dressed again only when it changes). */
   const dressKey = (spec: ShotSpec) =>
-    JSON.stringify([spec.cls ?? null, spec.loadout.map((x) => [x.item, x.paint, x.style, !!x.hidden, x.pose ?? null]), spec.weapon, !!spec.weaponHidden, spec.warPaint ?? null, shotRegions(spec), spec.hiddenRegions ?? null, spec.bodyTris ?? null, spec.itemTris ?? null, spec.cig ?? null, spec.bodygroups ?? null, teamOf(spec), spec.pose ? spec.pose.quat.slice(0, 64).map((q) => Math.round(q * 1e4)) : null, spec.flex ?? null]);
+    JSON.stringify([spec.cls ?? null, spec.loadout.map((x) => [x.item, x.paint, x.style, !!x.hidden, x.pose ?? null]), spec.weapon, !!spec.weaponHidden, spec.warPaint ?? null, spec.festive ?? null, shotRegions(spec), spec.hiddenRegions ?? null, spec.bodyTris ?? null, spec.itemTris ?? null, spec.cig ?? null, spec.bodygroups ?? null, teamOf(spec), spec.pose ? spec.pose.quat.slice(0, 64).map((q) => Math.round(q * 1e4)) : null, spec.flex ?? null]);
 
   /**
    * Gives a shot a random pose, as the random loadouts do: a taunt (held) or an animation, half the time each, stopped on a frame where
@@ -7133,6 +7165,7 @@ export function createViewTab(els: Els) {
     part.loadout = e.items.loadout.filter((x) => itemUsableBy(x.item, game)).map((x) => ({ item: x.item.id, name: x.item.displayName, paintable: x.item.paintable, paint: x.paint?.id ?? null, style: x.style, ...(x.hidden ? { hidden: true } : {}), ...(x.pose ? { pose: x.pose } : {}) }));
     part.weapon = e.held?.id ?? null;
     part.warPaint = warPaintSpecOf(e);
+    part.festive = e.held && e.festive?.has(e.held.id) ? e.held.id : undefined;
     part.team = e.team;
     part.cls = e.cls === promo().cls ? undefined : e.cls; // a class picked in 3D
     part.bodygroups = e.bodyManual.size ? Object.fromEntries(e.bodyManual) : undefined;
@@ -7818,7 +7851,7 @@ export function createViewTab(els: Els) {
     const part = (e: Entity): ShotSpec => {
       const game = gameClassOf(e.cls);
       const p: ShotSpec = {
-        role: 0, cls: e.cls, team: e.team, weapon: e.held?.id ?? null, warPaint: warPaintSpecOf(e), regions: null, yaw: 0, pitch: 0, fill: 1, w: 1, h: 1,
+        role: 0, cls: e.cls, team: e.team, weapon: e.held?.id ?? null, warPaint: warPaintSpecOf(e), festive: e.held && e.festive?.has(e.held.id) ? e.held.id : undefined, regions: null, yaw: 0, pitch: 0, fill: 1, w: 1, h: 1,
         loadout: e.items.loadout.filter((x) => itemUsableBy(x.item, game)).map((x) => ({ item: x.item.id, name: x.item.displayName, paintable: x.item.paintable, paint: x.paint?.id ?? null, style: x.style, ...(x.hidden ? { hidden: true } : {}), ...(x.pose ? { pose: x.pose } : {}) })), // (an item hidden with its eye comes as a hidden model of the shot: Models shows it again)
       };
       if (e.bodyManual.size) p.bodygroups = Object.fromEntries(e.bodyManual);
@@ -8179,6 +8212,7 @@ export function createViewTab(els: Els) {
         ...(e.killstreaks?.size ? { killstreaks: Object.fromEntries([...e.killstreaks].map(([id, k]) => [String(id), k])) } : {}),
         ...(e.warPaints?.size ? { warPaints: Object.fromEntries([...e.warPaints].map(([id, p]) => [id, { ...p }])) } : {}),
         ...(e.heldByClass?.size ? { heldByClass: Object.fromEntries(e.heldByClass) } : {}),
+        ...(e.festive?.size ? { festive: [...e.festive] } : {}),
         ...(isBuildingCls(e.cls) ? { building: { ...e.fx } } : {}),
         flex: Object.fromEntries(e.flex),
         anim: { sequence: e.anim.info?.sequences.find((q) => q.index === e.anim.seq)?.name ?? null, encoded: e.anim.encoded },
@@ -8266,6 +8300,7 @@ export function createViewTab(els: Els) {
       // (a scene from before each weapon kept its own: its one war paint was the held weapon's)
       if (s.warPaint && e.held && !e.warPaints.has(e.held.id)) e.warPaints.set(e.held.id, { ...s.warPaint });
       e.heldByClass = new Map(Object.entries(s.heldByClass ?? {}));
+      e.festive = s.festive?.length ? new Set(s.festive) : undefined;
       if (s.building) e.fx = { ...s.building };
       e.flex = new Map(Object.entries(s.flex));
       const cls = gameClassOf(e.cls);

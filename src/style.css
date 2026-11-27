@@ -1696,3 +1696,6 @@ h1, h2, h3, h4, .panel h3, .setGroup h3, nav button, .sceneTab, .dockTabs button
 .warPaintRow select { min-width: 0; width: 100%; }
 .warPaintSeed { display: flex; gap: 4px; min-width: 0; }
 .warPaintSeed input { flex: 1; min-width: 0; font-variant-numeric: tabular-nums; }
+/* the Weapons panel's Festivized switch, under the slot buttons */
+#weaponFestive { display: flex; align-items: center; gap: 6px; margin: 6px 0 0; cursor: pointer; }
+#weaponFestive[hidden] { display: none; }
