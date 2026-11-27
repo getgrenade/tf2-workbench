@@ -47,6 +47,8 @@
   /* type: Inter when it is there, the system UI font when not; numbers are tabular so columns of them line up */
   --ui-font: Inter, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --ui-mono: "JetBrains Mono", Consolas, ui-monospace, monospace;
+  /* titles: the same font unless a font set gives them their own (the TF2 fonts: TF2 Build here, TF2 Secondary above) */
+  --ui-font-head: var(--ui-font);
   --ui-fs-label: 11.5px; --ui-fs-body: 12.5px; --ui-fs-head: 11px; --ui-fs-title: 13px;
   --ui-fw-label: 400; --ui-fw-body: 450; --ui-fw-head: 650;
 
