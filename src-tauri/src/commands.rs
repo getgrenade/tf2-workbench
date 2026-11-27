@@ -750,6 +750,20 @@ pub async fn read_sound(state: State<'_, AppState>, wave: String) -> Result<taur
     Ok(tauri::ipc::Response::new(workbench_core::voice::read_sound(&state, &wave)?))
 }
 
+/// A game file's bytes, read from the VPKs (or the loose files) the way the game finds it. Only the files war paints are made of: the paint
+/// kit definitions (`scripts/protodefs/proto_defs.vpd`) and their names (`resource/tf_proto_obj_defs_english.txt`).
+#[tauri::command]
+pub async fn read_game_file(state: State<'_, AppState>, path: String) -> Result<tauri::ipc::Response, String> {
+    let path = path.replace('\\', "/").to_ascii_lowercase();
+    if !(path.starts_with("scripts/protodefs/") || path.starts_with("resource/tf_proto_obj_defs_")) || path.contains("..") {
+        return Err(format!("{path}: not a file this can read"));
+    }
+    let vpk = state.vpk()?;
+    let bytes = tauri::async_runtime::spawn_blocking(move || vpk.read(&path).map_err(|e| format!("{path}: {e}")))
+        .await.map_err(|e| e.to_string())??;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 /// The cosmetics catalog (JSON bytes), from `items_game.txt` and `tf_english.txt`.
 #[tauri::command]
 pub async fn list_items(state: State<'_, AppState>) -> Result<tauri::ipc::Response, String> {

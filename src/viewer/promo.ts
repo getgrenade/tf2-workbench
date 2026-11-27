@@ -168,6 +168,8 @@ export interface ShotSpec extends ShotAim {
   weapon: number | null;
   /** The weapon is held (its pose stays) but not drawn (the layer's Models). */
   weaponHidden?: boolean;
+  /** The war paint of the weapon it held when it was sent (see warPaints.ts): on it while it holds that weapon. */
+  warPaint?: { weapon: number; kit: number; wear: number; seed: string };
   /** The character itself is not drawn, only what it wears and holds (the layer's Models). */
   hidePlayer?: boolean;
   /** The team it is on (0 RED, 1 BLU); absent: RED, or BLU for the BLU role. */

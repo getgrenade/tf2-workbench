@@ -193,6 +193,8 @@ export const sequenceEvents = (path: string, sequence: number) =>
 export const soundEntries = (names: string[]) => invoke<Record<string, SoundEntry>>("sound_entries", { names });
 /** A sound file's bytes (from `sound/`). */
 export const readSound = (wave: string) => invoke<ArrayBuffer>("read_sound", { wave });
+/** A game file's bytes (only the war paints' definitions and names: see `read_game_file`). */
+export const readGameFile = (path: string) => invoke<ArrayBuffer>("read_game_file", { path });
 
 /** Writes a text file (scene) the user picked with the save dialog. */
 export const writeTextFile = (path: string, contents: string) => invoke<void>("write_text_file", { path, contents });

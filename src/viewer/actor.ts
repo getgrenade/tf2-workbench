@@ -934,7 +934,7 @@ export class Actor {
     for (const group of [this.classGroup, this.cosmeticGroup]) {
       group?.traverse((o) => {
         if (!(o instanceof THREE.SkinnedMesh)) return;
-        const source = o.userData.source as { data: MaterialData | null; paint: Rgb | null; spell?: [number, number] } | undefined;
+        const source = o.userData.source as { data: MaterialData | null; paint: Rgb | null; spell?: [number, number]; warPaint?: THREE.Texture | null } | undefined;
         if (!source) {
           // the eyes and the parts of the body under a mask keep materials of their own: a cloak takes them too (the eyes go with his face)
           if (o.userData.eye) o.visible = !(fx?.cloak && fx.cloak >= 0.4);
@@ -948,7 +948,7 @@ export class Actor {
           }
           return;
         }
-        const next = uber ?? this.ctx.mats.material(source.data, undefined, source.paint, source.spell ? { ...fx, spell: source.spell } : fx);
+        const next = uber ?? this.ctx.mats.material(source.data, undefined, source.paint, source.spell ? { ...fx, spell: source.spell } : fx, source.warPaint);
         // a body in grey stays grey: what the conditions make of it shows when the grey is taken off
         if (this.gray && o.userData.ownMaterial) { o.userData.ownMaterial = next; return; }
         if (o.material !== next) o.material = next;
@@ -1069,9 +1069,11 @@ export class Actor {
           const path = override ?? m.materials[skin] ?? m.material;
           const spell = list[index].spell;
           const spellFx = spell ? { spell: [spell.index, spell.blu ? 1 : 0] as [number, number] } : undefined;
-          const material = this.ctx.mats.material(this.materials.get(path) ?? null, undefined, paint, spellFx);
+          // (the held weapon in a war paint has its skin for a base texture)
+          const warPaint = list[index].weapon ? this.heldSkin : null;
+          const material = this.ctx.mats.material(this.materials.get(path) ?? null, undefined, paint, spellFx, warPaint);
           const mesh = this.makeSkinnedMesh(m, material, skeleton, data, this.flexCosmetic);
-          mesh.userData.source = { data: this.materials.get(path) ?? null, paint, skins: override ? [override] : m.materials, base: override ?? m.material, spell: spellFx?.spell };
+          mesh.userData.source = { data: this.materials.get(path) ?? null, paint, skins: override ? [override] : m.materials, base: override ?? m.material, spell: spellFx?.spell, warPaint };
           // (the held weapon's meshes: a killstreak's sheen sweeps along its length, see setSheen)
           if (list[index].weapon) mesh.userData.sheenFrame = weaponFrame ??= sheenFrame(data);
           mesh.userData.cosmeticSlot = index + 1; // 1.. in the order of the list; 0 / unset is the class's own mesh
@@ -2028,6 +2030,26 @@ export class Actor {
   isPropMesh(mesh: THREE.Object3D): boolean {
     for (let o: THREE.Object3D | null = mesh; o; o = o.parent) if (o === this.prop?.group) return true;
     return false;
+  }
+
+  /** The held weapon's war paint skin (its base texture), or null for its own. */
+  private heldSkin: THREE.Texture | null = null;
+  /**
+   * Paints the held weapon with a war paint's skin (see warPaintCompositor.ts), or takes it off with null. It stays on through the
+   * conditions and is given to the held weapon when the worn items are made again (the caller drops it when the weapon changes).
+   */
+  setHeldSkin(skin: THREE.Texture | null) {
+    if (skin === this.heldSkin) return;
+    this.heldSkin = skin;
+    this.cosmeticGroup?.traverse((o) => {
+      if (!(o instanceof THREE.SkinnedMesh) || !this.isHeldMesh(o)) return;
+      const source = o.userData.source as { warPaint?: THREE.Texture | null } | undefined;
+      if (source) source.warPaint = skin;
+    });
+    this.applyConditions();
+  }
+  get heldWarPaint(): THREE.Texture | null {
+    return this.heldSkin;
   }
 
   /** Whether a mesh is of the weapon the character holds (a cosmetic slot that is the held weapon). */

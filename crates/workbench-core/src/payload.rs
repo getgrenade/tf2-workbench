@@ -546,6 +546,8 @@ struct ItemDbJson<'a> {
     taunts: Vec<ItemJson<'a>>,
     paints: Vec<PaintJson<'a>>,
     equip_conflicts: &'a std::collections::BTreeMap<String, Vec<String>>,
+    paintkit_weapons: &'a std::collections::BTreeMap<u32, String>,
+    paintkit_grades: &'a std::collections::BTreeMap<String, String>,
 }
 
 fn item_json(i: &source_formats::items::Item) -> ItemJson<'_> {
@@ -604,5 +606,5 @@ pub fn encode_items(db: &source_formats::items::ItemDb) -> Vec<u8> {
         .iter()
         .map(|p| PaintJson { id: p.id, name: &p.name, display_name: &p.display_name, rgb: p.rgb, rgb2: p.rgb2 })
         .collect();
-    serde_json::to_vec(&ItemDbJson { items, weapons, taunts, paints, equip_conflicts: &db.equip_conflicts }).expect("items json")
+    serde_json::to_vec(&ItemDbJson { items, weapons, taunts, paints, equip_conflicts: &db.equip_conflicts, paintkit_weapons: &db.paintkit_weapons, paintkit_grades: &db.paintkit_grades }).expect("items json")
 }

@@ -40,6 +40,12 @@ export interface SceneEntity {
   held: number | null;
   /** The killstreaks of its weapons, by item id (see killstreak.ts). */
   killstreaks?: Record<string, Killstreak>;
+  /** The war paint of each weapon the character has held, by item id. */
+  warPaints?: Record<string, { kit: number; wear: number; seed: string }>;
+  /** The weapon held as each class (by game class). */
+  heldByClass?: Record<string, number | null>;
+  /** (Older scenes: the held weapon's war paint.) */
+  warPaint?: { kit: number; wear: number; seed: string };
   /** Flex controller values by name. */
   flex: Record<string, number>;
   anim: { sequence: string | null; encoded: number[] };
@@ -142,6 +148,13 @@ function parseScenePose(p: any): SceneEntity["pose"] {
  * Parses and checks the text of a scene file. Throws with a short reason when it is not a scene of this version; fields that are
  * missing or of the wrong type in an otherwise valid scene are replaced by neutral defaults where that is safe.
  */
+/** A war paint read from a scene file (its seed kept as text, a 64-bit number), or null when it is not one. */
+function warPaintOf(p: any): { kit: number; wear: number; seed: string } | null {
+  if (!p || typeof p !== "object" || typeof p.kit !== "number" || !Number.isFinite(p.kit)) return null;
+  const wear = typeof p.wear === "number" && Number.isFinite(p.wear) ? Math.min(5, Math.max(1, Math.round(p.wear))) : 1;
+  return { kit: p.kit, wear, seed: /^\d+$/.test(String(p.seed ?? "")) ? String(p.seed) : "0" };
+}
+
 export function parseScene(text: string): SceneFile {
   let raw: any;
   try {
@@ -174,6 +187,11 @@ export function parseScene(text: string): SceneFile {
         if (e.killstreaks && typeof e.killstreaks === "object") for (const [id, k] of Object.entries(e.killstreaks as object)) { const v = parseKillstreak(k); if (v && /^\d+$/.test(id)) out[id] = v; }
         return Object.keys(out).length ? { killstreaks: out } : {};
       })(),
+      // (the held weapon's war paint: its seed is kept as text, a 64-bit number)
+      ...(warPaintOf(e.warPaint) ? { warPaint: warPaintOf(e.warPaint)! } : {}),
+      // each weapon's war paint, by item id, and the weapon each class held
+      ...(e.warPaints && typeof e.warPaints === "object" ? { warPaints: Object.fromEntries(Object.entries(e.warPaints).filter(([id]) => /^\d+$/.test(id)).flatMap(([id, p]) => (warPaintOf(p) ? [[id, warPaintOf(p)!]] : []))) } : {}),
+      ...(e.heldByClass && typeof e.heldByClass === "object" ? { heldByClass: Object.fromEntries(Object.entries(e.heldByClass).filter(([, v]) => v === null || isNum(v))) as Record<string, number | null> } : {}),
       inspectOnly: e.inspectOnly === true ? true : undefined,
       bodyTris: e.bodyTris && typeof e.bodyTris === "object" ? Object.fromEntries(Object.entries(e.bodyTris).filter(([, v]) => typeof v === "string")) : undefined,
       itemTris: e.itemTris && typeof e.itemTris === "object" ? Object.fromEntries(Object.entries(e.itemTris).filter(([, v]) => typeof v === "string")) : undefined,

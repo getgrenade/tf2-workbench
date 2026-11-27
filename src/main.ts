@@ -242,6 +242,7 @@ app.innerHTML = `
           <label class="ksSpeed" title="How fast the sheen sweeps over the weapon (100%: as in game)"><span>Sheen speed</span><input type="range" id="ksSpeed" min="25" max="400" step="5" value="100" /><span class="dim" id="ksSpeedValue">100%</span></label>
           <label class="ksHigh" title="A streak of 10 kills or more: the eye effect at its strongest, and the sheen sweeping without a pause (five seconds apart below five kills)"><input type="checkbox" id="ksHigh" /> 10+ kill streak</label>
         </div>
+        <div id="warPaint" hidden></div>
         <div id="weaponList" class="itemlist"></div>
         <div class="itemFoot" id="weaponFoot"><span id="weaponCount" class="dim hint"></span></div>
       </section>

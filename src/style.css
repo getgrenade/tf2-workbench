@@ -1681,3 +1681,11 @@ h1, h2, h3, h4, .panel h3, .setGroup h3, nav button, .sceneTab, .dockTabs button
 .promoModelRow label { flex: 1; display: flex; align-items: center; gap: 6px; min-width: 0; }
 .promoModelRow label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .promoModelRow button { padding: 1px 8px; font-size: var(--ui-fs-small); }
+/* the Weapons panel's War paint row (warPaintUi.ts): shown while the held weapon can be painted */
+.warPaint { display: flex; flex-direction: column; gap: 4px; padding: 6px 0; border-bottom: 1px solid var(--line, rgba(255, 255, 255, 0.08)); margin-bottom: 4px; }
+.warPaint[hidden] { display: none; }
+.warPaintRow { display: grid; grid-template-columns: 70px 1fr; align-items: center; gap: 6px; }
+.warPaintRow > span { opacity: 0.75; }
+.warPaintRow select { min-width: 0; width: 100%; }
+.warPaintSeed { display: flex; gap: 4px; min-width: 0; }
+.warPaintSeed input { flex: 1; min-width: 0; font-variant-numeric: tabular-nums; }

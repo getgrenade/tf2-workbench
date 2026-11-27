@@ -63,6 +63,7 @@ fn main() {
             commands::material_from_text,
             commands::sequence_events,
             commands::sound_entries,
+            commands::read_game_file,
             commands::player_gibs,
             commands::model_physics,
             commands::get_settings,
