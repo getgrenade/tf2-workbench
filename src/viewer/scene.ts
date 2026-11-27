@@ -22,6 +22,8 @@ import { isAppFile } from "../appFile";
 export interface SceneEntity {
   /** Model name under models/player (`soldier`, `demo`, ...). */
   cls: string;
+  /** A merc drawn with its HWM model (models/player/hwm). */
+  hwm?: boolean;
   /** Team skin family: 0 RED, 1 BLU. */
   team: number;
   /** The name given in the hierarchy (absent: the class). */

@@ -5,7 +5,7 @@ export type BodyClass = keyof typeof BODY_GROUP_DATA;
 export interface BodyGroup { readonly id: string; readonly label: string; readonly category: string; readonly bit?: number; readonly material?: string }
 export const bodyGroups = (cls: BodyClass): readonly BodyGroup[] => BODY_GROUP_DATA[cls];
 export function bodyClass(modelPath: string): BodyClass | null {
-  const match = modelPath.replace(/\\/g, "/").toLowerCase().match(/models\/player\/(scout|soldier|pyro|demo|demoman|engineer|heavy|hvyweapon|medic|sniper|spy)\.mdl$/);
+  const match = modelPath.replace(/\\/g, "/").toLowerCase().match(/models\/player\/(?:hwm\/)?(scout|soldier|pyro|demo|demoman|engineer|heavy|hvyweapon|medic|sniper|spy)\.mdl$/);
   if (!match) return null;
   return (match[1] === "hvyweapon" ? "heavy" : match[1] === "demoman" ? "demo" : match[1]) as BodyClass;
 }
