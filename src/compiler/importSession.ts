@@ -1,7 +1,7 @@
 import { findKv, getKv, parseKv, type KvNode } from "./kv";
 import { parseJiggleQc } from "./jiggleBones";
 import { BODYGROUPS, PREFABS, blankData, blankMaterial, sanitizeName, type BlueTint, type CompilerData, type CompilerMaterial, type Prefab } from "./session";
-import { DEFAULT_MATERIAL, builtinVmt, flattenVmt, type EnvmapMask, type MaterialSettings } from "./vmt";
+import { DEFAULT_MATERIAL, builtinVmt, flattenVmt, isPaintedPhongTint, type EnvmapMask, type MaterialSettings } from "./vmt";
 import { customProxiesFromVmt } from "./proxyModel";
 
 /**
@@ -41,6 +41,9 @@ export function settingsFromVmt(root: KvNode[]): MaterialSettings {
     phongAlbedoTint: truthy(p["$phongalbedotint"]),
     phongFresnel: (() => { const n = (p["$phongfresnelranges"] ?? "").match(/-?\d*\.?\d+/g)?.map(Number); return n && n.length === 3 ? [n[0], n[1], n[2]] as [number, number, number] : [...d.phongFresnel] as [number, number, number]; })(),
     phongTint: p["$phongtint"] !== undefined ? colour(p["$phongtint"], true, [255, 255, 255]) : null,
+    // (a highlight that takes the paint is a proxy, not a parameter: it is the switch, and is not kept among the artist's own proxies)
+    paintablePhongTint: customProxiesFromVmt(root, builtinVmt()).some((x) => isPaintedPhongTint(x.name, x.params)),
+    noCull: truthy(p["$nocull"]),
     phongWarp: p["$phongwarptexture"] ?? "",
     envmapFresnel: num(p["$envmapfresnel"], d.envmapFresnel),
     envmapContrast: num(p["$envmapcontrast"], d.envmapContrast),
@@ -58,7 +61,7 @@ export function settingsFromVmt(root: KvNode[]): MaterialSettings {
     envmapMask,
     envmapTint: colour(p["$envmaptint"], true, d.envmapTint),
     // what the artist added to the proxies of the text (the importer keeps the text as it was edited): kept, to be shown, edited and written back
-    customProxies: customProxiesFromVmt(root, builtinVmt()),
+    customProxies: customProxiesFromVmt(root, builtinVmt()).filter((x) => !isPaintedPhongTint(x.name, x.params)),
   };
 }
 
