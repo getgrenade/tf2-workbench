@@ -59,6 +59,9 @@ pub struct Item {
     /// `visuals/player_bodygroups` and `additional_hidden_bodygroups`: class bodygroup -> model index
     /// (1 hides the class's own geometry, e.g. the Soldier's helmet).
     pub bodygroups: BTreeMap<String, i32>,
+    /// `visuals/wm_bodygroup_override` and `wm_bodygroup_state_override`: a body part of the wearer's model (by index) put in a state
+    /// while the weapon is held (C_TFWeaponBase sets it on its owner): the Short Circuit empties the Engineer's right arm (2, state 2).
+    pub wm_bodygroup: Option<[i32; 2]>,
     pub equip_regions: Vec<String>,
     pub paintable: bool,
     /// The item has the `player_skin_override` attribute (the Voodoo-Cursed souls): its wearer is drawn in the zombie skin of the
@@ -382,6 +385,11 @@ fn build_item(id: u32, nodes: &[Node], names: &HashMap<String, String>) -> Item 
         per_class,
         image: get_str(nodes, "image_inventory").map(str::to_string),
         bodygroups,
+        wm_bodygroup: get_block(nodes, "visuals").and_then(|v| {
+            let part = get_str(v, "wm_bodygroup_override")?.trim().parse::<i32>().ok()?;
+            let state = get_str(v, "wm_bodygroup_state_override")?.trim().parse::<i32>().ok()?;
+            (part >= 0 && state >= 0).then_some([part, state])
+        }),
         equip_regions,
         type_token: get_str(nodes, "item_type_name").unwrap_or("").trim_start_matches('#').to_ascii_lowercase(),
         prefabs: Vec::new(),

@@ -467,6 +467,8 @@ struct ItemJson<'a> {
     per_class: &'a std::collections::BTreeMap<String, String>,
     image: Option<&'a str>,
     bodygroups: &'a std::collections::BTreeMap<String, i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wm_bodygroup: Option<[i32; 2]>,
     equip_regions: &'a [String],
     paintable: bool,
     /// Wearing the item puts the character in the zombie skin (the Voodoo-Cursed souls).
@@ -527,6 +529,7 @@ fn item_json(i: &source_formats::items::Item) -> ItemJson<'_> {
         per_class: &i.per_class,
         image: i.image.as_deref(),
         bodygroups: &i.bodygroups,
+        wm_bodygroup: i.wm_bodygroup,
         equip_regions: &i.equip_regions,
         paintable: i.paintable,
         skin_override: i.skin_override,
