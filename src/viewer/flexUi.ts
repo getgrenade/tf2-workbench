@@ -21,7 +21,7 @@ export function flexGlobalsFor(model: ModelData | null, values: Map<string, numb
  * expression carries over when switching class, and bonemerged cosmetics read the same names.
  * Each slider spans its controller's own range (0..1 for most, -1..1 for the eyelids, -45..45 degrees for the eye aim).
  */
-export function createFlexUi(els: FlexEls, onChange: (globals: FlexGlobals) => void) {
+export function createFlexUi(els: FlexEls, onChange: (globals: FlexGlobals) => void, onModel?: (model: ModelData | null) => void) {
   /** Real controller values by lowercase name; unlisted controllers are at 0. */
   const values = new Map<string, number>();
   let model: ModelData | null = null;
@@ -34,6 +34,7 @@ export function createFlexUi(els: FlexEls, onChange: (globals: FlexGlobals) => v
   const rows = new Map<string, { input: HTMLInputElement; output: HTMLInputElement }>();
 
   function build() {
+    onModel?.(model);
     els.list.innerHTML = "";
     rows.clear();
     if (!model) return;
@@ -106,6 +107,21 @@ export function createFlexUi(els: FlexEls, onChange: (globals: FlexGlobals) => v
       if (row) {
         row.input.value = String(v);
         row.output.value = v.toFixed(2);
+      }
+      onChange(globals());
+    },
+    /** Sets several controllers (real values) at once and applies them together (a face rig control's flexes). */
+    setMany(list: [string, number][]) {
+      for (const [name, real] of list) {
+        const c = model?.flexControllers.find((x) => flexKey(x.name) === flexKey(name));
+        if (!c) continue;
+        const v = Math.min(Math.max(real, c.min), c.max);
+        values.set(flexKey(name), v);
+        const row = rows.get(flexKey(name));
+        if (row) {
+          row.input.value = String(v);
+          row.output.value = v.toFixed(2);
+        }
       }
       onChange(globals());
     },

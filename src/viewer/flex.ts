@@ -131,13 +131,18 @@ export function applyMeshFlexes(mesh: MeshData, weights: Float32Array, positions
   let active = false;
   for (const f of mesh.flexes) {
     const w = flexRamp(weights[f.desc] ?? 0, f.targets);
-    if (w > -0.001 && w < 0.001) continue;
+    // a stereo flex (`flexpair`): each vertex blends the two sides' weights by its side (r_studioflex.cpp)
+    const sides = f.pair != null ? f.sides : undefined;
+    const w2 = sides ? flexRamp(weights[f.pair!] ?? 0, f.targets) : 0;
+    if (w > -0.001 && w < 0.001 && (!sides || (w2 > -0.001 && w2 < 0.001))) continue;
     active = true;
     for (let i = 0; i < f.vertices.length; i++) {
       const v = f.vertices[i] * 3;
+      let s = w;
+      if (sides) { const b = sides[i] / 255; s = w * (1 - b) + w2 * b; }
       for (let c = 0; c < 3; c++) {
-        positions[v + c] += w * f.deltas[i * 3 + c];
-        normals[v + c] += w * f.normalDeltas[i * 3 + c];
+        positions[v + c] += s * f.deltas[i * 3 + c];
+        normals[v + c] += s * f.normalDeltas[i * 3 + c];
       }
     }
   }

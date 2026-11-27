@@ -41,7 +41,7 @@ export function createWarPaintUi(host: HTMLElement, hooks: WarPaintHooks) {
   const seedRow = document.createElement("div");
   seedRow.className = "warPaintSeed";
   seedRow.append(seed, random);
-  host.append(label("War paint", kit), label("Wear", wear), label("Seed", seedRow));
+  host.append(label("Paint", kit), label("Wear", wear), label("Seed", seedRow));
 
   let shownWeapon: string | null = null;
   let token = 0;

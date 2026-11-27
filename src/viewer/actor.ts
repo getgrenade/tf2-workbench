@@ -1385,6 +1385,22 @@ export class Actor {
     return this.rig?.boneWorld ?? null;
   }
 
+  /** The class model's data (its bones, meshes, flexes); null before it is loaded. */
+  get modelData(): ModelData | null {
+    return this.classData;
+  }
+
+  /**
+   * Takes a point of the model's bind pose (its meshes' own positions) to where a bone carries it in the scene now: the scene placement,
+   * the bone as posed, its bind pose undone (as skinning does). Null without that bone.
+   */
+  bindToScene(bone: number, out = new THREE.Matrix4()): THREE.Matrix4 | null {
+    const world = this.rig?.boneWorld[bone], inv = this.rig?.poseToBone[bone];
+    if (!world || !inv || !this.modelGroup) return null;
+    this.modelGroup.updateMatrixWorld(true);
+    return out.multiplyMatrices(this.modelGroup.matrixWorld, world).multiply(inv);
+  }
+
   /** The matrix that takes Source space into the scene (conversion and placement); null before a model is loaded. */
   get modelMatrix(): THREE.Matrix4 | null {
     return this.modelGroup?.matrix ?? null;

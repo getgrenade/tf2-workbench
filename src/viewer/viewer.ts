@@ -20,6 +20,7 @@ import { GroundShadow } from "./groundShadow";
 import { DEFAULT_GROUND, GroundPlane, type GroundState } from "./groundPlane";
 import { freeSlot, slotOffset } from "./layout";
 import { RigOverlay } from "./rigOverlay";
+import type { FaceRig } from "./faceRig";
 import { BlenderRigOverlay } from "./blenderRigOverlay";
 import type { BlenderRigApi } from "./blenderRigApi";
 import { GizmoSet, createGizmo, gizmoKey } from "./gizmos";
@@ -231,6 +232,8 @@ export class Viewer {
   onLightChange: (l: LightState) => void = () => {};
   /** The control rig shown on a character that is being posed. */
   readonly rig: RigOverlay;
+  /** The face rig of an HWM head (see faceRig.ts), set by the tab: kept in place every frame while it shows. */
+  faceRig: FaceRig | null = null;
   /** The controls of a Blender rig (desktop, personal use): shown instead of `rig` while one is in use. */
   readonly blenderRig: BlenderRigApi;
   /** Called when the character being posed went back to playing an animation (the user picked a sequence). */
@@ -867,6 +870,7 @@ void main() {
       if (this.blenderRig.actor && !this.blenderRig.actor.isPosing) this.blenderRig.setActor(null);
       if (this.rig.active) this.rig.update();
       if (this.blenderRig.active) this.blenderRig.update();
+      if (this.faceRig?.active) this.faceRig.update();
       this.mats.updateDynamic(now / 1000);
       this.followActor();
       if (!this.cameras.active) this.controls.update();
@@ -2155,7 +2159,7 @@ void main() {
 
   /** Everything drawn over the scene that is not part of it (gizmos, markers, camera and light symbols): left out of captures and of the shadow and lighting passes. */
   private get editorObjects(): THREE.Object3D[] {
-    return [this.gizmo, this.pointGizmo, this.pointMove.getHelper(), ...this.lightGizmos.objects, ...this.entityGizmos.objects, ...this.rig.objects, ...this.blenderRig.objects, ...this.cameras.objects, ...(this.boneHelper ? [this.boneHelper.group] : []), ...(this.boneRotate ? this.boneRotate.set.objects : []), ...(this.boneAimMesh ? [this.boneAimMesh] : [])];
+    return [this.gizmo, this.pointGizmo, this.pointMove.getHelper(), ...this.lightGizmos.objects, ...this.entityGizmos.objects, ...this.rig.objects, ...this.blenderRig.objects, ...(this.faceRig?.objects ?? []), ...this.cameras.objects, ...(this.boneHelper ? [this.boneHelper.group] : []), ...(this.boneRotate ? this.boneRotate.set.objects : []), ...(this.boneAimMesh ? [this.boneAimMesh] : [])];
   }
 
   private buildGizmo() {
@@ -3343,6 +3347,13 @@ void main() {
     if (world && world.parent !== this.scene) this.scene.add(world);
   }
 
+  /** Puts the map in the scene or takes it out for a while (a promo's scene), keeping it loaded for when it comes back. */
+  showWorld(on: boolean) {
+    if (!this.world) return;
+    if (on && this.world.parent !== this.scene) this.scene.add(this.world);
+    else if (!on && this.world.parent === this.scene) this.scene.remove(this.world);
+  }
+
   setGround(state: GroundState) {
     this.groundState = { ...state };
   }
@@ -3465,6 +3476,32 @@ void main() {
     const way = this.camera.position.clone().sub(this.controls.target).normalize();
     if (!Number.isFinite(way.x) || way.lengthSq() < 0.5) way.set(0, 0, 1);
     this.glideTo(c.clone().addScaledVector(way, dist), c);
+  }
+
+  /** Where the view is now, to come back to it with {@link glideBack}: the camera's place, what it looks at, its near plane and size. */
+  viewState(): { position: THREE.Vector3; target: THREE.Vector3; near: number; halfHeight: number | null; zoom: number } {
+    const c = this.camera;
+    return { position: c.position.clone(), target: this.controls.target.clone(), near: c.near, halfHeight: c.isOrthographicCamera ? c.halfHeight : null, zoom: c.zoom };
+  }
+
+  /** Glides the view back to a place kept with {@link viewState}. */
+  glideBack(state: ReturnType<Viewer["viewState"]>) {
+    if (this.cameras.active) this.cameras.leave();
+    this.camera.near = state.near;
+    if (this.camera.isOrthographicCamera && state.halfHeight !== null) this.camera.halfHeight = state.halfHeight;
+    this.camera.zoom = state.zoom;
+    this.camera.updateProjectionMatrix();
+    this.glideTo(state.position.clone(), state.target.clone());
+  }
+
+  /** Looks at a point straight from one way (a face rig's face, from the front), seeing `size` round it. */
+  lookStraightAt(target: THREE.Vector3, way: THREE.Vector3, size: number) {
+    if (this.cameras.active) this.cameras.leave();
+    const dist = size / Math.tan((this.camera.fov * Math.PI) / 360);
+    this.camera.near = 0.5;
+    if (this.camera.isOrthographicCamera) { this.camera.halfHeight = size; this.camera.zoom = 1; }
+    this.camera.updateProjectionMatrix();
+    this.glideTo(target.clone().addScaledVector(way, dist), target.clone());
   }
 
   /** The camera as saved in a scene. */

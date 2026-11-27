@@ -106,6 +106,7 @@ const isUpper = (name: string) => name.startsWith("upper") || name.endsWith("upp
 export function rollFace(have: ReadonlySet<string>, shapes: readonly (readonly (readonly [string, number])[])[], rand: () => number = Math.random): Map<string, number> {
   const values = new Map<string, number>();
   if (have.size < 4) return values; // a model with no face (the Pyro's mask)
+  if (have.has("left_smile") && have.has("jawv")) return rollHwmFace(have, shapes, rand);
   const put = (name: string, value: number) => values.set(name.toLowerCase(), Math.max(values.get(name.toLowerCase()) ?? 0, Math.min(1, value)));
   const shape = pickOne(shapes.filter((list) => list.some(([c, w]) => w > 0 && have.has(c.toLowerCase()))), rand);
   const strength = 0.6 + rand() * 0.4;
@@ -126,5 +127,60 @@ export function rollFace(have: ReadonlySet<string>, shapes: readonly (readonly (
   }
   const room = Math.max(0, 1 - upperTotal);
   if (rest > room) for (const [name, value] of values) if (!isUpper(name)) values.set(name, (value * room) / rest);
+  return values;
+}
+
+/**
+ * The expressions of an HWM head (models/player/hwm: SFM's heads, whose controllers are the face's muscles, not emotions): each a set of
+ * controller values (real units) by name without its side; a name with `L:` is one side's alone (the roll mirrors it half the time).
+ * Signs as the heads have them: BrowInV up, CloseLid closed (below 0: wide open), JawV open, LipsV parted (below 0: pressed), NoseV and
+ * LipUpV up, LipLoV down, Platysmus the corners down, Frown the brows together.
+ */
+export const HWM_EXPRESSIONS: Record<string, Record<string, number>> = {
+  happy: { Smile: 0.8, CheekV: 0.6, OuterSquint: 0.4, InnerSquint: 0.2, BrowOutV: 0.2, LipsV: 0.2 },
+  grin: { Smile: 1, CheekV: 0.7, OuterSquint: 0.5, LipsV: 0.7, JawV: 0.3, LipUpV: 0.3, LipLoV: 0.3 },
+  mad: { Frown: 0.8, BrowInV: -0.7, NoseV: 0.3, InnerSquint: 0.5, LipUpV: 0.3, Platysmus: 0.3, CloseLid: 0.15 },
+  yell: { Frown: 0.7, BrowInV: -0.8, NoseV: 0.5, JawV: 0.7, LipsV: 0.8, LipUpV: 0.6, LipLoV: 0.5, Platysmus: 0.6 },
+  sad: { BrowInV: 0.8, Frown: 0.4, Platysmus: 0.5, CloseLid: 0.25, LipLoV: -0.2 },
+  scared: { BrowInV: 0.9, BrowOutV: 0.6, Frown: 0.4, CloseLid: -0.5, Platysmus: 0.6, LipsV: 0.4, JawV: 0.2 },
+  surprised: { BrowInV: 0.8, BrowOutV: 0.9, CloseLid: -0.6, JawV: 0.5, LipsV: 0.7, PuckerLipUp: 0.2 },
+  disgust: { NoseV: 0.7, LipUpV: 0.6, Frown: 0.5, BrowInV: -0.4, InnerSquint: 0.4, Platysmus: 0.2, CheekV: 0.3 },
+  smirk: { "L:Smile": 0.8, "L:CheekV": 0.4, "L:OuterSquint": 0.3, "L:LipCnrTwst": 0.3, BrowOutV: 0.15 },
+  skeptical: { "L:BrowInV": 0.6, "L:BrowOutV": 0.6, "R:Frown": 0.4, "R:BrowInV": -0.3, "R:InnerSquint": 0.3, LipsV: -0.3 },
+  pout: { PuckerLipUp: 0.7, PuckerLipLo: 0.7, FoldLipLo: 0.3, BrowInV: 0.3, Platysmus: 0.2 },
+  determined: { Frown: 0.5, BrowInV: -0.4, OuterSquint: 0.4, LipsV: -0.6, JawV: -0.3 },
+};
+
+/**
+ * A random face for an HWM head: one of {@link HWM_EXPRESSIONS} (now and then two blended), at a random strength and a little uneven
+ * between the sides (a face is never quite symmetric), and half the time a mouth shape of its phonemes over it. Each controller stays in
+ * its range (-1..1; the one-way ones 0..1, clamped by the model).
+ */
+function rollHwmFace(have: ReadonlySet<string>, shapes: readonly (readonly (readonly [string, number])[])[], rand: () => number): Map<string, number> {
+  const values = new Map<string, number>();
+  const add = (name: string, value: number) => {
+    const key = name.toLowerCase();
+    if (!have.has(key)) return;
+    values.set(key, Math.max(-1, Math.min(1, (values.get(key) ?? 0) + value)));
+  };
+  const names = Object.keys(HWM_EXPRESSIONS);
+  const first = pickOne(names, rand)!;
+  const second = rand() < 0.3 ? pickOne(names.filter((n) => n !== first), rand) : undefined;
+  for (const [name, weight] of [[first, 0.5 + rand() * 0.5], ...(second ? [[second, 0.2 + rand() * 0.3]] : [])] as [string, number][]) {
+    const mirror = rand() < 0.5;
+    const side = { left: 0.85 + rand() * 0.15, right: 0.85 + rand() * 0.15 };
+    for (const [flex, value] of Object.entries(HWM_EXPRESSIONS[name])) {
+      const one = /^([LR]):(.*)$/.exec(flex);
+      const base = one ? one[2] : flex;
+      if (have.has(base.toLowerCase())) { add(base, value * weight); continue; } // (a flex of the middle: the jaw)
+      const sides = one ? [(one[1] === "L") !== mirror ? "left" : "right"] : ["left", "right"];
+      for (const s of sides) add(`${s}_${base}`, value * weight * side[s as "left" | "right"]);
+    }
+  }
+  if (rand() < 0.5) {
+    const shape = pickOne(shapes.filter((list) => list.some(([c, w]) => w > 0 && have.has(c.toLowerCase()))), rand);
+    const strength = 0.3 + rand() * 0.4;
+    for (const [c, w] of shape ?? []) if (w > 0) add(c, w * strength);
+  }
   return values;
 }

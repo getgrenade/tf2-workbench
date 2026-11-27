@@ -35,6 +35,11 @@ struct FlexJson {
     vertices: usize,
     deltas: usize,
     normal_deltas: usize,
+    /// A stereo flex: the other side's descriptor, and the byte offset of its u8 side per vertex.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pair: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sides: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -234,6 +239,8 @@ pub fn encode(model: &Model) -> Vec<u8> {
                         vertices: push_u32(&mut blob, &f.vertices),
                         deltas: push_f32(&mut blob, &f.deltas),
                         normal_deltas: push_f32(&mut blob, &f.normal_deltas),
+                        pair: f.pair,
+                        sides: f.pair.map(|_| push_u8(&mut blob, &f.sides)),
                     })
                     .collect();
                 meshes.push(MeshJson {

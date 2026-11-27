@@ -1699,3 +1699,32 @@ h1, h2, h3, h4, .panel h3, .setGroup h3, nav button, .sceneTab, .dockTabs button
 /* the Weapons panel's Festivized switch, under the slot buttons */
 #weaponFestive { display: flex; align-items: center; gap: 6px; margin: 6px 0 0; cursor: pointer; }
 #weaponFestive[hidden] { display: none; }
+/* the held weapon's war paint, opened by a click on it in the view */
+/* the held weapon's options popup (tab.ts openWeaponOptions): war paint, killstreak, Festivizer, one section each */
+.weaponPop { width: 300px; padding: 10px 10px 8px; }
+.weaponPop[hidden] { display: none; }
+.weaponPop .paintTitle { font-weight: 600; margin-bottom: 2px; }
+.weaponPopSection { padding: 6px 0 4px; border-top: 1px solid var(--line, rgba(255, 255, 255, 0.08)); }
+.weaponPopSection:first-of-type { border-top: 0; }
+.weaponPopSection[hidden], #warPaintSection:has(> #warPaint[hidden]) { display: none; }
+.weaponPopHead { margin-bottom: 5px; font-size: var(--ui-fs-micro); text-transform: uppercase; letter-spacing: .06em; color: var(--dim); }
+.weaponPop .warPaint, .weaponPop .killstreakRow { border-bottom: 0; margin-bottom: 0; padding: 0; }
+.weaponPop .warPaintRow, .weaponPop .killstreakRow > label { grid-template-columns: 72px 1fr; }
+.weaponPop .ksLast { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; }
+.weaponPop .ksLast .ksSpeed { display: grid; grid-template-columns: 72px 1fr 3.2em; align-items: center; gap: 6px; }
+.weaponPop .ksLast .ksSpeed > span:first-child { opacity: 0.75; }
+.weaponPop .ksLast .ksHigh { display: flex; align-items: center; gap: 5px; white-space: nowrap; cursor: pointer; }
+.weaponPop .festiveRow { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+#weaponEquipped .equip { cursor: pointer; }
+
+/* the face rig of an HWM head (faceRig.ts): its switch under the Flex tab, and the selected control's channel box over the view */
+.flexFooter .faceRigToggle.on { background: var(--ui-accent-soft); border-color: var(--ui-accent-line); color: var(--fg); }
+.faceRigMirror[hidden] { display: none; }
+.faceRigBox { position: absolute; left: 12px; bottom: 12px; z-index: 40; width: 250px; padding: 8px 10px; background: var(--panel); border: 1px solid var(--ui-line-strong); border-radius: var(--ui-radius-l); box-shadow: 0 6px 18px var(--ui-shade-3); }
+.faceRigBox[hidden] { display: none; }
+.faceRigHead { display: flex; align-items: center; font-weight: 600; margin-bottom: 4px; }
+.faceRigClose { margin-left: auto; height: 20px; padding: 0 6px; font-size: var(--ui-fs-small); }
+.faceRigGroup { margin: 6px 0 3px; font-size: var(--ui-fs-micro); text-transform: uppercase; letter-spacing: .06em; color: var(--dim); }
+.faceRigRow { display: grid; grid-template-columns: 92px 1fr 3em; align-items: center; gap: 6px; font-size: var(--ui-fs-small); }
+.faceRigRow > span:first-child { opacity: 0.8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.faceRigValue { text-align: right; font-variant-numeric: tabular-nums; color: var(--dim); }

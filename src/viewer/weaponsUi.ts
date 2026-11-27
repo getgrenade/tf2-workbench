@@ -34,6 +34,8 @@ export interface WeaponsHooks {
   changed: (held: ItemInfo | null, picked: boolean) => void;
   /** Opens just this weapon, alone, in a scene of its own. */
   inspect: (weapon: ItemInfo) => void;
+  /** Its card was clicked: its options (war paint, killstreak, Festivizer) open under the card, or close. */
+  options: (weapon: ItemInfo, card: DOMRect) => void;
 }
 
 /** Border colours by item quality, same as the cosmetics browser. */
@@ -163,6 +165,7 @@ export function createWeaponsUi(els: WeaponsEls, hooks: WeaponsHooks) {
     }
     card.onclick = (ev) => {
       if ((ev.target as HTMLElement).classList.contains("x")) putAway();
+      else hooks.options(current, card.getBoundingClientRect());
     };
     if (current.slot !== "taunt") {
       card.oncontextmenu = (ev) => {

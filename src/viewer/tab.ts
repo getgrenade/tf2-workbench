@@ -112,6 +112,7 @@ import { BOSSES, GIANT_SCALE, HL2_CITIZEN_GROUPS, ROBOTS, bossOf, hl2Keys, robot
 import { BUILDINGS, buildingCls, buildingLabel, buildingOf, classPath, defaultBuildingSequence, isBuildingCls, type BuildingKind, type BuildingStage, type TeleporterMode } from "./buildings";
 import { bakeClip, blendingTaunts, createAnimUi, newAnimState, type AnimEls, type AnimState } from "./animUi";
 import { createFlexUi, flexGlobalsFor, type FlexEls } from "./flexUi";
+import { analyzeFace, FaceRig, type FaceLayout } from "./faceRig";
 import { DEFAULT_FOV_X, DEFAULT_POINT_LIGHT, Viewer, type CosmeticSpec, type LightState, type PointLightState } from "./viewer";
 import { createLightingUi } from "./lightingUi";
 import { MAX_LIGHTS, defaultLightingRig, newRigLight, parseLightingRig, type RigLight } from "./lighting";
@@ -749,7 +750,72 @@ export function createViewTab(els: Els) {
     selected?.actor.setFlexControllers(globals);
     selected?.face?.touch(); // paused, the sliders are the face; it is theirs now
     selected?.face?.invalidate(); // a scene face goes over the sliders
-  });
+  }, (model) => { flexModel = model; syncFaceRig(); });
+
+  // --- the face rig of an HWM head (faceRig.ts): on-face controls in place of the sliders, switched on under the Flex tab ---
+  let flexModel: ModelData | null = null;
+  let faceRig: FaceRig | null = null;
+  let faceRigOn = false;
+  const faceLayouts = new WeakMap<ModelData, FaceLayout | null>();
+  const faceLayoutOf = (model: ModelData): FaceLayout | null => {
+    if (!faceLayouts.has(model)) {
+      const names = model.bones.map((b) => b.name.toLowerCase());
+      const head = names.indexOf("bip_head");
+      faceLayouts.set(model, head >= 0 ? analyzeFace(model, head) : null);
+    }
+    return faceLayouts.get(model) ?? null;
+  };
+  const faceRigBtn = document.createElement("button");
+  faceRigBtn.className = "faceRigToggle";
+  faceRigBtn.textContent = "Face rig";
+  faceRigBtn.setAttribute("aria-pressed", "false");
+  const faceMirror = document.createElement("label");
+  faceMirror.className = "flexEyesFollow faceRigMirror";
+  faceMirror.title = "Moving a control of one side moves the other side's the same";
+  faceMirror.innerHTML = `<input type="checkbox" /> Mirror`;
+  const faceMirrorBox = faceMirror.querySelector("input")!;
+  els.flex.reset.after(faceRigBtn, faceMirror);
+  faceMirrorBox.onchange = () => { if (faceRig) faceRig.mirror = faceMirrorBox.checked; };
+  /** Where the view was before the face rig took it to the face: it goes back there when the rig is switched off. */
+  let faceRigReturn: ReturnType<Viewer["viewState"]> | null = null;
+  /** The character whose animation the face rig paused: it plays again when the rig is switched off (if nothing else changed it). */
+  let faceRigPaused: Entity | null = null;
+  faceRigBtn.onclick = () => {
+    faceRigOn = !faceRigOn;
+    syncFaceRig();
+    if (faceRigOn) {
+      // the animation stops on its frame while the face is posed (through the Animation tab's button: its label and the view's keep up)
+      if (selected?.actor.playback.playing && !selected.actor.isPosing) { els.anim.play.click(); faceRigPaused = selected.actor.playback.playing ? null : selected; }
+      // (the face, from the front: its controls are small)
+      const f = faceRig?.front();
+      if (f && viewer) { faceRigReturn = viewer.viewState(); viewer.lookStraightAt(f.target, f.way, f.size * 1.5); }
+    } else {
+      if (faceRigPaused && faceRigPaused === selected && !selected.actor.playback.playing && !selected.actor.isPosing && !selected.actor.holdsPose) els.anim.play.click();
+      faceRigPaused = null;
+      if (faceRigReturn) {
+        viewer?.glideBack(faceRigReturn);
+        faceRigReturn = null;
+      }
+    }
+  };
+  function syncFaceRig() {
+    const layout = selected && flexModel ? faceLayoutOf(flexModel) : null;
+    faceRigBtn.disabled = !layout;
+    faceRigBtn.title = layout
+      ? "Controls on the face, as an animator's face rig has them: drag one in its box to pull that part of the face (Shift: straight). A selected one lists all its flexes; Esc lets go"
+      : "The face rig is for the HWM model's face: switch on HWM model under the class buttons (Properties)";
+    const on = faceRigOn && !!layout;
+    faceRigBtn.classList.toggle("on", on);
+    faceRigBtn.setAttribute("aria-pressed", String(on));
+    faceMirror.hidden = !on;
+    // (a click off everything in the view lets go of the character: its controls go until it is selected again, the rig stays switched on)
+    const shown = on && !noneSelected();
+    faceRig?.setActor(shown ? selected!.actor : null, shown ? layout : null);
+  }
+  /** Whether a click off everything let go of the character (`nothingSelected`, declared further on: false before it is). */
+  const noneSelected = () => { try { return nothingSelected; } catch { return false; } };
+  // (the selection changes in many places: the rig follows it on its own)
+  window.setInterval(() => { if (faceRigOn) syncFaceRig(); }, 150);
   const eyesFollow = document.getElementById("flexEyesFollow") as HTMLInputElement | null;
   if (eyesFollow) eyesFollow.onchange = () => { selected?.actor.setEyesFollowCamera(eyesFollow.checked); };
   const gameClassOf = (mdl: string) => robotOf(mdl)?.gameClass ?? CLASSES.find(([, m]) => m === mdl)?.[2] ?? mdl;
@@ -1225,7 +1291,7 @@ export function createViewTab(els: Els) {
     }
     if (e === selected) void warPaintUi.refresh();
   }
-  const warPaintUi = createWarPaintUi(document.getElementById("warPaint") ?? document.createElement("div"), {
+  const warPaintHooks: Parameters<typeof createWarPaintUi>[1] = {
     current: () => ({ weapon: selected?.held ? warPaintWeaponOf(selected.held) : null, paint: (selected?.held && selected.warPaints?.get(selected.held.id)) || null }),
     kits: async (weapon) => {
       const grades = (await loadItemDb()).paintkitGrades;
@@ -1240,7 +1306,57 @@ export function createViewTab(els: Els) {
       else e.warPaints.delete(e.held.id);
       void refreshWarPaint(e);
     },
-  });
+  };
+  const warPaintUi = createWarPaintUi(document.getElementById("warPaint") ?? document.createElement("div"), warPaintHooks);
+  /**
+   * The held weapon's options (its war paint, its killstreak, the Festivizer) in a popup of their own, opened by a click on the weapon's
+   * card in the Weapons panel (under the card) or on the weapon in the view (in the view's bottom left corner, out of the model's way).
+   */
+  const weaponPop = document.getElementById("weaponPop");
+  const weaponPopTitle = document.getElementById("weaponPopTitle");
+  if (weaponPop) document.body.append(weaponPop); // (fixed to the window, out of the dock's scrolling)
+  let weaponPopFor: number | null = null;
+  const closeWeaponPop = () => {
+    if (!weaponPop || weaponPop.hidden) return;
+    weaponPop.hidden = true;
+    weaponPopFor = null;
+  };
+  function openWeaponOptions(weapon: ItemInfo, at: { under: DOMRect } | { corner: DOMRect }) {
+    if (!weaponPop) return;
+    const paintable = !!warPaintWeaponOf(weapon);
+    if (!paintable && !canKillstreak(weapon) && !(weapon.slot !== "taunt" && weapon.festiveModels?.length)) return closeWeaponPop();
+    if (weaponPopTitle) weaponPopTitle.textContent = weapon.displayName;
+    refreshKillstreak();
+    refreshFestive();
+    weaponPop.hidden = false;
+    weaponPopFor = weapon.id;
+    const place = () => {
+      if (weaponPop.hidden) return;
+      const w = weaponPop.offsetWidth, h = weaponPop.offsetHeight;
+      let x: number, y: number;
+      if ("corner" in at) {
+        x = at.corner.left + 12;
+        y = at.corner.bottom - h - 12;
+      } else {
+        x = at.under.left;
+        y = at.under.bottom + 6;
+        if (y + h > innerHeight - 8) y = at.under.top - h - 6; // (no room under it: above it)
+      }
+      weaponPop.style.left = `${Math.max(8, Math.min(x, innerWidth - w - 8))}px`;
+      weaponPop.style.top = `${Math.max(8, Math.min(y, innerHeight - h - 8))}px`;
+    };
+    place();
+    void warPaintUi.refresh().then(place);
+  }
+  // a click outside it (but not the click that opens it again) or Escape closes it
+  window.addEventListener("pointerdown", (ev) => {
+    if (!weaponPop || weaponPop.hidden) return;
+    const t = ev.target as HTMLElement;
+    if (weaponPop.contains(t) || t.closest?.("#weaponEquipped .equip") || t.closest?.("select")) return;
+    // (a click in the view may be on the weapon again: the pick decides, a moment later)
+    closeWeaponPop();
+  }, true);
+  window.addEventListener("keydown", (ev) => { if (ev.key === "Escape") closeWeaponPop(); }, true);
 
   const clockClips = new Map<string, Promise<ClipData | null>>();
   /**
@@ -1355,6 +1471,10 @@ export function createViewTab(els: Els) {
   const weapons = createWeaponsUi(els.weapons, {
     gameClass: () => gameClassOf(selected?.cls ?? ""),
     inspect: (weapon) => void inspectItem(weapon, true),
+    options: (weapon, card) => {
+      if (weaponPopFor === weapon.id && !weaponPop?.hidden) closeWeaponPop();
+      else openWeaponOptions(weapon, { under: card });
+    },
     changed: (weapon, picked) => {
       const e = selected;
       if (!picked || !e) return; // class switches reapply the loadout through the cosmetics browser
@@ -1363,6 +1483,7 @@ export function createViewTab(els: Els) {
       // a taunt is picked: what the character was playing is kept, to go back to when the taunt is put away
       if (weapon?.slot === "taunt" && !wasTaunt && !e.actor.isPosing && !e.actor.holdsPose) e.beforeTaunt = animationOf(e);
       e.held = weapons.getHeld();
+      if (e.held?.id !== weaponPopFor) closeWeaponPop();
       const loaded = applyLoadout(e, e.applied);
       void warPaintUi.refresh();
       // in pose mode (or on a held pose) the weapon changes in the hands without touching the pose: no idle sequence is switched to; nor
@@ -1552,6 +1673,23 @@ export function createViewTab(els: Els) {
     return wanted;
   }
 
+  /**
+   * An HWM head's material (models/player/<class>/hwm/..._head...) with the class's own head texture as its colour: Valve's HWM head
+   * textures have the mouth's inside painted out (the Scout's and the Spy's teeth and tongue black, the others' darkened), and both heads
+   * use the very same texture layout. The HWM material keeps its own other maps (its phong mask, exponent, wrinkle maps).
+   */
+  async function withStockHead(path: string, material: MaterialData): Promise<MaterialData> {
+    const m = /^materials\/models\/player\/([^/]+)\/hwm\/([^/]*head[^/]*\.vmt)$/i.exec(path);
+    if (!m) return material;
+    try {
+      const stock = parseMaterial(await loadMaterial(`materials/models/player/${m[1]}/${m[2]}`));
+      if (!stock.textures.base) return material;
+      return { ...material, params: { ...material.params, $basetexture: stock.params.$basetexture ?? material.params.$basetexture }, textures: { ...material.textures, base: stock.textures.base } };
+    } catch {
+      return material; // (no stock material of that name: the HWM one as it is)
+    }
+  }
+
   async function loadMaterials(paths: Iterable<string>) {
     await Promise.all(
       [...paths]
@@ -1559,7 +1697,7 @@ export function createViewTab(els: Els) {
         .map(async (p) => {
           try {
             // (with the edits made to it in the Textures panel in an earlier run)
-            materials.set(p, await restoreMaterialEdits(p, parseMaterial(await loadMaterial(p))));
+            materials.set(p, await restoreMaterialEdits(p, await withStockHead(p, parseMaterial(await loadMaterial(p)))));
           } catch (err) {
             materials.set(p, null);
             materialErrors.set(p, String(err));
@@ -2150,6 +2288,10 @@ export function createViewTab(els: Els) {
       });
       // dev builds: a handle for inspecting the scene from the console
       if (import.meta.env.DEV) (window as unknown as { __workbench: unknown }).__workbench = { viewer, entities, models };
+      faceRig = new FaceRig(viewer, viewer.renderer.domElement, viewer.scene, els.wrap, { get: (n) => flex.get(n), set: (list) => flex.setMany(list) });
+      faceRig.mirror = faceMirrorBox.checked;
+      viewer.faceRig = faceRig;
+      syncFaceRig();
       viewer.onConditionsChanged = (actor) => { if (selected?.actor === actor) renderConditions(); };
       viewer.cameraOverlay.attachProperties(propsEl("overlayProps"));
       viewer.cameraOverlay.onChange(() => { overlayPanel.refresh(); syncOverlayMode(); });
@@ -2278,8 +2420,10 @@ export function createViewTab(els: Els) {
           // the Textures panel shows what was clicked: the cosmetic, or the character itself
           refreshTextures();
           texPreview?.focus(hit?.item != null ? `item:${hit.item}` : "character");
-          // a click on a cosmetic opens its paint chart there
-          if (hit?.item != null) itemsUi.openPaint(hit.item, hit.x + 10, hit.y + 10);
+          // a click on a cosmetic opens its paint chart, in the view's bottom left corner (out of the way of the model and its menus)
+          // (the held weapon: its options, its war paint, killstreak and Festivizer)
+          if (hit?.item != null && hit.item === e.held?.id) openWeaponOptions(e.held, { corner: els.wrap.getBoundingClientRect() });
+          else if (hit?.item != null) itemsUi.openPaint(hit.item, hit.x + 10, hit.y + 10, false, els.wrap.getBoundingClientRect());
         }
       };
       applySliders();
@@ -3360,6 +3504,7 @@ export function createViewTab(els: Els) {
     restoreUi(e);
     refreshKillstreak();
     refreshFestive();
+    if (e.held?.id !== weaponPopFor) closeWeaponPop();
     renderEntities();
   }
 
@@ -6373,6 +6518,7 @@ export function createViewTab(els: Els) {
       if (!tab || tab === before) throw new Error("could not open the character's scene (the view is busy)");
       baseEnv.set(tab, currentEnv());
       promo().roles.set(role, tab);
+      syncWorldForTab(); // (a promo scene now: the map of the scene it was opened from is not in it)
       promo().dressed.delete(role);
       promo().laidOut.delete(role);
       hidePromoTab(tab);
@@ -7399,8 +7545,12 @@ export function createViewTab(els: Els) {
 
   /** One thing at a time in the promo scene (a shot taken, a look through a camera): they dress its characters and move the view. */
   let promoBusy: Promise<unknown> = Promise.resolve();
+  /** How many jobs wait for (or are in) the promo scene, and the timer that brings your scene back once none are left. */
+  let promoJobs = 0, homeTimer = 0;
   function inPromoScene<T>(job: () => Promise<T>): Promise<T> {
     const mine = session; // the promo the caller works on (its board set it), kept for when the job runs
+    promoJobs++;
+    clearTimeout(homeTimer);
     const run = promoBusy.then(async () => {
       session = mine;
       promoQuiet = true;
@@ -7409,6 +7559,13 @@ export function createViewTab(els: Els) {
       } finally {
         promoQuiet = false;
       }
+    }).finally(() => {
+      // a shot taken while no board is in front (one brought back at startup, a send from the view): once the promo work is done the 3D
+      // view shows your scene again, not the promo's (whose view has no right-click menu and whose tab is hidden)
+      if (--promoJobs === 0) homeTimer = window.setTimeout(() => {
+        if (promoJobs || activeBoard || promoEditing) return;
+        promoBusy = promoBusy.then(() => leavePromoScene()).catch(() => {});
+      }, 400);
     });
     promoBusy = run.catch(() => {});
     return run;
@@ -9029,6 +9186,7 @@ export function createViewTab(els: Els) {
       markClean(tab);
     } finally {
       tabBusy = false;
+      syncWorldForTab();
       renderTabs();
     }
   }
@@ -9049,6 +9207,7 @@ export function createViewTab(els: Els) {
       syncPoseUi();
     } finally {
       tabBusy = false;
+      syncWorldForTab();
       renderTabs();
     }
   }
@@ -9418,7 +9577,8 @@ export function createViewTab(els: Els) {
   /** The map's row in the outliner (its name, whether it is hidden, what it is loading). */
   let mapStatus = "";
   function syncMapRow() {
-    hierarchy().setMap(worldMap ? { name: mapLabel(worldMap.name), off: !worldMap.group.visible, ...(mapStatus ? { status: mapStatus } : {}) } : null);
+    // (a promo's scene, a shot edited in 3D: the map of your scene is not in it, nor in its list)
+    hierarchy().setMap(worldMap && !isPromoTab(activeTab) ? { name: mapLabel(worldMap.name), off: !worldMap.group.visible, ...(mapStatus ? { status: mapStatus } : {}) } : null);
   }
   /** Loads a map into the scene in place of the one there (its sky with it); a spawn point of it is where the characters stand. */
   /** The sounds of the map in the scene (null: none). */
@@ -9450,7 +9610,7 @@ export function createViewTab(els: Els) {
     let lightAsked = 0;
     const lightAt = new Map<Actor, THREE.Vector3>();
     v.onWorldFrame = (camera, shadows) => {
-      if (worldMap !== map) return;
+      if (worldMap !== map || isPromoTab(activeTab)) return;
       map.setEye(camera);
       map.tick(performance.now());
       sounds.update(camera, !voiceMuted());
@@ -9500,6 +9660,7 @@ export function createViewTab(els: Els) {
       if (worldMap !== map) return;
       for (const n of moved) map.setPropHidden(n, true);
       v.setWorld(map.group, Math.max(20000, map.extent * 1.5));
+      syncWorldForTab();
       if (map.sky) {
         skyBeforeMap ??= { ...sky };
         await setSkyState({ ...sky, name: map.sky });
@@ -9510,6 +9671,17 @@ export function createViewTab(els: Els) {
         els.info.textContent = `Could not load ${name}: ${String(err)}`;
       }
     }
+  }
+  /**
+   * A promo's scenes (its shots' characters) are drawn without the map of the scene you had open: it is taken out of the view while one
+   * of them is open (kept loaded, it comes back with your scene), and the characters are not lit by it.
+   */
+  function syncWorldForTab() {
+    if (!worldMap || !viewer) return;
+    const promoNow = isPromoTab(activeTab);
+    viewer.showWorld(!promoNow);
+    if (promoNow) viewer.setWorldLight(null);
+    syncMapRow();
   }
   /** Takes the map out of the scene (and gives back the sky from before it). */
   function removeWorldMap() {

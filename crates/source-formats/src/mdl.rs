@@ -95,6 +95,8 @@ pub struct MdlMesh {
 pub struct VertAnim {
     /// Vertex index within the mesh (`mstudiomesh_t` vertex numbering).
     pub index: u16,
+    /// Stereo flexes: how much of the vertex follows the pair's (`MdlFlex::pair`) weight rather than the flex's own (0..255).
+    pub side: u8,
     pub delta: [f32; 3],
     pub ndelta: [f32; 3],
 }
@@ -105,6 +107,8 @@ pub struct VertAnim {
 pub struct MdlFlex {
     pub desc: i32,
     pub targets: [f32; 4],
+    /// `flexpair`: the other side's descriptor of a stereo flex (0: none), blended per vertex by `VertAnim::side`.
+    pub pair: i32,
     pub verts: Vec<VertAnim>,
 }
 
@@ -424,7 +428,7 @@ fn parse_flex(data: &[u8], base: usize) -> Result<MdlFlex> {
     let targets = r.f32s::<4>()?;
     let num_verts = count(r.i32()?, "flex vertex", 1 << 20)?;
     let vert_index = r.i32()?;
-    r.skip(4); // flexpair
+    let pair = r.i32()?;
     let anim_type = r.bytes(1)?[0];
     // STUDIO_VERT_ANIM_WRINKLE entries carry one extra short after the normal delta.
     let stride = if anim_type == 0 { 16 } else { 18 };
@@ -433,7 +437,8 @@ fn parse_flex(data: &[u8], base: usize) -> Result<MdlFlex> {
     for i in 0..num_verts {
         let mut v = Reader::at(data, start + i * stride);
         let index = v.u16()?;
-        v.skip(2); // speed, side
+        v.skip(1); // speed
+        let side = v.bytes(1)?[0];
         let mut delta = [0.0; 3];
         let mut ndelta = [0.0; 3];
         for d in &mut delta {
@@ -442,9 +447,9 @@ fn parse_flex(data: &[u8], base: usize) -> Result<MdlFlex> {
         for d in &mut ndelta {
             *d = half_to_f32(v.u16()?);
         }
-        verts.push(VertAnim { index, delta, ndelta });
+        verts.push(VertAnim { index, side, delta, ndelta });
     }
-    Ok(MdlFlex { desc, targets, verts })
+    Ok(MdlFlex { desc, targets, pair, verts })
 }
 
 fn parse_jiggle(data: &[u8], base: usize) -> Result<Jiggle> {

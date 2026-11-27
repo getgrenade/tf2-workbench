@@ -55,6 +55,9 @@ pub struct MeshFlex {
     /// xyz per entry of `vertices`.
     pub deltas: Vec<f32>,
     pub normal_deltas: Vec<f32>,
+    /// A stereo flex: the other side's descriptor, and per entry of `vertices` how much follows it (0..255; see `mdl::MdlFlex::pair`).
+    pub pair: Option<u32>,
+    pub sides: Vec<u8>,
 }
 
 impl Mesh {
@@ -271,13 +274,17 @@ pub fn build(
                     group_base += g.orig_mesh_vert_ids.len() as u32;
                 }
                 for flex in &mesh.flexes {
-                    let mut mf = MeshFlex { desc: flex.desc.max(0) as u32, targets: flex.targets, vertices: Vec::new(), deltas: Vec::new(), normal_deltas: Vec::new() };
+                    let pair = (flex.pair > 0).then_some(flex.pair as u32);
+                    let mut mf = MeshFlex { desc: flex.desc.max(0) as u32, targets: flex.targets, vertices: Vec::new(), deltas: Vec::new(), normal_deltas: Vec::new(), pair, sides: Vec::new() };
                     for v in &flex.verts {
                         // Flexes index the mesh's own vertices; only those used by the LOD 0 triangles exist here.
                         if let Some(&i) = remap.get(&(first + v.index as usize)) {
                             mf.vertices.push(i);
                             mf.deltas.extend_from_slice(&v.delta);
                             mf.normal_deltas.extend_from_slice(&v.ndelta);
+                            if pair.is_some() {
+                                mf.sides.push(v.side);
+                            }
                         }
                     }
                     if !mf.vertices.is_empty() {

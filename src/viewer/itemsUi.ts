@@ -375,7 +375,8 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
    * Opens the paint chart for an equipped item near a screen position (nothing when the item is not equipped). With `extend` the item
    * is added to the selection (or taken out of it when it is in it) and the chart stays where it is.
    */
-  function openPaintMenu(itemId: number, x: number, y: number, extend = false) {
+  /** `corner`: the chart goes in the bottom left corner of that box (the 3D view's), whatever `x` and `y` say. */
+  function openPaintMenu(itemId: number, x: number, y: number, extend = false, corner?: DOMRect) {
     if (!paintTargets().some((e) => e.item.id === itemId)) return;
     closeStyleMenu();
     activeId = itemId;
@@ -389,7 +390,7 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
     }
     closePaintMenu();
     selection.add(itemId);
-    showPaintMenu(x, y);
+    showPaintMenu(x, y, corner);
   }
 
   /** What the chart can paint: the worn cosmetics, and the temporary compiler item as one more (under TEMPORARY_ITEM; its paint is kept by the hooks). */
@@ -408,7 +409,7 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
     showPaintMenu(x, y);
   }
 
-  function showPaintMenu(x: number, y: number) {
+  function showPaintMenu(x: number, y: number, corner?: DOMRect) {
     const menu = document.createElement("div");
     menu.className = "paintMenu";
     document.body.appendChild(menu);
@@ -417,6 +418,7 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
     renderPaintMenu();
     const w = menu.offsetWidth;
     const h = menu.offsetHeight;
+    if (corner) { x = corner.left + 12; y = corner.bottom - h - 12; }
     menu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - w - 4))}px`;
     menu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - h - 4))}px`;
     renderEquipped();
@@ -690,7 +692,7 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
     /** Redraws the equipped list (the temporary item came or went). */
     refreshEquipped: renderEquipped,
     getState: () => ({ loadout, activeId }),
-    /** Opens the paint chart for an equipped item at a screen position (a click on the model). */
+    /** Opens the paint chart for an equipped item at a screen position, or in a box's bottom left corner (a click on the model). */
     openPaint: openPaintMenu,
     /** Shows another character's loadout (class, team and model are already theirs, nothing is applied). */
     load(state: { loadout: Equipped[]; activeId: number | null }) {

@@ -236,14 +236,22 @@ app.innerHTML = `
         <div class="row2"><button id="weaponsRemoveAll" title="Put away the weapon or taunt the character holds">Remove all</button></div>
         <div id="weaponEquipped" class="chips"></div>
         <div id="weaponSlots" class="slotBtns"><button data-slot="taunt" title="Taunts with a prop; picking one plays the taunt">Taunt</button><button data-slot="primary" class="on">Primary</button><button data-slot="secondary">Secondary</button><button data-slot="melee">Melee</button><button data-slot="utility" title="PDAs, sappers, toolbox, disguise kit">Utility</button></div>
-        <div id="weaponKillstreak" class="killstreakRow" hidden title="The held weapon's killstreak: a Specialized Killstreak's sheen, and a Professional Killstreak's eye effect in the sheen's colour">
-          <label><span>Sheen</span><select id="ksSheen"></select></label>
-          <label><span>Killstreaker</span><select id="ksEffect"></select></label>
-          <label class="ksSpeed" title="How fast the sheen sweeps over the weapon (100%: as in game)"><span>Sheen speed</span><input type="range" id="ksSpeed" min="25" max="400" step="5" value="100" /><span class="dim" id="ksSpeedValue">100%</span></label>
-          <label class="ksHigh" title="A streak of 10 kills or more: the eye effect at its strongest, and the sheen sweeping without a pause (five seconds apart below five kills)"><input type="checkbox" id="ksHigh" /> 10+ kill streak</label>
+        <div id="weaponPop" class="paintMenu weaponPop" hidden>
+          <div class="paintTitle" id="weaponPopTitle"></div>
+          <div class="weaponPopSection" id="warPaintSection"><div class="weaponPopHead">War paint</div><div id="warPaint" hidden></div></div>
+          <div class="weaponPopSection" id="weaponKillstreak" title="The held weapon's killstreak: a Specialized Killstreak's sheen, and a Professional Killstreak's eye effect in the sheen's colour">
+            <div class="weaponPopHead">Killstreak</div>
+            <div class="killstreakRow">
+              <label><span>Sheen</span><select id="ksSheen"></select></label>
+              <label><span>Killstreaker</span><select id="ksEffect"></select></label>
+              <div class="ksLast">
+                <label class="ksSpeed" title="How fast the sheen sweeps over the weapon (100%: as in game)"><span>Speed</span><input type="range" id="ksSpeed" min="25" max="400" step="5" value="100" /><span class="dim" id="ksSpeedValue">100%</span></label>
+                <label class="ksHigh" title="A streak of 10 kills or more: the eye effect at its strongest, and the sheen sweeping without a pause (five seconds apart below five kills)"><input type="checkbox" id="ksHigh" /> 10+ streak</label>
+              </div>
+            </div>
+          </div>
+          <label id="weaponFestive" class="festiveRow weaponPopSection" hidden title="Put a Festivizer on the held weapon: its string of lights, as in game"><input type="checkbox" /> Festivized</label>
         </div>
-        <div id="warPaint" hidden></div>
-        <label id="weaponFestive" class="festiveRow" hidden title="Put a Festivizer on the held weapon: its string of lights, as in game"><input type="checkbox" /> Festivized</label>
         <div id="weaponList" class="itemlist"></div>
         <div class="itemFoot" id="weaponFoot"><span id="weaponCount" class="dim hint"></span></div>
       </section>

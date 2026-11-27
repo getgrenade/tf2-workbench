@@ -11,6 +11,9 @@ export interface MeshFlexData {
   /** xyz per entry. */
   deltas: Float32Array;
   normalDeltas: Float32Array;
+  /** A stereo flex (`flexpair`): the other side's descriptor, and per vertex how much follows its weight (0..255) rather than `desc`'s. */
+  pair?: number;
+  sides?: Uint8Array;
 }
 export interface MeshData {
   /** Material of skin family 0 (RED). */
@@ -83,7 +86,7 @@ export interface ModelData {
 interface MeshJson {
   material: string;
   materials: string[];
-  flexes: { desc: number; targets: [number, number, number, number]; count: number; vertices: number; deltas: number; normalDeltas: number }[];
+  flexes: { desc: number; targets: [number, number, number, number]; count: number; vertices: number; deltas: number; normalDeltas: number; pair?: number; sides?: number }[];
   vertexCount: number;
   indexCount: number;
   pos: number;
@@ -114,6 +117,7 @@ export function parsePayload(buf: ArrayBuffer): ModelData {
       vertices: new Uint32Array(buf, blobStart + f.vertices, f.count),
       deltas: f32(f.deltas, f.count * 3),
       normalDeltas: f32(f.normalDeltas, f.count * 3),
+      ...(f.pair != null && f.sides != null ? { pair: f.pair, sides: new Uint8Array(buf, blobStart + f.sides, f.count) } : {}),
     })),
     positions: f32(m.pos, m.vertexCount * 3),
     normals: f32(m.normal, m.vertexCount * 3),
