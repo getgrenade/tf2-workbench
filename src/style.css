@@ -1331,6 +1331,8 @@ body.dndActive.dndRefused * { cursor: no-drop !important; }
 .promoSideFoot { margin-top: auto; padding-top: var(--ui-5); }
 .promoSideFoot .btns { display: grid; grid-template-columns: 1fr 1fr; }
 .promoSideFoot .btns .primary { grid-column: 1 / -1; }
+/* (the buttons grow with their text, which wraps in the narrow side panel) */
+.promoSideFoot .btns button { height: auto; min-height: var(--ui-h); padding: 5px 8px; line-height: 1.2; white-space: normal; text-align: center; }
 .promoSideFoot .chartInfo:empty { display: none; }
 .promoExport { display: flex; flex-direction: column; gap: var(--ui-2); margin-top: var(--ui-3); }
 .promoExport .row { display: flex; align-items: center; gap: var(--ui-3); }

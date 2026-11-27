@@ -2,7 +2,7 @@ import { icon as svgIcon, ICONS as LUCIDE, type IconName } from "../icons";
 import { shadowApart, shadowLayer, shadowOf, shotRegions, solidOf, type ShotEffects, type ShotEnv } from "./promo";
 import { isRobotOnlyItem } from "./robotItems";
 import { partsOf } from "./promoMask";
-import { picturePsd } from "./promoPsd";
+import { boardPsd, picturePsd } from "./promoPsd";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { createCompilerUi, type PreviewApplication } from "../compiler/compilerUi";
@@ -7383,6 +7383,29 @@ export function createViewTab(els: Els) {
     async exportAll(pictures, look, o, say) {
       const format = o.format;
       const testTo = (window as unknown as { __exportTo?: string }).__exportTo; // (a test's folder: no window asks)
+      const sizeNameOf = (k: number) => EXPORT_SIZES.find(([s]) => Math.abs(s - k) < 1e-3)?.[1] ?? `×${k}`;
+      // every picture in one Photoshop file (asks for the file), each as sharp as the size it is drawn at
+      if (format === "psd-one") {
+        const name = `${(pictures[0]?.name ?? "promo").replace(/[\\/:*?"<>|]+/g, "_")} (all).psd`;
+        const path = testTo ? `${testTo}${testTo.includes("\\") ? "\\" : "/"}${name}` : await save({ title: "The promo Photoshop file", defaultPath: name, filters: [{ name: "Photoshop", extensions: ["psd"] }] });
+        if (!path) return "Cancelled.";
+        const pages: PromoPicture[] = [];
+        let first: HTMLCanvasElement | undefined;
+        for (const [i, p] of pictures.entries()) {
+          say(`Drawing ${i + 1} of ${pictures.length}: ${p.name}…`);
+          const page = await sharpPage(p, o.render);
+          pages.push(page);
+          if (i === 0 && o.render > o.out) {
+            const drawn = document.createElement("canvas");
+            renderPicture(drawn, page, look, o.render);
+            first = shrinkCanvas(drawn, Math.round(p.w * o.out), Math.round(p.h * o.out));
+          }
+        }
+        say("Writing the Photoshop file…");
+        await writeBinaryFile(path, await boardPsd(pages, look, o.out, first));
+        if (!testTo) void revealFile(path).catch(() => {});
+        return `Saved ${pictures.length} pictures in one Photoshop file (${sizeNameOf(o.out)}${o.render > o.out ? `, drawn at ${sizeNameOf(o.render)}` : ""}), ${path}.`;
+      }
       const picked = testTo ?? (await open({ directory: true, title: format === "psd" ? "Folder for the promo Photoshop files" : "Folder for the promo pictures" }));
       const dir = typeof picked === "string" ? picked : null;
       if (!dir) return "Cancelled.";

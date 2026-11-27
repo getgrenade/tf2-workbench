@@ -88,7 +88,8 @@ export interface BoardHost {
 
 /** How the board's pictures are exported (see BoardHost.exportAll). */
 export interface BoardExport {
-  format: "png" | "jpg" | "psd";
+  /** `psd-one`: every picture in one Photoshop file, each in a folder of its own. */
+  format: "png" | "jpg" | "psd" | "psd-one";
   /** The size of the files, times the page's own (a 1080p page: 1 is 1080p, 4/3 1440p, 2 4K). */
   out: number;
   /** The size they are drawn at, times the page's own (no less than `out`): larger, then made smaller, for smoother edges. */
@@ -3446,8 +3447,8 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       g.append(b);
     }
     row("Guides", "Lines over the preview that cut the page into equal parts, to frame by (not exported)", g);
-    row("Format", "PNG and JPG: the pictures as they are. PSD: each layer of the board a layer of the file (texts editable, the glow and the text outline and shadow as layer effects)",
-      seg<BoardExport["format"]>([["png", "PNG"], ["jpg", "JPG"], ["psd", "PSD"]], () => exportAs.format, (v) => (exportAs.format = v)));
+    row("Format", "PNG and JPG: the pictures as they are. PSD: each layer of the board a layer of the file (texts editable, the glow and the text outline and shadow as layer effects). One PSD: every picture in one Photoshop file, stacked, each in a folder of its own (the first shown, the others hidden), its backdrop in a Background folder in it",
+      seg<BoardExport["format"]>([["png", "PNG"], ["jpg", "JPG"], ["psd", "PSD"], ["psd-one", "One PSD"]], () => exportAs.format, (v) => (exportAs.format = v)));
     row("Size", "The size of the files (a 1920 × 1080 page: 1080p, 2560 × 1440, 3840 × 2160; other pages as much larger)",
       seg<number>(EXPORT_SIZES.map(([k, n]) => [k, n]), () => exportAs.out, (v) => { exportAs.out = v; exportAs.render = Math.max(exportAs.render, v); }));
     const render = document.createElement("select");
@@ -3459,7 +3460,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
   drawExport();
   $(".promoExportAll").onclick = async () => {
     const o = { ...exportAs, render: Math.max(exportAs.render, exportAs.out) };
-    status.textContent = `Exporting ${o.format.toUpperCase()} at ${sizeName(o.out)}${o.render > o.out ? `, drawn at ${sizeName(o.render)}` : ""}…`;
+    status.textContent = `Exporting ${o.format === "psd-one" ? "one PSD" : o.format.toUpperCase()} at ${sizeName(o.out)}${o.render > o.out ? `, drawn at ${sizeName(o.render)}` : ""}…`;
     status.textContent = await host.exportAll(pictures, look, o, (text) => { status.textContent = text; }).catch((err) => `Could not export: ${String(err)}`);
   };
   boardKeys.add(keys);
