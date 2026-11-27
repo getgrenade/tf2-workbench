@@ -19,6 +19,9 @@ import { searchPaths, importSourceDir, readItemSession, readPropSession, saveIte
 import { FILE_DROP_EVENT, type FileDropDetail } from "../fileDrop";
 import { parseTextureFrames } from "./sourceMaterials";
 import { getWeaponProfile, importEffectZip, removeCustomEffect, type WeaponProfile, type UnusualEffectInfo } from "../api";
+import { activitySequence, clipMoves, clockSequence } from "./itemAnimations";
+import { planTauntFx, tauntSoundNames, TauntFxDriver } from "./tauntFx";
+import { sequenceEvents, soundEntries, type AnimEvent, type SoundEntry } from "../api";
 import { lipSync, loadScene, npcVoiceLines, phonemeClasses, scenePlaying, voiceLines, type VoiceLine } from "../api";
 import { closeVoiceLines, openVoiceLines } from "./voiceLinesUi";
 import { FaceDriver, type FaceLine } from "./faceDriver";
@@ -29,7 +32,7 @@ import { MapSounds } from "./mapSounds";
 import { materialFromText, readMaterialText, readTextureFile } from "../api";
 import { VmtEdits } from "./vmtEdits";
 import { editsFor, loadMaterialEdits, saveMaterialEdits } from "./materialEditsStore";
-import { listSequences, loadMaterial, loadModel, loadSession, prepareWorkshopTaunt, readTextFile, saveSession, rewriteModelFile, writeAdjustedModel, writeBinaryFile, writeTextFile, type WorkshopTaunt } from "../api";
+import { bakeSequence, listSequences, loadMaterial, loadModel, loadSession, prepareWorkshopTaunt, readTextFile, saveSession, rewriteModelFile, writeAdjustedModel, writeBinaryFile, writeTextFile, type WorkshopTaunt } from "../api";
 import { loadItemDb, workshopItemsAsZipped } from "./itemCatalog";
 import { openItemStyles } from "./workshopStyles";
 import { parseScene, type SceneEntity, type SceneFile } from "./scene";
@@ -89,7 +92,7 @@ import type { PoseHud } from "./poseHud";
 import { createRigControls, type RigControls } from "../rig/rigControls";
 import type { LimbId } from "./poseRig";
 import { PLAY_ACTIONS, PLAY_DAMAGE_ACTIONS, PLAY_SLOTS, encodeParam, setsOf, type PlaySlot } from "./playLogic";
-import { itemImageFor, newestFirst, itemMaterialOverride, itemModelFor, slotForClass, weaponCategory, itemSkinFor, itemUsableBy, parseAnimInfo, parseMaterial, parsePayload, tauntPropSequence, tauntSequence, weaponIdleSequences, type ClipData, type ItemDb, type ItemInfo, type PaintInfo, type MaterialData, type ModelData } from "./payload";
+import { itemImageFor, newestFirst, itemMaterialOverride, itemModelFor, slotForClass, weaponCategory, itemSkinFor, itemUsableBy, parseAnimInfo, parseClip, parseMaterial, parsePayload, tauntPropSequence, tauntSequence, weaponIdleSequences, type ClipData, type ItemDb, type ItemInfo, type PaintInfo, type MaterialData, type ModelData } from "./payload";
 import { createWeaponsUi, type WeaponsEls } from "./weaponsUi";
 import { loadSettings, onSettingsChange, settings, updateSetting } from "../settingsStore";
 import { accentHex } from "../theme";
@@ -352,6 +355,9 @@ interface Entity {
   voicePicks?: Map<string, number>;
   /** A voice line the browser put on the face (its name); the animation's scene waits until it is let go. */
   faceVoiceLine?: string;
+  /** What keeps the sounds and particles of the animation now playing in step with it (a taunt's); see tauntFx.ts. */
+  tauntFx?: TauntFxDriver | null;
+  tauntFxToken?: number;
 }
 
 /** The "Viewer" tab: class picker, light controls and the 3D view. */
@@ -723,8 +729,8 @@ export function createViewTab(els: Els) {
       loadoutToken: 0,
       showToken: 0,
     };
-    // a new animation: the face of its scene (and its lines)
-    actor.onClip = () => void refreshFace(e);
+    // a new animation: the face of its scene (and its lines), its sounds and particle effects
+    actor.onClip = () => { void refreshFace(e); void refreshTauntFx(e); };
     return e;
   }
 
@@ -968,7 +974,7 @@ export function createViewTab(els: Els) {
     }
     const everything: Equipped[] = weapon ? [...loadout, { item: weapon, paint: null, style: 0 }] : loadout;
     /** Loads a model (cached) and its materials for a skin family, then adds it to the bonemerged list. */
-    const add = async (path: string, rgb: number | null, skin: number, clip: ClipData | null = null, itemId?: number, idle = false, loop = false, material?: string) => {
+    const add = async (path: string, rgb: number | null, skin: number, clip: ClipData | null = null, itemId?: number, idle = false, loop = false, material?: string, tauntClip: ClipData | null = null) => {
       let data = models.get(path);
       if (!data) {
         try {
@@ -986,7 +992,7 @@ export function createViewTab(els: Els) {
       if (skin >= data!.skinCount) skin = team < data!.skinCount ? team : 0;
       if (material) await loadMaterials([material]);
       else await ensureMaterials(data!, skin);
-      list.push({ data: data!, paint: rgb === null ? null : unpackRgb(rgb), skin, clip, itemId, idle, loop, material });
+      list.push({ data: data!, paint: rgb === null ? null : unpackRgb(rgb), skin, clip, itemId, idle, loop, material, tauntClip });
     };
     let prop: { data: ModelData; skin: number; clip: ClipData | null } | null = null;
     for (const { item: it, paint, style, skin: forced } of everything) {
@@ -1025,14 +1031,17 @@ export function createViewTab(els: Els) {
       // a worn item's bones the class lacks are posed by the item's own idle animation, as the game does (the old all-class hats are one
       // model for every class, fitted to each by that animation)
       let idle = false, loop = false;
-      // the few items that play an animation of their own all the time (a style without it has none: it is posed as the others are)
-      const animation = ANIMATED_IDLE[it.id];
-      if (!weaponClip && it !== weapon && animation) { weaponClip = await cosmeticSequenceClip(path, animation); loop = !!weaponClip; }
+      // while its wearer taunts, an item with a `playback_activity` plays that activity's sequence in step with the taunt (the Infernal
+      // Orchestrina's drum turns), whichever taunt it is
+      const tauntClip = it !== weapon && it.tauntActivity ? await cosmeticActivityClip(path, it.tauntActivity) : null;
+      // the items that play an animation of their own all the time: a sequence the game runs on its own clock (a style without it has none:
+      // it is posed as the others are)
+      if (!weaponClip && it !== weapon) { weaponClip = await cosmeticClockClip(path); loop = !!weaponClip; }
       // (the held weapon too: the game runs a bonemerged model's own sequence on the bones the class lacks, which turns the Short
       // Circuit's arm_attach_R onto the forearm; without it the gauntlet floats at its bind pose)
       if (!weaponClip) { weaponClip = await cosmeticIdleClip(path, e.cls); idle = !!weaponClip; }
       // an item drawn in one material of its own whatever its model says (the Golden Wrench's gold)
-      await add(path, rgb, skin, weaponClip, it.id, idle, loop, itemMaterialOverride(it) ?? undefined);
+      await add(path, rgb, skin, weaponClip, it.id, idle, loop, itemMaterialOverride(it) ?? undefined, tauntClip);
       if (it === weapon && list.length) list[list.length - 1].weapon = true;
       // Models that travel with the item (a weapon's backpack, an attached part) share its paint and skin.
       for (const extra of it.extraModels ?? []) await add(extra, rgb, skin, null, it.id);
@@ -1088,12 +1097,31 @@ export function createViewTab(els: Els) {
       if (token === e.loadoutToken) playWeaponAnimation(e, weapon);
     }
     if (token === e.loadoutToken) await applyUnusuals(e);
+    if (token === e.loadoutToken) void refreshTauntFx(e); // the worn items' taunt sounds
   }
 
-  /** The cosmetics that play a sequence of their own on a loop, by item id: Pet RoBro (its idle). (The Hat of Undeniable Wealth and Respect has a "blink" sequence too, but it holds no bone motion we can read: it has to be scale, which the animation baker does not read yet.). */
-  const ANIMATED_IDLE: Record<number, string> = { 733: "idle" };
+  const clockClips = new Map<string, Promise<ClipData | null>>();
+  /**
+   * One loop of what a worn item runs on its own clock all the time, an autoplay or real-time sequence (the Pet RoBro's radar, the
+   * Grandmaster's turning pieces, the Hat of Undeniable Wealth and Respect's blinking octopus); null when its model has none that moves.
+   */
+  async function cosmeticClockClip(path: string): Promise<ClipData | null> {
+    let clip = clockClips.get(path);
+    if (!clip) {
+      clip = (async () => {
+        const info = parseAnimInfo(await listSequences(path));
+        const seq = clockSequence(info.sequences);
+        if (!seq) return null;
+        const baked = parseClip(await bakeSequence(path, seq.index, info.poseParams.map((p) => p.default), undefined, false, true));
+        return clipMoves(baked) ? baked : null;
+      })().catch(() => null);
+      clockClips.set(path, clip);
+    }
+    return clip;
+  }
+
   const sequenceClips = new Map<string, Promise<ClipData | null>>();
-  /** A worn item's own sequence by name, baked (null when its model has none of that name). */
+  /** A model's own sequence by name, baked (null when it has none of that name): the looping parts an NPC carries, like the Tank's treads. */
   async function cosmeticSequenceClip(path: string, name: string): Promise<ClipData | null> {
     const key = `${path}|${name}`;
     let clip = sequenceClips.get(key);
@@ -1104,6 +1132,22 @@ export function createViewTab(els: Els) {
         return seq ? await bakeClip(path, seq.index, info.poseParams.map((p) => p.default)) : null;
       })().catch(() => null);
       sequenceClips.set(key, clip);
+    }
+    return clip;
+  }
+
+  const activityClips = new Map<string, Promise<ClipData | null>>();
+  /** A worn item's sequence of an activity (`playback_activity`), baked; null when its model has none. */
+  async function cosmeticActivityClip(path: string, activity: string): Promise<ClipData | null> {
+    const key = `${path}|${activity}`;
+    let clip = activityClips.get(key);
+    if (!clip) {
+      clip = (async () => {
+        const info = parseAnimInfo(await listSequences(path));
+        const seq = activitySequence(info.sequences, activity);
+        return seq && seq.frames > 1 ? await bakeClip(path, seq.index, info.poseParams.map((p) => p.default)) : null;
+      })().catch(() => null);
+      activityClips.set(key, clip);
     }
     return clip;
   }
@@ -4034,6 +4078,7 @@ export function createViewTab(els: Els) {
 
   function removeEntity(e: Entity) {
     if (!entities.includes(e)) return;
+    clearTauntFx(e);
     clearFace(e);
     const i = entities.indexOf(e);
     entities.splice(i, 1);
@@ -5339,6 +5384,65 @@ export function createViewTab(els: Els) {
     e.faceSounds = speaks.map((s) => s.sound);
     e.actor.faceDriver = (pb) => driver.run(pb);
     if (e === selected) renderFaceUi();
+  }
+
+  function clearTauntFx(e: Entity) {
+    e.tauntFxToken = (e.tauntFxToken ?? 0) + 1;
+    e.tauntFx?.dispose();
+    e.tauntFx = null;
+    e.actor.fxDriver = null;
+  }
+
+  const eventCache = new Map<string, Promise<{ events: AnimEvent[]; sounds: Record<string, SoundEntry> } | null>>();
+  const soundCache = new Map<string, Promise<SoundEntry | null>>();
+  /** Sound script entries by name (looked up once each), keyed by the lower case name. */
+  async function soundsNamed(names: string[]): Promise<Record<string, SoundEntry>> {
+    const missing = names.filter((n) => !soundCache.has(n.toLowerCase()));
+    if (missing.length) {
+      const asked = soundEntries(missing).catch(() => ({} as Record<string, SoundEntry>));
+      for (const n of missing) soundCache.set(n.toLowerCase(), asked.then((all) => all[n.toLowerCase()] ?? null));
+    }
+    const out: Record<string, SoundEntry> = {};
+    for (const n of names) { const entry = await soundCache.get(n.toLowerCase()); if (entry) out[n.toLowerCase()] = entry; }
+    return out;
+  }
+
+  /**
+   * Looks up what the animation now playing sounds like and shows besides moving, and keeps it in step with it (see tauntFx.ts): the
+   * sequence's sound and particle events, and, when it is the held taunt's, the taunt's sounds and attack and the worn items' taunt sounds.
+   * Sounds are heard for the selected character, as its lines are.
+   */
+  async function refreshTauntFx(e: Entity) {
+    clearTauntFx(e);
+    const token = e.tauntFxToken!;
+    const path = e.anim.modelPath, seq = e.anim.seq, seqName = e.anim.seqName.toLowerCase();
+    const heldTaunt = e.held?.slot === "taunt" && (e.held.tauntScenes[gameClassOf(e.cls)] ?? "").toLowerCase() === seqName;
+    // a taunt: the held taunt's sequence, or one picked from the list (the class models name theirs taunt...)
+    e.actor.setTaunting(seq >= 0 && (heldTaunt || seqName.startsWith("taunt") || seqName.startsWith("layer_taunt")));
+    if (!viewer || isBuildingCls(e.cls) || !path || seq < 0) return;
+    const key = `${path}|${seq}`;
+    let lookup = eventCache.get(key);
+    if (!lookup) eventCache.set(key, (lookup = sequenceEvents(path, seq).catch(() => null)));
+    const own = await lookup;
+    if (token !== e.tauntFxToken) return;
+    const game = gameClassOf(e.cls);
+    const held = e.held?.slot === "taunt" ? e.held : null;
+    const taunt = held && (held.tauntScenes[game] ?? "").toLowerCase() === seqName ? held : null;
+    const taunting = !!taunt || seqName.startsWith("taunt");
+    const worn = e.applied.map((x) => x.item).filter((it) => it.slot !== "taunt" && (it.tauntSounds?.length ?? 0) > 0);
+    const entries = { ...(own?.sounds ?? {}), ...(taunting ? await soundsNamed(tauntSoundNames(taunt, worn)) : {}) };
+    if (token !== e.tauntFxToken) return;
+    const plan = planTauntFx(own?.events ?? [], entries, taunt, worn, taunting);
+    if (!plan.sounds.length && !plan.particles.length) return;
+    viewer.warmTauntParticles(plan.particles.map((p) => p.system));
+    const buffers = await Promise.all(plan.sounds.map((s) => loadVoice(waveFor(e, s))));
+    if (token !== e.tauntFxToken) return;
+    const v = viewer;
+    const driver = new TauntFxDriver(`tauntfx${e.id}`, plan, buffers,
+      (pb) => pb.playing && !!pb.clip && e === selected && !e.hidden,
+      (running) => v.setTauntParticles(e.actor, e.hidden ? [] : running));
+    e.tauntFx = driver;
+    e.actor.fxDriver = (pb) => driver.run(pb);
   }
 
   /** The face row under the animation controls: the scene face switch, the sound switch, the choice of line and the keep button. */

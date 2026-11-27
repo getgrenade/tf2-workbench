@@ -29,7 +29,7 @@ pub const STUDIO_LOCAL: i32 = 0x0200;
 pub const STUDIO_HIDDEN: i32 = 0x0400;
 pub const STUDIO_OVERRIDE: i32 = 0x0800;
 pub const STUDIO_WORLD: i32 = 0x4000;
-const STUDIO_AUTOPLAY: i32 = 0x0008;
+pub const STUDIO_AUTOPLAY: i32 = 0x0008;
 
 const STUDIO_AL_SPLINE: i32 = 0x0040;
 const STUDIO_AL_XFADE: i32 = 0x0080;
@@ -377,6 +377,30 @@ pub struct AnimSet {
     autoplay: Vec<usize>,
 }
 
+/// An animation event of a sequence (see [`AnimSet::events_with_options`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnimEvent {
+    /// Seconds after the sequence's start.
+    pub time: f32,
+    /// Where in the sequence (0..1).
+    pub cycle: f32,
+    pub event: i32,
+    pub name: String,
+    pub options: String,
+}
+
+/// `mstudioevent_t::type`: the event is named (`szeventindex`), not only numbered.
+const AE_TYPE_NEWEVENTSTYLE: i32 = 1 << 10;
+
+/// The name `eventlist.h` gives an event of the old numbered style.
+fn old_event_name(event: i32) -> String {
+    match event {
+        5004 => "AE_CL_PLAYSOUND".into(),
+        6002 => "AE_WPN_EJECTBRASS".into(),
+        n => n.to_string(),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SeqInfo {
     pub index: usize,
@@ -706,13 +730,25 @@ impl AnimSet {
 
     /// Every animation event of a sequence as (seconds after its start, event number, authored name).
     pub fn events(&self, seq: usize) -> Vec<(f32, i32, String)> {
+        self.events_with_options(seq).into_iter().map(|e| (e.time, e.event, e.name)).collect()
+    }
+
+    /// Every animation event of a sequence with its options (`mstudioevent_t`: the sound a `AE_CL_PLAYSOUND` plays, the system, attach
+    /// type and attachment of an `AE_CL_CREATE_PARTICLE_EFFECT`). An event of the old numbered style has no name of its own (its name
+    /// offset is not set): it is named after its number, as `eventlist.h` pairs them (5004 is `CL_EVENT_SOUND`, the old `AE_CL_PLAYSOUND`).
+    pub fn events_with_options(&self, seq: usize) -> Vec<AnimEvent> {
         let (g,l) = self.seqs[seq]; let grp = &self.groups[g]; let base = grp.seq_base(l);
         let info = &self.sequences()[seq];
         let duration = if info.fps > 0.0 { info.frames.saturating_sub(1) as f32 / info.fps } else { 0.0 };
         let count = i32at(&grp.data, base+24).clamp(0,128) as usize;
         let start = rel(base,i32at(&grp.data,base+28));
-        (0..count).map(|i| { let e = start+i*80;
-            (f32at(&grp.data,e)*duration, i32at(&grp.data,e+4), cstr(&grp.data,rel(e,i32at(&grp.data,e+76)))) }).collect()
+        (0..count).map(|i| {
+            let e = start+i*80;
+            let event = i32at(&grp.data,e+4);
+            let new_style = i32at(&grp.data,e+8) & AE_TYPE_NEWEVENTSTYLE != 0;
+            let name = if new_style { cstr(&grp.data,rel(e,i32at(&grp.data,e+76))) } else { old_event_name(event) };
+            AnimEvent { time: f32at(&grp.data,e)*duration, cycle: f32at(&grp.data,e), event, name, options: cstr(&grp.data, e+12).chars().take(64).collect() }
+        }).collect()
     }
 
     /// Shell-ejection events in an authored viewmodel sequence (seconds after firing).
@@ -885,16 +921,35 @@ impl AnimSet {
     /// `CBoneSetup::InitPose` + `AccumulatePose(seq, cycle, 1)` + autoplay sequences, which is
     /// how hlmv builds a pose (`StudioModel::SetUpBones`) without IK, layers or head turn.
     pub fn evaluate(&self, seq: usize, cycle: f32, params: &[f32]) -> Pose {
+        self.evaluate_at(seq, cycle, params, 0.0)
+    }
+
+    /// `evaluate` at a moment of the game's clock (`clock` seconds): the autoplay sequences (`CalcAutoplaySequences`) and the real-time ones
+    /// (`STUDIO_REALTIME` in `CalcPoseSingle`) are not at the cycle asked for but where the clock has them, `clock` times their cycles per
+    /// second. At 0 they are at their start, as `evaluate` has them.
+    pub fn evaluate_at(&self, seq: usize, cycle: f32, params: &[f32], clock: f32) -> Pose {
         let mut pose = self.init_pose();
-        self.accumulate_pose(&mut pose, seq as i32, cycle, 1.0, params);
+        self.accumulate_pose(&mut pose, seq as i32, cycle, 1.0, params, clock);
         for &a in &self.autoplay {
             let (_, sv) = self.seq_view(a);
             if sv.flags() & STUDIO_AUTOPLAY != 0 {
-                // cycle at real time 0
-                self.accumulate_pose(&mut pose, a as i32, 0.0, 1.0, params);
+                self.accumulate_pose(&mut pose, a as i32, self.clock_cycle(a, params, clock), 1.0, params, clock);
             }
         }
         pose
+    }
+
+    /// Where a sequence driven by the game's clock is after `clock` seconds (0..1): `realtime * Studio_CPS`, its whole cycles taken off.
+    fn clock_cycle(&self, seq: usize, params: &[f32], clock: f32) -> f32 {
+        let cycle = clock * self.timing(seq, params).cycles_per_second;
+        cycle - cycle.floor()
+    }
+
+    /// Whether the game plays a sequence on its own clock, whatever the model is doing: an autoplay sequence (always running under every
+    /// other) or a real-time one (a worn item's idle such as the Hat of Undeniable Wealth and Respect's `blink`, the Pet RoBro's radar).
+    pub fn runs_on_clock(&self, seq: usize) -> bool {
+        let (_, sv) = self.seq_view(seq);
+        sv.flags() & (STUDIO_AUTOPLAY | STUDIO_REALTIME) != 0
     }
 
     /// `evaluate` with more sequences accumulated on top (`layers`: sequence, cycle, weight, in order): how additive (delta)
@@ -902,12 +957,12 @@ impl AnimSet {
     pub fn evaluate_layered(&self, seq: usize, cycle: f32, layers: &[(usize, f32, f32)], params: &[f32]) -> Pose {
         let mut pose = self.evaluate(seq, cycle, params);
         for &(s, c, w) in layers {
-            self.accumulate_pose(&mut pose, s as i32, c, w, params);
+            self.accumulate_pose(&mut pose, s as i32, c, w, params, 0.0);
         }
         pose
     }
 
-    fn accumulate_pose(&self, pose: &mut Pose, seq: i32, cycle: f32, weight: f32, params: &[f32]) {
+    fn accumulate_pose(&self, pose: &mut Pose, seq: i32, cycle: f32, weight: f32, params: &[f32], clock: f32) {
         if seq < 0 || seq as usize >= self.seqs.len() {
             return;
         }
@@ -920,14 +975,14 @@ impl AnimSet {
         if sv.flags() & STUDIO_LOCAL != 0 {
             pose2 = self.init_pose();
         }
-        if self.calc_pose_single(&mut pose2, seq, cycle, params) {
-            self.add_local_layers(&mut pose2, seq, cycle, 1.0, params);
+        if self.calc_pose_single(&mut pose2, seq, cycle, params, clock) {
+            self.add_local_layers(&mut pose2, seq, cycle, 1.0, params, clock);
             self.slerp_bones(pose, &pose2, g, &sv, weight);
         }
-        self.add_sequence_layers(pose, seq, cycle, weight, params);
+        self.add_sequence_layers(pose, seq, cycle, weight, params, clock);
     }
 
-    fn add_sequence_layers(&self, pose: &mut Pose, seq: usize, cycle: f32, weight: f32, params: &[f32]) {
+    fn add_sequence_layers(&self, pose: &mut Pose, seq: usize, cycle: f32, weight: f32, params: &[f32], clock: f32) {
         let (g, sv) = self.seq_view(seq);
         for i in 0..sv.num_autolayers() {
             let layer = sv.autolayer(i);
@@ -979,12 +1034,12 @@ impl AnimSet {
             }
             let target = self.groups[g].master_seq.get(layer.seq as usize).copied();
             if let Some(t) = target {
-                self.accumulate_pose(pose, t as i32, layer_cycle, layer_weight, params);
+                self.accumulate_pose(pose, t as i32, layer_cycle, layer_weight, params, clock);
             }
         }
     }
 
-    fn add_local_layers(&self, pose: &mut Pose, seq: usize, cycle: f32, weight: f32, params: &[f32]) {
+    fn add_local_layers(&self, pose: &mut Pose, seq: usize, cycle: f32, weight: f32, params: &[f32], clock: f32) {
         let (g, sv) = self.seq_view(seq);
         if sv.flags() & STUDIO_LOCAL == 0 {
             return;
@@ -1019,13 +1074,13 @@ impl AnimSet {
                 layer_cycle = (cycle - layer.start) / (layer.end - layer.start);
             }
             if let Some(&t) = self.groups[g].master_seq.get(layer.seq as usize) {
-                self.accumulate_pose(pose, t as i32, layer_cycle, layer_weight, params);
+                self.accumulate_pose(pose, t as i32, layer_cycle, layer_weight, params, clock);
             }
         }
     }
 
     /// `CalcPoseSingle`. Returns false when the pose is a "zero" blend that should be skipped.
-    fn calc_pose_single(&self, pose: &mut Pose, seq: usize, mut cycle: f32, params: &[f32]) -> bool {
+    fn calc_pose_single(&self, pose: &mut Pose, seq: usize, mut cycle: f32, params: &[f32], clock: f32) -> bool {
         let (g, sv) = self.seq_view(seq);
         let nb = self.num_bones();
         let (s0, i0) = self.local_pose_param(g, &sv, 0, params);
@@ -1033,7 +1088,7 @@ impl AnimSet {
         let flags = sv.flags();
 
         if flags & STUDIO_REALTIME != 0 {
-            cycle = 0.0; // driven by a real-time clock, which is fixed at 0 here
+            cycle = self.clock_cycle(seq, params, clock); // driven by the game's clock, not by the cycle asked for
         } else if flags & STUDIO_CYCLEPOSE != 0 {
             let local = sv.cycleposeindex();
             cycle = if local >= 0 {
@@ -1826,7 +1881,7 @@ impl AnimSet {
             _ if gesture.is_some() => self.evaluate_layered(gesture.unwrap(), cycle, &[(seq, cycle, 1.0)], params),
             (Some(under), _) => {
                 let mut pose = under.clone();
-                self.accumulate_pose(&mut pose, seq as i32, cycle, 1.0, params);
+                self.accumulate_pose(&mut pose, seq as i32, cycle, 1.0, params, 0.0);
                 pose
             }
             (None, Some(base)) => self.evaluate_layered(base, 0.0, &[(seq, cycle, 1.0)], params),
@@ -1851,6 +1906,30 @@ impl AnimSet {
             pos,
             quat,
         }
+    }
+}
+
+impl AnimSet {
+    /// Samples a sequence the game plays on its own clock ([`runs_on_clock`](Self::runs_on_clock)) over one of its loops: every frame is the
+    /// model at that moment of the clock, its autoplay and real-time sequences included, where `bake` holds them at their start. This is how a
+    /// worn item moves all the time on its own (the Pet RoBro's radar, the Grandmaster's turning pieces, the Hat of Undeniable Wealth and
+    /// Respect's blinking octopus).
+    pub fn bake_on_clock(&self, seq: usize, params: &[f32]) -> Clip {
+        let timing = self.timing(seq, params);
+        let fps = if timing.fps > 0.0 { timing.fps } else { 30.0 };
+        let frames = (timing.max_frame.max(0) as usize + 1).max(1);
+        let nb = self.num_bones();
+        let mut pos = Vec::with_capacity(frames * nb * 3);
+        let mut quat = Vec::with_capacity(frames * nb * 4);
+        for f in 0..frames {
+            let cycle = if frames > 1 { f as f32 / (frames - 1) as f32 } else { 0.0 };
+            let pose = self.evaluate_at(seq, cycle, params, f as f32 / fps);
+            for b in 0..nb {
+                pos.extend_from_slice(&pose.pos[b]);
+                quat.extend_from_slice(&pose.quat[b]);
+            }
+        }
+        Clip { fps, looping: true, frames, num_bones: nb, pos, quat }
     }
 }
 
