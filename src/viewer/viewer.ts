@@ -3976,8 +3976,8 @@ void main() {
     return box;
   }
 
-  /** Starts a selection (box, lasso or brush) over a character's body, or over the items it wears, as the view looks now. */
-  beginSelect(actor: Actor, target: "body" | "items" = "body"): ViewSelection | null {
+  /** Starts a selection (box, lasso or brush) over a character's body, the items it wears, or both ("all"), as the view looks now. */
+  beginSelect(actor: Actor, target: "body" | "items" | "all" = "body"): ViewSelection | null {
     const rect = this.renderer.domElement.getBoundingClientRect();
     this.camera.updateMatrixWorld();
     const ndc = new THREE.Vector3();

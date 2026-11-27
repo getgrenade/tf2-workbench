@@ -564,11 +564,11 @@ export class Actor {
    * what is hidden afterwards. A shape picks the triangles it touches that face the camera (all of them for a two-sided material); the
    * tint is drawn over everything, cosmetics included, red for the triangles that would be hidden and green for the ones that would return.
    */
-  beginSelect(toScreen: (p: THREE.Vector3, out: { x: number; y: number }) => boolean, target: "body" | "items" = "body"): ViewSelection | null {
+  beginSelect(toScreen: (p: THREE.Vector3, out: { x: number; y: number }) => boolean, target: "body" | "items" | "all" = "body"): ViewSelection | null {
     if (!this.classData || !this.classGroup || !this.skeleton) return null;
-    const group = target === "items" ? this.cosmeticGroup : this.classGroup;
-    if (!group) return null;
-    const masks = target === "items" ? this.itemMask : this.handMask;
+    // ("all": the body and the worn items together, as the view's Hide triangles does; each mesh keeps its own mask, the body's or the items')
+    const groups = (target === "all" ? [this.classGroup, this.cosmeticGroup] : [target === "items" ? this.cosmeticGroup : this.classGroup]).filter((g): g is THREE.Group => !!g);
+    if (!groups.length) return null;
     this.modelGroup?.updateMatrixWorld(true);
     this.skeleton.update();
     const p = new THREE.Vector3();
@@ -586,9 +586,12 @@ export class Actor {
     }
     const parts: Part[] = [];
     const meshes: THREE.SkinnedMesh[] = [];
-    group.traverse((o) => {
-      if (o instanceof THREE.SkinnedMesh && !o.userData.preview && (target === "body" || o.visible)) meshes.push(o);
-    });
+    for (const group of groups) {
+      group.traverse((o) => {
+        // (the body's meshes even when a part is off: their masks are kept; a worn item only when it is shown)
+        if (o instanceof THREE.SkinnedMesh && !o.userData.preview && (group === this.classGroup || o.visible)) meshes.push(o);
+      });
+    }
     for (const o of meshes) {
       const m = o.userData.meshData as MeshData | undefined;
       const key = o.userData.maskKey as string | undefined;
@@ -641,14 +644,14 @@ export class Actor {
       mesh.frustumCulled = false;
       mesh.matrixAutoUpdate = false;
       mesh.renderOrder = 100;
-      group.add(mesh);
+      (part.mesh.parent ?? groups[0]).add(mesh);
       part.preview = { mesh, index, sign: 1 };
       return part.preview;
     };
     const removePreviews = () => {
       for (const part of parts) {
         if (!part.preview) continue;
-        group.remove(part.preview.mesh);
+        part.preview.mesh.removeFromParent();
         part.preview.mesh.geometry.dispose();
         part.preview = null;
       }
@@ -661,7 +664,7 @@ export class Actor {
       }
       pick(shape);
       for (const part of parts) {
-        const mask = this.maskFor(part.key, part.tris, false, masks);
+        const mask = this.maskFor(part.key, part.tris, false, this.masksOf(part.mesh));
         const pv = previewOf(part);
         const out = pv.index.array as Uint32Array;
         const src = part.m.indices;
@@ -689,7 +692,7 @@ export class Actor {
         pick(shape);
         const value = hide ? 1 : 0;
         for (const part of parts) {
-          const mask = this.maskFor(part.key, part.tris, true, masks)!;
+          const mask = this.maskFor(part.key, part.tris, true, this.masksOf(part.mesh))!;
           let changed = false;
           for (let t = 0; t < part.tris; t++) {
             if (part.picked[t] && mask[t] !== value) {

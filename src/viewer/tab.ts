@@ -2731,10 +2731,11 @@ export function createViewTab(els: Els) {
         get: () => selected?.actor.visibleRegions ?? new Set<string>(),
         groups: () => selected?.actor.bodyGroups ?? [],
         set: (parts) => selected?.actor.setVisibleRegions(parts),
-        beginSelect: () => (selected && viewer ? viewer.beginSelect(selected.actor) : null),
+        // the view's Hide triangles: whatever is under the shape, the merc's or a worn item's (each kept as the icon maker keeps them)
+        beginSelect: () => (selected && viewer ? viewer.beginSelect(selected.actor, "all") : null),
         viewStamp: () => (viewer ? viewer.camera.matrixWorld.elements.join(",") + "," + viewer.camera.fov + "," + viewer.camera.aspect : ""),
-        hasBoxMask: () => selected?.actor.hasHandMask ?? false,
-        clearBoxMask: () => selected?.actor.setHandMaskState(undefined),
+        hasBoxMask: () => !!selected && (selected.actor.hasHandMask || selected.actor.hasItemMask),
+        clearBoxMask: () => { selected?.actor.setHandMaskState(undefined); selected?.actor.clearItemMask(); },
       }, false)
     : null;
 
