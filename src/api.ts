@@ -18,6 +18,7 @@ export interface Settings {
   /** Picking a weapon switches the animation to the matching stand_* sequence. */
   autoWeaponAnimation: boolean;
   autoStockWeapon: boolean;
+  hideRobotItems: boolean;
   /** Smooth camera movement and navigation-axis transitions. */
   cameraSmoothing: boolean;
   /** Leaving a camera's view puts the viewport back where it was before entering it. */

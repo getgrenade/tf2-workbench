@@ -6,6 +6,7 @@ export const DEFAULTS: Settings = {
   matchHlmvColors: true,
   autoWeaponAnimation: true,
   autoStockWeapon: false,
+  hideRobotItems: true,
   cameraSmoothing: true,
   restoreViewportOnCameraExit: false,
   playHitReactions:true,

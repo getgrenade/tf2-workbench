@@ -1,10 +1,11 @@
 import { openMenu, type MenuItem } from "./popMenu";
 import { editedItems, EDITED_TITLE } from "./editedItems";
+import { isRobotOnlyItem } from "./robotItems";
 import { loadItemDb, reloadItemDb } from "./itemCatalog";
 import { itemMatches } from "./itemSearch";
 import { attachItemTooltip, itemTooltipLines } from "./itemTooltip";
 import { spellPaints, spellSwatch } from "./spellPaints";
-import { settings } from "../settingsStore";
+import { onSettingsChange, settings } from "../settingsStore";
 import { itemIcon } from "./itemIcons";
 import { createBrowserSort, createBrowserView, makeTile, setTileImage } from "./browserView";
 import { itemImageFor, itemUsableBy, newestFirst, styleLabel, type ItemDb, type ItemInfo, type PaintInfo } from "./payload";
@@ -143,6 +144,8 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
   const activeScope = () => (mixedClasses() && scope === "solo" ? "shared" : scope);
   let region = "";
   let showMedals = false;
+  // (the robots' own cosmetics come and go with their setting)
+  onSettingsChange(() => { if (db) renderList(); });
   createBrowserView(els.foot, els.list, "cosmetics");
   const sorter = createBrowserSort(els.foot, "cosmetics", "newest", () => renderList());
   const scopeButtons = [...els.scopes.querySelectorAll<HTMLButtonElement>("button")];
@@ -475,7 +478,8 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
       b.title = mixed && (b.dataset.scope ?? "solo") === "solo" ? "Characters of different classes are selected: only items all of them can wear" : b.dataset.tip;
     });
     const q = els.search.value.trim().toLowerCase();
-    const base = db.items.filter((i) => all.every((c) => itemUsableBy(i, c)) && (showMedals || !i.medal) && (shownScope === "workshop" ? i.workshop : !i.workshop && (shownScope === "solo" ? isSolo(i) : !isSolo(i))));
+    const hideRobots = settings().hideRobotItems;
+    const base = db.items.filter((i) => all.every((c) => itemUsableBy(i, c)) && (showMedals || !i.medal) && !(hideRobots && isRobotOnlyItem(i)) && (shownScope === "workshop" ? i.workshop : !i.workshop && (shownScope === "solo" ? isSolo(i) : !isSolo(i))));
     renderRegions(base);
     const matches = base
       .filter((i) => (!region || i.equipRegions.includes(region)) && (!q || itemMatches(i, q)))
