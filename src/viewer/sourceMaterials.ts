@@ -1,3 +1,4 @@
+import { spellColor } from "./spellPaints";
 import * as THREE from "three";
 import { particleBlending } from "./particles/blending";
 import { eyeFragmentShader, eyeVertexShader } from "./eyeShader";
@@ -452,7 +453,7 @@ export class SourceMaterials {
         bumpFrames.push(t);
       }
     }
-    if (m && (hasTimeProxies(m.proxies) || frames.length > 1 || bumpFrames.length > 1 || detail)) {
+    if (m && (hasTimeProxies(m.proxies) || frames.length > 1 || bumpFrames.length > 1 || detail || fx?.spell)) {
       this.dynamic.push({ material, data: m, paint, fx, frames, anim, bumpFrames, bumpAnim, detail, detailAnim: detail ? baseTextureAnimation(m.proxies, "$detail") : null });
     }
     return material;
@@ -480,7 +481,9 @@ export class SourceMaterials {
     for (const { material, data, paint, fx, frames, anim, bumpFrames, bumpAnim, detail, detailAnim } of this.dynamic) {
       if (anim && frames.length > 1) material.uniforms.tBase.value = frames[animationFrame(anim, time, frames.length)];
       if (bumpAnim && bumpFrames && bumpFrames.length > 1) material.uniforms.tBump.value = bumpFrames[animationFrame(bumpAnim, time, bumpFrames.length)];
-      const vars = evaluateMaterialVars(data.params, data.proxies, { paint, time, fx });
+      // a spell paint moves through its colour cycle (RemapOverridePaintIndexToRGB)
+      const painted = fx?.spell ? spellColor(fx.spell[0], fx.spell[1] === 1, time) : paint;
+      const vars = evaluateMaterialVars(data.params, data.proxies, { paint: painted, time, fx });
       const u = material.uniforms;
       const mod = modulationColor(vars);
       u.uModulation.value.set(mod[0], mod[1], mod[2]);

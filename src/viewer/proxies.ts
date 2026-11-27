@@ -41,6 +41,8 @@ export interface MaterialEffects {
   sheen?: { tint: Rgb; index: number; dir: number; scale: [number, number]; offset: [number, number]; wait: number; speed?: number };
   /** Plain grey (RGB 115) instead of the material's own look (no specular, no environment, no glow): for icons made in the grey clay style. */
   gray?: boolean;
+  /** A Halloween spell paint (its index, and whether the BLU cycle): the paint follows its colour cycle on the clock (see spellPaints.ts). */
+  spell?: [number, number];
 }
 
 export interface TintContext {
