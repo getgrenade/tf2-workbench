@@ -3,6 +3,7 @@ import { shadowApart, shadowLayer, shadowOf, solidOf, type ShotEffects, type Sho
 import { partsOf } from "./promoMask";
 import { picturePsd } from "./promoPsd";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { createCompilerUi, type PreviewApplication } from "../compiler/compilerUi";
 import { MODEL_EXTENSIONS } from "../compiler/importModel";
 import { createPropPanel, PROP_DRAG_TYPE } from "../props/propPanel";
@@ -5472,16 +5473,21 @@ export function createViewTab(els: Els) {
   /** Writes a board a moment after it changed (one write at a time; a change during a write writes again after it). */
   function scheduleSave(s: PromoSession) {
     window.clearTimeout(s.saveTimer);
-    s.saveTimer = window.setTimeout(() => {
-      s.saving = s.saving.then(async () => {
-        if (!s.board || !sessions.has(s)) return;
-        try {
-          await saveBoard(s.id, { name: s.board.name, title: s.title, set: [...s.ids], cls: s.cls, pictures: s.pictures }, s.written);
-        } catch (err) {
-          console.warn("could not keep the promo board:", err);
-        }
-      });
-    }, 1500);
+    s.saveTimer = window.setTimeout(() => void saveBoardNow(s), 1500);
+  }
+  /** Writes a promo board now (after any write already under way). */
+  function saveBoardNow(s: PromoSession): Promise<void> {
+    window.clearTimeout(s.saveTimer);
+    s.saveTimer = 0;
+    s.saving = s.saving.then(async () => {
+      if (!s.board || !sessions.has(s)) return;
+      try {
+        await saveBoard(s.id, { name: s.board.name, title: s.title, set: [...s.ids], cls: s.cls, pictures: s.pictures }, s.written);
+      } catch (err) {
+        console.warn("could not keep the promo board:", err);
+      }
+    });
+    return s.saving;
   }
 
   /** Puts a board of pictures in the strip as a tab (shown when `show`). */
@@ -8423,12 +8429,21 @@ export function createViewTab(els: Els) {
   let previewDue = false;
   function startAutosave() {
     if (autosave) return;
-    autosave = window.setInterval(() => {
-      if (tabBusy) return;
+    autosave = window.setInterval(() => void autosaveTick(), 2000);
+  }
+  /**
+   * Stores the open scenes as the session when they changed (`force`: now, even with the view busy, as the app closes). A promo's own
+   * scenes (a role's character, dressed for its shots) are not part of it: they are made again from the board, and one not yet captured
+   * stopped every save until it was.
+   */
+  async function autosaveTick(force = false): Promise<void> {
+    {
+      if (tabBusy && !force) return;
       const before = activeTab?.dirty;
       captureActive();
       if (activeTab?.dirty !== before) renderTabs();
-      const scenes = tabs.filter((t) => !t.board); // (a promo board is not kept between sessions)
+      const scenes = tabs.filter((t) => !t.board && !isPromoTab(t)); // (a promo board is kept on its own, and its scenes with it)
+      // (a scene still being made has nothing to keep yet: the session waits for it rather than leave it out)
       if (!scenes.length || scenes.some((t) => !t.scene)) return;
       const session = {
         app: "tf2-workbench",
@@ -8438,7 +8453,7 @@ export function createViewTab(els: Els) {
       // compared without the pictures; the open tab's picture is taken a tick after the scene last changed (what is loading has had time to show)
       const text = JSON.stringify(session);
       if (text === lastSession) {
-        if (!previewDue) return;
+        if (!previewDue && !force) return;
         previewDue = false;
         snapshotActive();
       } else {
@@ -8446,9 +8461,20 @@ export function createViewTab(els: Els) {
         previewDue = true;
       }
       const withPreviews = { ...session, tabs: session.tabs.map((s, i) => ({ ...s, preview: scenes[i].preview ?? null })) };
-      void saveSession(JSON.stringify(withPreviews)).catch(() => {});
-    }, 2000);
+      await saveSession(JSON.stringify(withPreviews)).catch(() => {});
+    }
   }
+
+  /** Everything not yet written goes now: the session and the promo boards (as the app closes). */
+  async function flushSaves() {
+    lastSession = "";
+    await Promise.all([autosaveTick(true), ...[...sessions].filter((x) => x.board).map((x) => saveBoardNow(x))]);
+  }
+  // closing the window writes what the timers had not yet (a change made in the last seconds was lost); a write that hangs does not keep
+  // the window open
+  void getCurrentWindow().onCloseRequested(async () => {
+    await Promise.race([flushSaves(), new Promise((r) => window.setTimeout(r, 4000))]);
+  }).catch(() => { /* not in the app */ });
 
   /** The tabs as the last session left them (or its single scene, from before there were tabs). */
   async function restoreSession(text: string) {
