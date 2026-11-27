@@ -25,6 +25,7 @@ export const HOTKEYS = [
   { id: "tool.scale", label: "Scale gizmo", group: "Tools", hint: "Picks the scale tool. With Shift the same key starts a scaling by mouse alone; with Alt it puts the scale back.", default: "KeyR", kind: "tool" },
   { id: "select.box", label: "Box select", group: "Selection and view", hint: "Drag a box to select several things; pressed again (or Esc) it goes off.", default: "KeyQ", kind: "key" },
   { id: "view.focus", label: "Focus under pointer", group: "Selection and view", hint: "Moves the camera to what the pointer is over.", default: "KeyF", kind: "key" },
+  { id: "view.focusSelected", label: "Frame selected", group: "Selection and view", hint: "Zooms in on the selected character and keeps the view on it as it moves (a double click on a character does the same; a double click on nothing lets go).", default: "Period", kind: "key" },
   { id: "view.focusAll", label: "Frame everything", group: "Selection and view", hint: "Moves the camera back to show all the characters (with the pointer over the view).", default: "KeyA", kind: "key" },
   { id: "view.fullscreen", label: "Hide the panels", group: "Selection and view", hint: "Hides the header and the docks so the 3D view fills the window; the same key brings them back.", default: "Tab", kind: "key" },
   { id: "play.toggle", label: "Play / pause", group: "Selection and view", hint: "Starts or pauses the animation.", default: "Space", kind: "key" },
