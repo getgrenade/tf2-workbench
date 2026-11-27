@@ -1,14 +1,15 @@
 import { icon } from "./icons";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import "./tokens.css";
 import { accordify } from "./accordion";
 import { createDocks } from "./dock/dock";
-import { PANEL_DEFS, defaultLayout } from "./dock/defaultLayout";
+import { PANEL_DEFS, defaultLayout, simplifiedLayout } from "./dock/defaultLayout";
+import { decodeWorkspace, encodeWorkspace } from "./dock/workspaceFile";
 import { askConfirm, askName } from "./dock/layoutDialogs";
 import { deleteSavedLayout, hasSavedLayout, layoutName, loadSavedLayouts, registerLayout } from "./dock/savedLayouts";
 import { openMenu } from "./viewer/popMenu";
 import "./style.css";
-import { findTf2, indexTf2 } from "./api";
+import { findTf2, indexTf2, readTextFile, writeTextFile } from "./api";
 import { createViewTab } from "./viewer/tab";
 import { createSettingsUi } from "./settingsUi";
 import { createPoseHud } from "./viewer/poseHud";
@@ -526,11 +527,30 @@ async function deleteRegisteredLayout(name: string) {
   if (await askConfirm({ title: "Delete the layout?", message: `Delete the layout "${name}"? This cannot be undone.`, ok: "Delete", danger: true })) deleteSavedLayout(name);
 }
 
+/** Saves the layout of the docks as a workspace file the user picks. */
+async function saveWorkspace() {
+  const path = await save({ title: "Save workspace", defaultPath: "workspace.json", filters: [{ name: "TF2 Workbench workspace", extensions: ["json"] }] });
+  if (!path) return;
+  try { await writeTextFile(path, encodeWorkspace(docks.snapshot())); }
+  catch (error) { await askConfirm({ title: "Could not save the workspace", message: String(error), ok: "OK" }); }
+}
+
+/** Puts the layout of a workspace file on the docks. */
+async function loadWorkspace() {
+  const path = await open({ title: "Load workspace", multiple: false, directory: false, filters: [{ name: "TF2 Workbench workspace", extensions: ["json"] }] });
+  if (typeof path !== "string") return;
+  try { docks.apply(decodeWorkspace(await readTextFile(path))); }
+  catch (error) { await askConfirm({ title: "Could not load the workspace", message: error instanceof Error ? error.message : String(error), ok: "OK" }); }
+}
+
 $("layoutMenu").onclick = () => {
   openMenu($("layoutMenu"), [
+    { label: "Save workspace…", run: () => void saveWorkspace() },
+    { label: "Load workspace…", run: () => void loadWorkspace() },
     { label: "Register layout…", run: () => void registerCurrentLayout() },
     ...docks.panels().map((p, i) => ({ label: p.title, checked: p.visible, keepOpen: true, separator: i === 0, run: () => docks.togglePanel(p.id) })),
-    { label: "Reset layout", separator: true, run: () => docks.reset() },
+    { label: "Load default layout", separator: true, run: () => docks.reset() },
+    { label: "Simplified layout", run: () => docks.apply(simplifiedLayout()) },
     // the layouts that were registered, under the default one
     ...loadSavedLayouts().map((s) => ({ label: s.name, run: () => docks.apply(s.layout), remove: () => void deleteRegisteredLayout(s.name), removeTitle: `Delete the layout "${s.name}"` })),
   ]);
