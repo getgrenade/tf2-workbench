@@ -5,6 +5,7 @@
  */
 import { listPromos, readPromoFile, removePromo, savePromoFile } from "../api";
 import type { Backdrop, ChartCellRect, ChartSpec, LayerBlend, OverlaySpec, PromoLayer, PromoPicture, ShotSpec, TextSpec } from "./promo";
+import { shadowApart, shadowOf, solidOf } from "./promo";
 import { parseMask, partsOf, type LayerMask } from "./promoMask";
 
 export interface SavedLayer {
@@ -35,6 +36,13 @@ export interface SavedLayer {
   glow?: boolean;
   /** Made a plain image (see PromoLayer.raster). */
   raster?: boolean;
+  /**
+   * A shot's image without its ground shadow, and the shadow alone (the board draws the shadows of all its shots under them); `apart`:
+   * the image has no shadow in its pixels (a shot taken with the view's look, see shadowApart).
+   */
+  solid?: string;
+  shadow?: string;
+  apart?: boolean;
   /** The file of the image's parts picture (a mask that keeps parts of the character). */
   parts?: string;
 }
@@ -60,7 +68,15 @@ export interface SavedBoard {
   set: number[];
   cls: string;
   pictures: SavedPicture[];
+  /** Its shots' shadows are kept apart from them (SavedLayer.solid, .shadow): boards kept before were not, their shots are taken again. */
+  shadowsApart?: boolean;
 }
+
+/**
+ * The shots of a board kept before their shadows were kept apart (SavedBoard.shadowsApart): their shadows are in their pixels, drawn
+ * over the shots under them, so the board takes them once again when their picture is first looked at.
+ */
+export const oldShadowShots = new WeakSet<PromoLayer>();
 
 /** What a board's images were saved as, so an image already written is not written again. */
 export type Written = Map<HTMLCanvasElement, string>;
@@ -95,15 +111,20 @@ async function boardData(board: BoardToSave, written: Written, put: (name: strin
       const file = await write(l.image);
       const partsCanvas = l.mask?.keep.length ? partsOf.get(l.image) : undefined;
       const parts = partsCanvas ? await write(partsCanvas) : undefined;
+      // (without these the image, its shadow in its pixels, would be drawn over the shots under it once the board is opened again)
+      const solidCanvas = solidOf.get(l.image), shadowCanvas = shadowOf.get(l.image);
+      const solid = solidCanvas ? await write(solidCanvas) : undefined;
+      const shadow = shadowCanvas ? await write(shadowCanvas) : undefined;
+      const apart = shadowApart.has(l.image) || undefined;
       layers.push({
         name: l.name, image: file, box: { ...l.box }, alignY: l.alignY, scale: l.scale, dx: l.dx, dy: l.dy, hidden: l.hidden,
         shot: l.shot, chart: l.chart, link: l.link, shared: l.shared, centre: l.centre, content: l.content, opaque: l.opaque, cells: l.cells, text: l.text, rotation: l.rotation, opacity: l.opacity, blend: l.blend, overlay: l.overlay, glow: l.glow, raster: l.raster,
-        mask: l.mask, parts,
+        mask: l.mask, parts, solid, shadow, apart,
       });
     }
     pictures.push({ name: p.name, item: p.item, kind: p.kind, w: p.w, h: p.h, strokeAt: p.strokeAt, backdrop: p.backdrop, layers });
   }
-  return { version: 1, name: board.name, title: board.title, set: board.set, cls: board.cls, pictures };
+  return { version: 1, name: board.name, title: board.title, set: board.set, cls: board.cls, pictures, shadowsApart: true };
 }
 
 /** A saved image as a canvas. */
@@ -146,8 +167,19 @@ async function boardPictures(saved: SavedBoard, get: (name: string) => Promise<B
         images.set(s.image, img);
         written.set(img, s.image);
       }
-      const { parts, mask, ...rest } = s;
+      const { parts, mask, solid, shadow, apart, ...rest } = s;
       const l: PromoLayer = { ...rest, image: img, mask: parseMask(mask) };
+      if (l.shot && !saved.shadowsApart) oldShadowShots.add(l);
+      // a shot's image without its shadow, and the shadow, as they were taken
+      for (const [file, into] of [[solid, solidOf], [shadow, shadowOf]] as const) {
+        if (!file || into.has(img)) continue;
+        try {
+          let c = images.get(file);
+          if (!c) { c = await image(await get(file)); images.set(file, c); written.set(c, file); }
+          into.set(img, c);
+        } catch { /* taken again when it is needed */ }
+      }
+      if (apart) shadowApart.add(img);
       if (parts && !partsOf.has(img)) {
         try {
           let pc = images.get(parts);
