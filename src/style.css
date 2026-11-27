@@ -1675,3 +1675,9 @@ h1, h2, h3, h4, .panel h3, .setGroup h3, nav button, .sceneTab, .dockTabs button
 .tileEdited { position: absolute; top: 1px; left: 3px; font: 700 12px/1 var(--ui-font-head, inherit); font-style: normal; color: #ffd24a; text-shadow: 0 0 2px #000, 0 0 2px #000; pointer-events: auto; cursor: help; }
 .itemlist[data-view="list"] .tileEdited { top: 50%; transform: translateY(-50%); left: auto; right: 36px; }
 .equipIcon .tileEdited { top: 2px; left: auto; right: 16px; }
+/* a promo shot's Models: each drawn or not, and Only to picture one alone */
+.promoModels { display: flex; flex-direction: column; gap: 2px; margin-bottom: 6px; }
+.promoModelRow { display: flex; align-items: center; gap: 6px; }
+.promoModelRow label { flex: 1; display: flex; align-items: center; gap: 6px; min-width: 0; }
+.promoModelRow label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.promoModelRow button { padding: 1px 8px; font-size: var(--ui-fs-small); }

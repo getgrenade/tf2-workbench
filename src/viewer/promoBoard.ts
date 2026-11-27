@@ -8,7 +8,7 @@ import { icon } from "../icons";
 import { showContextMenu } from "./contextMenu";
 import { rotateLightDirection } from "./lighting";
 import { FOV_MAX, FOV_MIN, horizontalFov, verticalFov } from "./cameraData";
-import { shotEffectsOf, SHADOW_BLENDS, type ShadowBlend, DEFAULT_SHOT_EFFECTS, LINEUP_SPACING, PROMO_FOV, solidOf } from "./promo";
+import { shotEffectsOf, SHADOW_BLENDS, type ShadowBlend, DEFAULT_SHOT_EFFECTS, LINEUP_SPACING, PROMO_FOV, shadowApart, shadowOf, shadowOff, solidOf } from "./promo";
 import { createBackdropPicker } from "./backdropPicker";
 import { DEFAULT_STUDIO, STUDIO_LABELS, STUDIO_ROLES, flipStudio, parseStudio, randomStudio, type StudioLight } from "./studioLight";
 import { createStudioSphere } from "./studioSphere";
@@ -50,6 +50,8 @@ export interface BoardHost {
   reroll(spec: ShotSpec): Promise<void>;
   /** The paints, for the choice of a worn item's paint. */
   paints(): Promise<{ id: number; name: string }[]>;
+  /** An item's name (a weapon's or a taunt's, for a shot's Models), by its id. */
+  itemName(id: number): Promise<string>;
   /** Where the view's directional light comes from now (degrees): what a shot's own light starts from. */
   lightDirection(): { azimuth: number; elevation: number };
   /** The board changed (a layer moved, a shot taken again, a text edited): what keeps it between runs writes it again. */
@@ -753,7 +755,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
   /** A shared shot sits the same in every picture that shares it: its place, size and showing go to the others (redrawn). */
   const placeShared = (l: PromoLayer) => {
     for (const [q, x] of instancesOf(l)) {
-      x.dx = l.dx; x.dy = l.dy; x.scale = l.scale; x.hidden = l.hidden; x.rotation = l.rotation; x.mask = l.mask ? structuredClone(l.mask) : undefined; x.opacity = l.opacity; x.blend = l.blend;
+      x.dx = l.dx; x.dy = l.dy; x.scale = l.scale; x.hidden = l.hidden; x.rotation = l.rotation; x.mask = l.mask ? structuredClone(l.mask) : undefined; x.opacity = l.opacity; x.blend = l.blend; x.glow = l.glow;
       draw(q);
     }
   };
@@ -2307,6 +2309,17 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     blend.onchange = () => { l.blend = blend.value === "source-over" ? undefined : (blend.value as LayerBlend); draw(p); placeShared(l); };
     wheelSelect(blend);
     field(layerBox, "Blend", blend, "How it is laid over what is under it (as Photoshop's blend modes)");
+    if (l.shot || l.raster) {
+      // the glow round this shot: the board's (Look → Glow round the characters), or on or off for this one alone
+      const glow = document.createElement("select");
+      glow.add(new Option(`As the board (${look.glow?.on ? "on" : "off"})`, ""));
+      glow.add(new Option("On", "on"));
+      glow.add(new Option("Off", "off"));
+      glow.value = l.glow === undefined ? "" : l.glow ? "on" : "off";
+      glow.onchange = () => { l.glow = glow.value === "" ? undefined : glow.value === "on"; draw(p); placeShared(l); host.changed(); };
+      wheelSelect(glow);
+      field(layerBox, "Glow", glow, "The dark glow round this shot: as the board's Glow round the characters says, or on or off for this layer alone (at the board's size and strength)");
+    }
   }
 
   /** An image from a file, fitted in the middle of a picture. */
@@ -2710,6 +2723,7 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     sync.title = p ? "Sync pages: give every other page this page's backdrop and its layers that are not texts or characters (overlays, ground, sky, pictures from files), in the same order; their texts and characters stay" : "Pick a page first";
     sync.onclick = () => { if (p) syncPages(p); };
     actionsBox.append(sync);
+    if (l && p && (l.shot || l.chart)) add("Rasterize", "Make it a plain image as it looks now: nothing changes it any more (its shot is not taken again, by a change here or anywhere else). Undo turns it back", () => rasterizeLayer(p, l));
     add("Delete", "Take it out of this picture (Delete)", () => { if (l) { selectOnly(l); deleteLayers(); } }, "trash2");
   }
 
@@ -2749,6 +2763,46 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
     pushUndo(was);
     drawAll();
     status.textContent = `${pictures.length - 1} other page${pictures.length === 2 ? "" : "s"} now ha${pictures.length === 2 ? "s" : "ve"} this page's backdrop, overlays and pictures (their texts and characters kept).`;
+  }
+
+  /**
+   * Makes a shot or chart a plain image of what it shows now: its ground shadow (drawn with the others' when it has one) is put into its
+   * own pixels, at the board's colour and opacity; it is unlinked from the other pictures (they keep the shot), and nothing takes it again.
+   */
+  function rasterizeLayer(p: PromoPicture, l: PromoLayer) {
+    const was = snapshot();
+    let img = l.image;
+    const shadow = shadowOf.get(img);
+    if (shadow) {
+      const fx = look.effects?.shadow;
+      const c = document.createElement("canvas");
+      c.width = img.width;
+      c.height = img.height;
+      const ctx = c.getContext("2d")!;
+      // the shadow in its colour (its pixels are black with the shadow's alpha), then the character over it
+      const tinted = document.createElement("canvas");
+      tinted.width = shadow.width;
+      tinted.height = shadow.height;
+      const tctx = tinted.getContext("2d")!;
+      tctx.drawImage(shadow, 0, 0);
+      tctx.globalCompositeOperation = "source-in";
+      tctx.fillStyle = fx?.color ?? "#000000";
+      tctx.fillRect(0, 0, tinted.width, tinted.height);
+      // (a shot whose shadow was off keeps none; its image is copied all the same, so the board's shadow pass leaves it alone)
+      ctx.globalAlpha = fx?.opacity ?? 1;
+      if (!shadowOff(l)) ctx.drawImage(tinted, 0, 0, c.width, c.height);
+      ctx.globalAlpha = 1;
+      ctx.drawImage(shadowApart.has(img) ? img : solidOf.get(img) ?? img, 0, 0, c.width, c.height);
+      img = c;
+    }
+    waiting.delete(l);
+    takenLive.delete(l);
+    Object.assign(l, { image: img, shot: undefined, chart: undefined, cells: undefined, link: undefined, shared: undefined, raster: true });
+    pushUndo(was);
+    draw(p);
+    showInspector();
+    host.changed();
+    status.textContent = `“${l.name}” is a plain image now: nothing takes it again (Undo turns it back).`;
   }
 
   /** Every thumbnail's shot layer, with its picture. */
@@ -3140,7 +3194,47 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
         field(layerBox, worn.name, sel);
       }
     }
+    if (spec && !spec.group) modelFields(p, l, spec);
     if (spec && !spec.group) bodygroupFields(p, l, spec);
+  }
+
+  /**
+   * A shot's models, each drawn or not: the character itself (hidden, only what it wears and holds is pictured, as Item alone does), each
+   * thing it wears and what it holds (held still, for its pose). Only shows that one alone.
+   */
+  function modelFields(p: PromoPicture, l: PromoLayer, spec: ShotSpec) {
+    const rows: { label: string; shown: boolean; set: (shown: boolean) => void }[] = [
+      { label: "Player", shown: !spec.hidePlayer, set: (v) => { spec.hidePlayer = v ? undefined : true; } },
+      ...spec.loadout.map((w) => ({ label: w.name, shown: !w.hidden, set: (v: boolean) => { w.hidden = v ? undefined : true; } })),
+    ];
+    if (spec.weapon !== null) rows.push({ label: "Weapon", shown: !spec.weaponHidden, set: (v) => { spec.weaponHidden = v ? undefined : true; } });
+    const changed = () => { retake(p, l); showLayer(); };
+    const anyHidden = rows.some((r) => !r.shown);
+    heading(layerBox, "Models", undefined, anyHidden ? [{ label: "Show all", title: "Draw the character and everything it wears and holds again", run: () => { for (const r of rows) r.set(true); changed(); } }] : []);
+    const box = document.createElement("div");
+    box.className = "promoModels";
+    layerBox.appendChild(box);
+    for (const [i, r] of rows.entries()) {
+      const row = document.createElement("div");
+      row.className = "promoModelRow";
+      const name = document.createElement("label");
+      const c = document.createElement("input");
+      c.type = "checkbox";
+      c.checked = r.shown;
+      c.onchange = () => { r.set(c.checked); changed(); };
+      const text = document.createElement("span");
+      text.textContent = r.label;
+      name.append(c, text);
+      name.title = i === 0 ? "The character's body: off, only what it wears and holds is pictured" : "Drawn in this shot (off: kept on the character, not pictured)";
+      const only = document.createElement("button");
+      only.textContent = "Only";
+      only.title = `Picture ${r.label} alone: everything else of this shot is hidden`;
+      only.onclick = () => { for (const [k, x] of rows.entries()) x.set(k === i); changed(); };
+      row.append(name, only);
+      box.appendChild(row);
+      // the weapon's own name, once it is known
+      if (r.label === "Weapon" && spec.weapon !== null) void host.itemName(spec.weapon).then((n) => { if (n) { text.textContent = n; only.title = `Picture ${n} alone: everything else of this shot is hidden`; } });
+    }
   }
 
   let paintList: { id: number; name: string }[] = [];
@@ -3165,10 +3259,10 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
         if (l.shot) specs.set(l.shot, JSON.stringify(l.shot));
         if (l.chart) specs.set(l.chart, JSON.stringify(l.chart));
         if (l.text) specs.set(l.text, JSON.stringify(l.text));
-        return { l, state: { dx: l.dx, dy: l.dy, scale: l.scale, hidden: l.hidden, shared: l.shared, shot: l.shot, chart: l.chart, image: l.image, content: l.content, opaque: l.opaque, cells: l.cells, box: { ...l.box }, name: l.name, rotation: l.rotation, mask: l.mask ? structuredClone(l.mask) : undefined, opacity: l.opacity, blend: l.blend, overlay: l.overlay ? structuredClone(l.overlay) : undefined } };
+        return { l, state: { dx: l.dx, dy: l.dy, scale: l.scale, hidden: l.hidden, shared: l.shared, shot: l.shot, chart: l.chart, image: l.image, content: l.content, opaque: l.opaque, cells: l.cells, box: { ...l.box }, name: l.name, rotation: l.rotation, mask: l.mask ? structuredClone(l.mask) : undefined, opacity: l.opacity, blend: l.blend, glow: l.glow, raster: l.raster, overlay: l.overlay ? structuredClone(l.overlay) : undefined } };
       }),
     }));
-    const key = JSON.stringify([look, pics.map((x) => [x.name, x.backdrop, x.texts, x.layers.map(({ l, state: s }) => [idOf(l), s.dx, s.dy, s.scale, s.hidden, s.shared, idOf(s.shot), idOf(s.chart), idOf(s.image), s.box, s.rotation, s.mask, s.opacity, s.blend, s.overlay]), x.strokeAt]), [...specs.values()]]);
+    const key = JSON.stringify([look, pics.map((x) => [x.name, x.backdrop, x.texts, x.layers.map(({ l, state: s }) => [idOf(l), s.dx, s.dy, s.scale, s.hidden, s.shared, idOf(s.shot), idOf(s.chart), idOf(s.image), s.box, s.rotation, s.mask, s.opacity, s.blend, s.glow, s.raster, s.overlay]), x.strokeAt]), [...specs.values()]]);
     return { key, look: structuredClone(look), pics, specs };
   }
   function restore(s: Snap) {
@@ -3185,7 +3279,12 @@ export function showBoard(root: HTMLElement, title: string, pictures: PromoPictu
       x.p.texts = x.texts.map((t) => ({ ...t }));
       x.p.layers = x.layers.map(({ l, state }) => Object.assign(l, { ...state, mask: state.mask ? structuredClone(state.mask) : undefined, overlay: state.overlay ? structuredClone(state.overlay) : undefined }));
     }
-    for (const [spec, json] of s.specs) Object.assign(spec, JSON.parse(json));
+    // (what was not set then is taken off: a Hide player or a hidden model set since goes, not only the values it had then come back)
+    for (const [spec, json] of s.specs) {
+      const was = JSON.parse(json) as Record<string, unknown>, o = spec as Record<string, unknown>;
+      for (const k of Object.keys(o)) if (!(k in was)) delete o[k];
+      Object.assign(spec, was);
+    }
   }
   const undoStack: Snap[] = [], redoStack: Snap[] = [];
   let pending: Snap | null = null;

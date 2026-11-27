@@ -31,6 +31,10 @@ export interface SavedLayer {
   opacity?: number;
   blend?: LayerBlend;
   overlay?: OverlaySpec;
+  /** A shot's own glow choice (see PromoLayer.glow). */
+  glow?: boolean;
+  /** Made a plain image (see PromoLayer.raster). */
+  raster?: boolean;
   /** The file of the image's parts picture (a mask that keeps parts of the character). */
   parts?: string;
 }
@@ -93,7 +97,7 @@ async function boardData(board: BoardToSave, written: Written, put: (name: strin
       const parts = partsCanvas ? await write(partsCanvas) : undefined;
       layers.push({
         name: l.name, image: file, box: { ...l.box }, alignY: l.alignY, scale: l.scale, dx: l.dx, dy: l.dy, hidden: l.hidden,
-        shot: l.shot, chart: l.chart, link: l.link, shared: l.shared, centre: l.centre, content: l.content, opaque: l.opaque, cells: l.cells, text: l.text, rotation: l.rotation, opacity: l.opacity, blend: l.blend, overlay: l.overlay,
+        shot: l.shot, chart: l.chart, link: l.link, shared: l.shared, centre: l.centre, content: l.content, opaque: l.opaque, cells: l.cells, text: l.text, rotation: l.rotation, opacity: l.opacity, blend: l.blend, overlay: l.overlay, glow: l.glow, raster: l.raster,
         mask: l.mask, parts,
       });
     }
