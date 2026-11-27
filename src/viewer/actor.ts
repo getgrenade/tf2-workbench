@@ -1380,6 +1380,7 @@ export class Actor {
   /** Parenting previews to the actor makes scene isolation and screenshot visibility apply to effects too. */
   attachParticles(group: THREE.Group) {
     if (!this.modelGroup) return;
+    group.userData.particles = true;
     if (group.parent !== this.modelGroup) this.modelGroup.add(group);
     group.matrix.copy(this.modelGroup.matrix).invert().multiply(this.particleRootFrame());
     group.matrixWorldNeedsUpdate = true;
@@ -1388,6 +1389,7 @@ export class Actor {
   /** World-space emitters leave smoke and shells where they were emitted as the character moves. */
   attachWorldParticles(group: THREE.Group) {
     if (!this.modelGroup) return;
+    group.userData.particles = true;
     if (group.parent !== this.modelGroup) this.modelGroup.add(group);
     this.modelGroup.updateWorldMatrix(true, false);
     group.matrix.copy(this.modelGroup.matrixWorld).invert().multiply(SOURCE_TO_VIEWER);
@@ -1888,13 +1890,22 @@ export class Actor {
   }
 
   /** Every mesh of the character (class, cosmetics and a separate prop). */
-  meshes(): THREE.Mesh[] {
+  /**
+   * The character's meshes. Its particle effects' meshes are left out unless `particles`: they are instanced sprite batches, so a pass that
+   * draws the character flat (the selection outline, picking, the click flash) would draw one plain quad of each where the effect is
+   * rooted, a square on the floor that never moved.
+   */
+  meshes(particles = false): THREE.Mesh[] {
     const out: THREE.Mesh[] = [];
     if (this.listHidden) return out;
-    const add = (root: THREE.Object3D | null | undefined) =>
-      root?.traverse((o) => {
+    const add = (root: THREE.Object3D | null | undefined) => {
+      const walk = (o: THREE.Object3D) => {
+        if (!particles && o.userData.particles) return;
         if (o instanceof THREE.Mesh) out.push(o);
-      });
+        for (const c of o.children) walk(c);
+      };
+      if (root) walk(root);
+    };
     add(this.modelGroup);
     add(this.prop?.group);
     return out;
