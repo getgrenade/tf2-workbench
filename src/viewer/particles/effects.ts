@@ -70,7 +70,10 @@ export class ActorEffects {
         { kind: "taunt", item: null, selected: settings.tauntEffect, preset: settings.arctic ? "arctic" : null, chosen: true },
         ...own.map((x) => ({ kind: "hat" as const, item: x.item, selected: x.effect, system: x.system, attachment: x.attachment, colors: x.colors, preset: null, chosen: false })),
       ];
-      for (const lane of lanes) {
+      // one effect that cannot be shown (a system the compatibility simulator lacks an operator for, without the native helper) is
+      // reported and left out: the others still play
+      const failures: unknown[] = [];
+      for (const lane of lanes) try {
         const { kind, selected } = lane;
         const id = lane.preset;
         if (!id && !selected && !lane.system) continue;
@@ -111,7 +114,9 @@ export class ActorEffects {
         const sim = native ?? new ParticleSimulation(definitions.get(root)!, definitions, queries, ((selected ?? ("id" in config ? config.id : id === "silver" ? 273 : 3141)) + seed) >>> 0);
         effect.simulations.push(sim);
         await effect.addDraws(sim);
-      }
+      } catch (err) { failures.push(err); }
+      if (failures.length && !effect.simulations.length) throw failures[0];
+      for (const err of failures) onError(err);
       effect.attach();
       return effect;
     } catch (err) { effect.dispose(); throw err; }

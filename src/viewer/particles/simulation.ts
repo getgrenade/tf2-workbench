@@ -19,7 +19,7 @@ const supported = new Set([
   "emit_continuously", "emit_instantaneously", "Lifetime Random", "Radius Random", "Color Random", "Alpha Random",
   "Position Within Box Random", "Position Within Sphere Random", "Position on Model Random", "Position From Parent Particles", "Position Modify Offset Random",
   "Velocity Noise", "Remap Noise to Scalar",
-  "Sequence Random", "Rotation Random", "Rotation Speed Random", "Velocity Random", "Lifespan Decay", "Movement Basic",
+  "Sequence Random", "Rotation Random", "Rotation Yaw Random", "Rotation Speed Random", "Velocity Random", "Lifespan Decay", "Movement Basic",
   "Movement Lock to Control Point", "Movement Lock to Bone", "Movement Rotate Particle Around Axis", "Oscillate Vector",
   "Oscillate Scalar", "Alpha Fade In Random", "Alpha Fade Out Random", "Alpha Fade and Decay", "Color Fade", "Radius Scale",
   "Rotation Spin Roll", "Rotation Basic", "twist around axis", "Pull towards control point", "render_animated_sprites", "render_rope",
@@ -152,6 +152,8 @@ export class ParticleSimulation {
         }
         case "Position Modify Offset Random": { const offset = this.randomVector(a, "offset min", "offset max"); if (a["offset proportional to radius 0/1"]) offset.multiplyScalar(p.radius); if (a["offset in local space 0/1"]) offset.applyMatrix3(new THREE.Matrix3().setFromMatrix4(this.cp)); p.position.add(offset); break; }
         case "Sequence Random": p.sequence = Math.floor(this.range(a, "sequence_min", "sequence_max") + 0.5); break;
+        // C_INIT_RandomYaw: CGeneralRandomRotation's fields, on the yaw (a card turned about its up axis)
+        case "Rotation Yaw Random": p.yaw = (number(a, "rotation_initial") + this.range(a, "rotation_offset_min", "rotation_offset_max", 0, "rotation_random_exponent")) * radians; break;
         case "Rotation Random": p.rotation = (number(a, "rotation_initial") + this.range(a, "rotation_offset_min", "rotation_offset_max", 0, "rotation_random_exponent")) * radians; break;
         case "Rotation Speed Random": p.rotationSpeed = (number(a, "rotation_speed_constant") + this.range(a, "rotation_speed_random_min", "rotation_speed_random_max", 0, "rotation_speed_random_exponent")) * radians * (a.randomly_flip_direction && this.random() < 0.5 ? -1 : 1); break;
         case "Position Within Sphere Random": {
