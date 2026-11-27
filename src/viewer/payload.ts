@@ -299,6 +299,9 @@ export interface ItemInfo {
   bodygroups: Record<string, number>;
   /** A body part of the wearer's model (by index) put in a state while it is held (the Short Circuit empties the Engineer's right arm). */
   wmBodygroup?: [number, number];
+  /** The item's own skin family for RED / BLU when its style names none (`visuals_red` / `visuals_blu` / `visuals` `skin`: a Botkiller's). */
+  skinRed?: number;
+  skinBlu?: number;
   equipRegions: string[];
   paintable: boolean;
   /** Wearing the item puts the character in the zombie skin of the class model (the Voodoo-Cursed souls). */
@@ -361,8 +364,9 @@ export function itemModelFor(item: ItemInfo, gameClass: string, style = 0): stri
 
 /** The skin family a style uses for the team (0 RED, 1 BLU); null keeps the team's own family. */
 export function itemSkinFor(item: ItemInfo, team: number, style = 0): number | null {
+  // the style's, then the item's own (CEconItemView::GetSkin)
   const s = item.styles[style];
-  return (team === 1 ? s?.skinBlu : s?.skinRed) ?? null;
+  return (team === 1 ? s?.skinBlu ?? item.skinBlu : s?.skinRed ?? item.skinRed) ?? null;
 }
 
 /** Newest first: a workshop item by when its zip was last written (its id is only a hash of its name), the game's by their number. */

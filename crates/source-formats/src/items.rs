@@ -62,6 +62,10 @@ pub struct Item {
     /// `visuals/wm_bodygroup_override` and `wm_bodygroup_state_override`: a body part of the wearer's model (by index) put in a state
     /// while the weapon is held (C_TFWeaponBase sets it on its owner): the Short Circuit empties the Engineer's right arm (2, state 2).
     pub wm_bodygroup: Option<[i32; 2]>,
+    /// The skin family of the item itself for RED / BLU when its style names none: `visuals_red` / `visuals_blu` `skin`, else
+    /// `visuals` `skin` (CEconItemView::GetSkin). The Rust, Blood, Carbonado and Diamond Botkillers are skins 4 to 11 of their weapon's model.
+    pub skin_red: Option<i32>,
+    pub skin_blu: Option<i32>,
     pub equip_regions: Vec<String>,
     pub paintable: bool,
     /// The item has the `player_skin_override` attribute (the Voodoo-Cursed souls): its wearer is drawn in the zombie skin of the
@@ -286,6 +290,12 @@ fn parse_styles(nodes: &[Node], names: &HashMap<String, String>) -> Vec<ItemStyl
         .collect()
 }
 
+/// An item's skin for a team (CEconItemView::GetSkin): its `visuals_red` / `visuals_blu` block's `skin`, else its `visuals` one.
+fn team_skin(nodes: &[Node], team_block: &str) -> Option<i32> {
+    let skin = |b: &str| get_block(nodes, b).and_then(|v| get_str(v, "skin")).and_then(|s| s.trim().parse::<i32>().ok());
+    skin(team_block).or_else(|| skin("visuals"))
+}
+
 /// `class -> value` of a block like `custom_taunt_prop_per_class`, values mapped by `f`.
 fn class_map(block: Option<&[Node]>, f: impl Fn(&str) -> String) -> BTreeMap<String, String> {
     block
@@ -390,6 +400,8 @@ fn build_item(id: u32, nodes: &[Node], names: &HashMap<String, String>) -> Item 
             let state = get_str(v, "wm_bodygroup_state_override")?.trim().parse::<i32>().ok()?;
             (part >= 0 && state >= 0).then_some([part, state])
         }),
+        skin_red: team_skin(nodes, "visuals_red"),
+        skin_blu: team_skin(nodes, "visuals_blu"),
         equip_regions,
         type_token: get_str(nodes, "item_type_name").unwrap_or("").trim_start_matches('#').to_ascii_lowercase(),
         prefabs: Vec::new(),
