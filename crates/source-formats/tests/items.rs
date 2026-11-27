@@ -283,3 +283,22 @@ fn taunts_with_props_use_the_prop_as_their_model() {
     // Taunts never leak into the cosmetics or weapons lists.
     assert!(db.items.iter().chain(&db.weapons).all(|i| i.slot != "taunt"));
 }
+
+#[test]
+fn a_weapon_is_seen_with_its_world_model_and_the_hot_hand_takes_the_pyros_glove_off() {
+    let text = r#""items_game" { "items" {
+        "1181" { "name" "The Hot Hand" "item_class" "tf_weapon_slap" "item_slot" "melee" "anim_slot" "MELEE_ALLCLASS"
+            "model_player" "models/weapons/c_models/c_slapping_glove/c_slapping_glove.mdl"
+            "model_world" "models/weapons/c_models/c_slapping_glove/w_slapping_glove.mdl"
+            "used_by_classes" { "pyro" "1" } }
+        "2" { "name" "TF_WEAPON_FIREAXE" "item_class" "tf_weapon_fireaxe" "item_slot" "melee"
+            "model_player" "models/weapons/c_models/c_fireaxe_pyro/c_fireaxe_pyro.mdl" "used_by_classes" { "pyro" "1" } }
+    } }"#;
+    let db = items::parse(text, &Default::default()).unwrap();
+    let hot = db.weapons.iter().find(|w| w.id == 1181).expect("Hot Hand");
+    assert_eq!(hot.model.as_deref(), Some("models/weapons/c_models/c_slapping_glove/w_slapping_glove.mdl"));
+    assert_eq!(hot.bodygroups.get("righthand"), Some(&1));
+    let axe = db.weapons.iter().find(|w| w.id == 2).expect("Fire Axe");
+    assert_eq!(axe.model.as_deref(), Some("models/weapons/c_models/c_fireaxe_pyro/c_fireaxe_pyro.mdl"));
+    assert!(axe.bodygroups.is_empty());
+}
