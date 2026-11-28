@@ -343,6 +343,11 @@ export interface ItemInfo {
   tauntAttackTime?: number;
   /** Taunts only: the slot whose weapon the player takes out for it (`primary`: the Heavy's minigun in the Russian Rubdown). */
   tauntWeaponSlot?: string;
+  /** Taunts only: class -> the scene stopping the taunt plays (its outro), and the one its attack button plays (the Rocket Jockey's cheer). */
+  tauntOutroPaths?: Record<string, string>;
+  tauntAttackPaths?: Record<string, string>;
+  /** Taunts only: how a moving taunt (the Kazotsky Kick, the Rocket Jockey) moves the player. */
+  tauntMove?: import("./play").TauntMove;
   /**
    * The sounds the item plays while its wearer taunts (sound script names): a taunt's success sound and its loop, `offset` seconds after the
    * taunt starts, or a cosmetic's taunt sound (the Boombox, the Infernal Orchestrina).

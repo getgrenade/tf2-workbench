@@ -197,7 +197,7 @@ app.innerHTML = `
       </div>
       </div>
       <div id="viewActions" hidden></div>
-      <div id="viewFollow" role="status" hidden><span class="followKey">Following</span><span class="followName"></span><button class="followStop" title="Stop following (the camera stays where it is). A double click on empty space does the same" aria-label="Stop following">×</button></div>
+      <div id="viewFollow" role="status" hidden><span class="followKey">Following</span><span class="followName"></span><button class="followMode" type="button">Static</button><button class="followStop" title="Stop following (the camera stays where it is). A double click on empty space does the same" aria-label="Stop following">×</button></div>
       <div id="viewPlayHint" role="status" hidden><kbd aria-label="Escape key">Esc</kbd><span>TO EXIT PLAY MODE</span></div>
       <div id="viewTools">
       </div>
@@ -248,6 +248,8 @@ app.innerHTML = `
               </div>
             </div>
           </div>
+          <div class="weaponPopSection" id="tauntUnusualSection" hidden title="The taunt's unusual effect: it plays while the character taunts"><div class="weaponPopHead">Unusual effect</div><div class="particlePickerRow"><select id="unusualTaunt" aria-label="Taunt unusual effect"><option value="">None</option><option value="arctic">Arctic Delight</option></select><button id="unusualTauntClear" title="Remove taunt effect" aria-label="Remove taunt effect" disabled>×</button></div></div>
+          <div id="hatUnusualSection" class="paintUnusual" hidden title="The unusual effect over this cosmetic (one per character)"><div class="weaponPopHead">Unusual effect</div><div class="particlePickerRow"><select id="unusualHat" aria-label="Hat unusual effect"><option value="">None</option><option value="silver">Silver Serenade</option></select><button id="unusualHatClear" title="Remove hat effect" aria-label="Remove hat effect" disabled>×</button></div></div>
           <label id="weaponFestive" class="festiveRow weaponPopSection" hidden title="Put a Festivizer on the held weapon: its string of lights, as in game"><input type="checkbox" /> Festivized</label>
         </div>
         <div id="weaponList" class="itemlist"></div>
@@ -258,10 +260,6 @@ app.innerHTML = `
       <section id="lightSetupsPane" class="lightPane lightSetupsPane" hidden><section id="lightSetupsBody" class="lightCol lightSetups"></section></section>
       <div id="particlesPane" class="particlesPane" hidden>
         <div id="unusualBar" class="particleFind"><input id="unusualSearch" class="text" placeholder="Filter unusual effects by name or ID…" aria-label="Filter unusual effects" /></div>
-        <div class="particlePickers">
-          <div><label for="unusualHat">Hat effect</label><div class="particlePickerRow"><select id="unusualHat" aria-label="Hat unusual effect"><option value="">None</option><option value="silver">Silver Serenade</option></select><button id="unusualHatClear" title="Remove hat effect" aria-label="Remove hat effect" disabled>×</button></div></div>
-          <div><label for="unusualTaunt">Taunt effect</label><div class="particlePickerRow"><select id="unusualTaunt" aria-label="Taunt unusual effect"><option value="">None</option><option value="arctic">Arctic Delight</option></select><button id="unusualTauntClear" title="Remove taunt effect" aria-label="Remove taunt effect" disabled>×</button></div></div>
-        </div>
         <div class="row2"><button id="unusualLoadZip" title="Adds an effect from a .zip (a folder tree with particles/*.pcf and the materials it uses). It is kept by the app and shows up in both pickers under Custom effects.">Load custom effect (.zip)…</button></div>
         <div id="unusualCustom" class="particleCustom"></div>
         <div id="unusualCatalog" class="dim hint">Loading the installed unusual catalog…</div>

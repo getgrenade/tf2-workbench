@@ -49,5 +49,43 @@ export function itemIcon(image: string): Promise<string | null> {
   return cache.small(image);
 }
 
+/**
+ * The icon without its empty border (a taunt's picture is a small card in the middle of the image): cut to what is drawn, with a
+ * little margin, so it fills its tile.
+ */
+const trimmedIcons = new Map<string, Promise<string | null>>();
+export function trimmedItemIcon(image: string): Promise<string | null> {
+  let p = trimmedIcons.get(image);
+  if (!p) {
+    p = itemIcon(image).then((url) => (url ? trimIcon(url) : null)).catch(() => null);
+    trimmedIcons.set(image, p);
+  }
+  return p;
+}
+async function trimIcon(url: string): Promise<string> {
+  const img = new Image();
+  img.src = url;
+  await img.decode();
+  const w = img.naturalWidth, h = img.naturalHeight;
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  const g = canvas.getContext("2d")!;
+  g.drawImage(img, 0, 0);
+  const a = g.getImageData(0, 0, w, h).data;
+  let x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    if (a[(y * w + x) * 4 + 3] <= 8) continue;
+    if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+  }
+  if (x1 < 0) return url;
+  const pad = Math.round(Math.max(x1 - x0, y1 - y0) * 0.02);
+  x0 = Math.max(0, x0 - pad); y0 = Math.max(0, y0 - pad); x1 = Math.min(w - 1, x1 + pad); y1 = Math.min(h - 1, y1 + pad);
+  if (x0 === 0 && y0 === 0 && x1 === w - 1 && y1 === h - 1) return url;
+  const out = document.createElement("canvas");
+  out.width = x1 - x0 + 1; out.height = y1 - y0 + 1;
+  out.getContext("2d")!.drawImage(canvas, x0, y0, out.width, out.height, 0, 0, out.width, out.height);
+  return out.toDataURL();
+}
+
 /** Native large inventory artwork, loaded only for icons placed in camera overlays. */
 export function overlayItemIcon(image: string): Promise<string | null> { return cache.overlay(image); }

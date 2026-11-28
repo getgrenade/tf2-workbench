@@ -26,6 +26,10 @@ export interface Settings {
   playHitReactions:boolean;
   /** Mouse-wheel zoom multiplier, 0.1–10; 1 retains the original strength. */
   scrollStrength: number;
+  /** The camera behind a followed character: distance (character heights), vertical offset (units), horizontal field of view (degrees). */
+  behindDistance: number;
+  behindHeight: number;
+  behindFov: number;
   /** Start with the scene of the last session. */
   restoreLastScene: boolean;
   confirmCloseScene: boolean;

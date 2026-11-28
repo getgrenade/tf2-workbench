@@ -32,6 +32,8 @@ export interface OutlinerNode extends Pick {
   canClearParticles?: boolean;
   /** Cameras: the view is through it. */
   viewing?: boolean;
+  /** Characters: how the view follows it (null: it does not). */
+  follow?: "static" | "behind" | null;
 }
 
 export interface HierarchyHooks {
@@ -45,6 +47,8 @@ export interface HierarchyHooks {
   clearParticles: (id: number) => void;
   /** Looks through a camera, or leaves its view. */
   lookThrough: (id: string) => void;
+  /** A character's follow label was clicked: the view follows it, or lets go of it. */
+  cycleFollow: (id: number) => void;
   remove: (picks: Pick[]) => void;
   /** Puts these things on the clipboard (Ctrl + C). */
   copy: (picks: Pick[]) => void;
@@ -396,6 +400,19 @@ export function createHierarchy(host: HTMLElement, hooks: HierarchyHooks) {
     label.title = n.keywords && n.kind === "character" ? `${n.label}\n${n.keywords}` : n.label;
     row.append(glyph, label);
     if (n.kind === "character") {
+      const follow = n.follow ?? null;
+      const followTag = button(
+        "entFollow" + (follow ? " on" : ""),
+        follow === "behind"
+          ? "The view follows this character from behind (third person; C: static). Click: let go (the camera stays where it is)"
+          : follow === "static"
+            ? "The view follows this character, turned as it is (C: from behind). Click: let go (the camera stays where it is)"
+            : "Not followed. Click: the view follows this character, the way the last one was followed (C switches static / behind)",
+        follow === "behind" ? "Behind" : follow === "static" ? "Static" : "Follow",
+        () => hooks.cycleFollow(Number(n.id)),
+        !!follow,
+      );
+      row.append(followTag);
       if (n.team !== undefined) row.append(span("entTeam " + (n.team === 1 ? "blu" : "red"), n.team === 1 ? "BLU" : "RED"));
       else if (n.skin !== undefined) row.append(span("entTeam skin", `Skin ${n.skin + 1}`));
       row.append(button("hierTool hierFog" + (n.fogged ? " on" : ""), n.fogged ? "Affected by the fog (click to keep this character clear of it)" : "Not affected by the fog (click to put the fog over it)", icon("fog"), () => hooks.toggleFog(Number(n.id))));

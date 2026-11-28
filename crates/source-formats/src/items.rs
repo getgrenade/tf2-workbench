@@ -124,6 +124,12 @@ pub struct Item {
     /// the weapon of that slot for the taunt (CTFPlayer::PlayTauntSceneFromItem switches to it; the Heavy's Russian Rubdown rubs his
     /// minigun).
     pub taunt_weapon_slot: String,
+    /// Taunts only: class -> the scene played when the player stops the taunt (`custom_taunt_outro_scene_per_class`), as `taunt_scene_paths`.
+    pub taunt_outro_paths: BTreeMap<String, String>,
+    /// Taunts only: class -> the scene the attack button plays during the taunt (`custom_taunt_input_remap` / `IN_ATTACK` / `pressed`).
+    pub taunt_attack_paths: BTreeMap<String, String>,
+    /// Taunts only: how the player moves while taunting (a moving taunt: the Kazotsky Kick, the Rocket Jockey), none for one that holds him still.
+    pub taunt_move: Option<TauntMove>,
     /// The sounds the item plays while its wearer taunts (see [`ItemSound`]).
     pub taunt_sounds: Vec<ItemSound>,
     /// `visuals/playback_activity`: the activity the item's own model plays while its wearer taunts (`start_taunting`, the Infernal
@@ -371,6 +377,11 @@ fn taunt_item(item: &mut Item, nodes: &[Node]) -> bool {
     item.taunt_scenes = scenes;
     item.taunt_scene_paths = class_map(get_block(taunt, "custom_taunt_scene_per_class"), |p| p.replace('\\', "/").to_ascii_lowercase());
     item.taunt_prop_scenes = class_map(get_block(taunt, "custom_taunt_prop_scene_per_class"), scene_name);
+    let path = |p: &str| p.replace('\\', "/").to_ascii_lowercase();
+    item.taunt_outro_paths = class_map(get_block(taunt, "custom_taunt_outro_scene_per_class"), path);
+    let attack = get_block(taunt, "custom_taunt_input_remap").and_then(|b| get_block(b, "IN_ATTACK")).and_then(|b| get_block(b, "pressed"));
+    item.taunt_attack_paths = class_map(attack, path);
+    item.taunt_move = taunt_move(nodes);
     if item.classes.is_empty() {
         item.classes = item.taunt_scenes.keys().chain(props.keys()).cloned().collect();
         item.classes.sort();
@@ -381,6 +392,33 @@ fn taunt_item(item: &mut Item, nodes: &[Node]) -> bool {
         item.model = None;
     }
     true
+}
+
+/// The movement of a moving taunt (its `taunt move speed` and the attributes that go with it; CTFGameMovement while taunting).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct TauntMove {
+    /// Units per second forward (or back).
+    pub speed: f32,
+    /// Degrees per second the player turns (the strafe keys turn him).
+    pub turn: f32,
+    /// Seconds to reach full speed, and full turning speed (0: at once).
+    pub move_accel: f32,
+    pub turn_accel: f32,
+    /// The player always moves forward (the Rocket Jockey): the keys only turn him.
+    pub forward: bool,
+}
+
+/// The [`TauntMove`] of a taunt's attributes: none without a move or a turn speed.
+fn taunt_move(nodes: &[Node]) -> Option<TauntMove> {
+    let num = |c: &str| attribute_text(nodes, c).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
+    let m = TauntMove {
+        speed: num("taunt_move_speed"),
+        turn: num("taunt_turn_speed"),
+        move_accel: num("taunt_move_acceleration_time"),
+        turn_accel: num("taunt_turn_acceleration_time"),
+        forward: num("taunt_force_move_forward") != 0.0,
+    };
+    (m.speed > 0.0 || m.turn > 0.0).then_some(m)
 }
 
 fn build_item(id: u32, nodes: &[Node], names: &HashMap<String, String>) -> Item {
@@ -465,6 +503,9 @@ fn build_item(id: u32, nodes: &[Node], names: &HashMap<String, String>) -> Item 
         taunt_attack: attribute_text(nodes, "taunt_attack_name").map(|a| a.to_ascii_uppercase()).unwrap_or_default(),
         taunt_attack_time: attribute_text(nodes, "taunt_attack_time").and_then(|t| t.parse().ok()).unwrap_or(0.0),
         taunt_weapon_slot: attribute_text(nodes, "taunt_force_weapon_slot").map(|s| s.to_ascii_lowercase()).unwrap_or_default(),
+        taunt_outro_paths: BTreeMap::new(),
+        taunt_attack_paths: BTreeMap::new(),
+        taunt_move: None,
         taunt_sounds: item_sounds(nodes),
         taunt_activity: get_block(nodes, "visuals")
             .and_then(|v| get_block(v, "playback_activity"))

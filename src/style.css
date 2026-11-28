@@ -1737,3 +1737,17 @@ h1, h2, h3, h4, .panel h3, .setGroup h3, nav button, .sceneTab, .dockTabs button
 #equippedRow > #weaponEquipped:not(:empty) { padding-right: 6px; border-right: 1px solid var(--line); }
 #equippedRow:has(> #weaponEquipped:not(:empty)) > #itemEquipped:empty::before { content: none; }
 .equip.held { border-color: var(--ui-accent-line); }
+/* the outliner's follow label (before the team): grey while the view does not follow the character, lit with the mode when it does */
+.entFollow { font-size: var(--ui-fs-micro); font-weight: 700; padding: 1px 5px; min-height: 0; height: auto; border: 0; border-radius: var(--ui-radius-s); background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--dim); opacity: .55; cursor: pointer; text-transform: uppercase; letter-spacing: .04em; line-height: inherit; }
+.entFollow:hover { opacity: 1; color: var(--ui-text-hi); }
+.entFollow.on { opacity: 1; background: var(--ui-accent-bg, color-mix(in srgb, var(--ui-accent-text) 22%, transparent)); color: var(--ui-accent-text); }
+#viewFollow .followMode { height: 26px; min-height: 0; padding: 0 var(--ui-3); border: 1px solid var(--ui-accent-line); border-radius: var(--ui-radius-l); background: transparent; color: var(--ui-text-hi); font-size: var(--ui-fs-micro); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; cursor: pointer; }
+#viewFollow .followMode:hover { background: var(--ui-wash-2); }
+/* the unusual effect of a cosmetic (its paint popup) and of a taunt (its popup) */
+.paintMenu .paintUnusual { margin: 0 0 8px; }
+.paintMenu .paintUnusual { padding-top: 6px; border-top: 1px solid var(--line, rgba(255, 255, 255, 0.08)); }
+.paintMenu .paintUnusual select, #tauntUnusualSection select { min-width: 0; }
+/* the game's unusual icon on the card of an item with an unusual effect (the 32 px image at half its size) */
+.equipIcon .unusualBadge { position: absolute; right: 3px; bottom: 3px; width: 16px; height: 16px; image-rendering: auto; filter: drop-shadow(0 0 2px rgba(0, 0, 0, .6)); }
+/* taunt pictures (cut to what is drawn) fill their tile */
+.tile.tauntTile .tileImg { background-size: contain; background-origin: content-box; padding: 3px; box-sizing: border-box; }

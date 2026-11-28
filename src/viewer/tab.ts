@@ -51,7 +51,7 @@ import { createItemsUi, TEMPORARY_ITEM, type Equipped, type ItemsEls } from "./i
 import { bakeVisDev, copyVisDev, loadVisDev, saveVisDev, type VisDevSettings } from "./visDev";
 import { unpackRgb } from "./proxies";
 import { spellPaints } from "./spellPaints";
-import { PlayController } from "./play";
+import { PlayController, type TauntPart, type TauntPlan } from "./play";
 import { createNavGizmo } from "./navGizmo";
 import { createBrowserSort, createBrowserView, makeTile, setTileImage } from "./browserView";
 import { createCameraUi } from "./cameraUi";
@@ -101,6 +101,7 @@ import { reloadItemDb } from "./itemCatalog";
 import type { PoseHud } from "./poseHud";
 import { createRigControls, type RigControls } from "../rig/rigControls";
 import type { LimbId } from "./poseRig";
+import type { CaptureMouse } from "./playMouse";
 import { PLAY_ACTIONS, PLAY_DAMAGE_ACTIONS, PLAY_SLOTS, encodeParam, setsOf, type PlaySlot } from "./playLogic";
 import { itemImageFor, newestFirst, itemMaterialOverride, itemModelFor, slotForClass, weaponCategory, itemSkinFor, itemUsableBy, parseAnimInfo, parseClip, parseMaterial, parsePayload, tauntPropSequence, tauntSequence, weaponIdleSequences, type ClipData, type ItemDb, type ItemInfo, type PaintInfo, type MaterialData, type ModelData } from "./payload";
 import { createWeaponsUi, type WeaponsEls } from "./weaponsUi";
@@ -860,10 +861,29 @@ export function createViewTab(els: Els) {
     return e;
   }
 
+  /** The cosmetic whose popup shows the hat effect picker: it shows the effect only when the effect is over that cosmetic. */
+  let unusualHatFor: number | null = null;
+  const hatUnusualSection = document.getElementById("hatUnusualSection");
+  const tauntUnusualSection = document.getElementById("tauntUnusualSection");
+  /** A cosmetic that can have an unusual effect: a hat (what the game makes unusual). */
+  let refreshUnusualCards = () => {};
+  const isHat = (item: ItemInfo) => item.equipRegions.some((r) => r === "hat" || r === "whole_head");
+  /** The name of an unusual effect by its picker value ("effect:12", "silver", "arctic"). */
+  function unusualName(kind: "hat" | "taunt", e: Entity): string | null {
+    const id = kind === "hat" ? e.unusuals.hatEffect : e.unusuals.tauntEffect;
+    if (id) return unusualCatalog.find((x) => x.id === id)?.name ?? `Effect #${id}`;
+    return kind === "hat" ? (e.unusuals.silver ? "Silver Serenade" : null) : e.unusuals.arctic ? "Arctic Delight" : null;
+  }
+  function hatValue(e: Entity | null): string {
+    if (!e || (unusualHatFor !== null && e.unusuals.hatItem !== unusualHatFor)) return "";
+    return e.unusuals.hatEffect ? `effect:${e.unusuals.hatEffect}` : e.unusuals.silver ? "silver" : "";
+  }
   function syncUnusuals() {
     const e = selected;
+    // (the cards of the hat and the taunt with an effect show the unusual icon)
+    refreshUnusualCards();
     if (unusualCatalog.length) filterUnusualCatalog();
-    els.unusual.hat.value = e?.unusuals.hatEffect ? `effect:${e.unusuals.hatEffect}` : e?.unusuals.silver ? "silver" : "";
+    els.unusual.hat.value = hatValue(e);
     els.unusual.taunt.value = e?.unusuals.tauntEffect ? `effect:${e.unusuals.tauntEffect}` : e?.unusuals.arctic ? "arctic" : "";
     els.unusual.hat.disabled = els.unusual.taunt.disabled = !e;
     els.unusual.hatClear.disabled = !e || !els.unusual.hat.value;
@@ -886,7 +906,7 @@ export function createViewTab(els: Els) {
     const query = els.unusual.search.value.trim().toLowerCase();
     for (const kind of ["hat", "taunt"] as const) {
       const picker = els.unusual[kind], selectedValue = kind === "hat"
-        ? selected?.unusuals.hatEffect ? `effect:${selected.unusuals.hatEffect}` : selected?.unusuals.silver ? "silver" : ""
+        ? hatValue(selected)
         : selected?.unusuals.tauntEffect ? `effect:${selected.unusuals.tauntEffect}` : selected?.unusuals.arctic ? "arctic" : "";
       picker.replaceChildren(new Option("None", ""));
       const custom = document.createElement("optgroup");
@@ -989,24 +1009,24 @@ export function createViewTab(els: Els) {
     if (e === selected) syncUnusuals();
   }
 
-  const changeUnusuals = () => {
+  /** One picker changed (the other effect stays: the hat picker of another cosmetic shows none while the effect is over this one). */
+  const changeUnusuals = (kind: "hat" | "taunt") => {
     const e = selected;
     if (!e) return;
-    e.unusuals = {
-      silver: els.unusual.hat.value === "silver", arctic: els.unusual.taunt.value === "arctic",
-      hatItem: els.unusual.hat.value ? e.unusuals.hatItem : null,
-      ...(els.unusual.hat.value.startsWith("effect:") ? { hatEffect: Number(els.unusual.hat.value.slice(7)) } : {}),
-      ...(els.unusual.taunt.value.startsWith("effect:") ? { tauntEffect: Number(els.unusual.taunt.value.slice(7)) } : {}),
-    };
+    const v = els.unusual[kind].value;
+    const { hatEffect, tauntEffect, ...rest } = e.unusuals;
+    e.unusuals = kind === "hat"
+      ? { ...rest, silver: v === "silver", hatItem: v ? unusualHatFor ?? e.unusuals.hatItem : null, ...(v.startsWith("effect:") ? { hatEffect: Number(v.slice(7)) } : {}), ...(tauntEffect ? { tauntEffect } : {}) }
+      : { ...rest, arctic: v === "arctic", ...(v.startsWith("effect:") ? { tauntEffect: Number(v.slice(7)) } : {}), ...(hatEffect ? { hatEffect } : {}) };
     syncUnusuals();
     els.unusual.status.textContent = "Loading effects…";
     void applyUnusuals(e);
   };
-  els.unusual.hat.onchange = els.unusual.taunt.onchange = changeUnusuals;
   for (const kind of ["hat", "taunt"] as const) {
+    els.unusual[kind].onchange = () => changeUnusuals(kind);
     els.unusual[`${kind}Clear`].onclick = () => {
       els.unusual[kind].value = "";
-      changeUnusuals();
+      changeUnusuals(kind);
     };
   }
   els.unusual.restart.onclick = () => { if (selected) void applyUnusuals(selected, true); };
@@ -1341,8 +1361,12 @@ export function createViewTab(els: Els) {
   function openWeaponOptions(weapon: ItemInfo, at: { under: DOMRect } | { corner: DOMRect }) {
     if (!weaponPop) return;
     const paintable = !!warPaintWeaponOf(weapon);
-    if (!paintable && !canKillstreak(weapon) && !(weapon.slot !== "taunt" && weapon.festiveModels?.length)) return closeWeaponPop();
+    const taunt = weapon.slot === "taunt";
+    if (!paintable && !taunt && !canKillstreak(weapon) && !weapon.festiveModels?.length) return closeWeaponPop();
     if (weaponPopTitle) weaponPopTitle.textContent = weapon.displayName;
+    // a taunt's popup: its unusual effect
+    if (tauntUnusualSection) tauntUnusualSection.hidden = !taunt;
+    if (taunt) { if (!unusualCatalog.length) void loadUnusualCatalog(); syncUnusuals(); }
     refreshKillstreak();
     refreshFestive();
     weaponPop.hidden = false;
@@ -1488,6 +1512,7 @@ export function createViewTab(els: Els) {
   const weapons = createWeaponsUi(els.weapons, {
     gameClass: () => gameClassOf(selected?.cls ?? ""),
     inspect: (weapon) => void inspectItem(weapon, true),
+    unusualOf: () => (selected ? unusualName("taunt", selected) : null),
     options: (weapon, card) => {
       if (weaponPopFor === weapon.id && !weaponPop?.hidden) closeWeaponPop();
       else openWeaponOptions(weapon, { under: card });
@@ -1524,6 +1549,17 @@ export function createViewTab(els: Els) {
   };
   const itemsUi = createItemsUi(els.items, {
     gameClass: () => gameClassOf(selected?.cls ?? ""),
+    // a cosmetic's popup: the unusual effect over it
+    unusualOf: (item) => (selected && selected.unusuals.hatItem === item ? unusualName("hat", selected) : null),
+    itemSection: (item) => {
+      const worn = selected?.applied.find((x) => x.item.id === item)?.item;
+      if (!selected || !hatUnusualSection || !worn || !isHat(worn)) return null;
+      unusualHatFor = item;
+      hatUnusualSection.hidden = false;
+      if (!unusualCatalog.length) void loadUnusualCatalog();
+      syncUnusuals();
+      return hatUnusualSection;
+    },
     classes: () => {
       const classes = [...new Set(cosmeticTargets().map((e) => gameClassOf(e.cls)))];
       return classes.length ? classes : [gameClassOf(selected?.cls ?? "")];
@@ -1582,6 +1618,7 @@ export function createViewTab(els: Els) {
     },
     removeTemporary: () => showCompilerItem(null),
   });
+  refreshUnusualCards = () => { itemsUi.refreshEquipped(); weapons.refreshEquipped(); };
 
   const buttons = new Map<string, HTMLButtonElement>();
   for (const [label, mdl] of CLASSES) {
@@ -2237,6 +2274,8 @@ export function createViewTab(els: Els) {
     v.setCameraSmoothing(s.cameraSmoothing);
     v.cameras.restoreViewOnExit = s.restoreViewportOnCameraExit;
     v.setScrollStrength(s.scrollStrength);
+    v.setBehindCamera(s.behindDistance, s.behindHeight, s.behindFov);
+    if (v.following?.mode === "behind" && Math.round(v.fovSetting) !== +els.fov.value) { els.fov.value = String(Math.round(v.fovSetting)); syncFov(); }
     v.setNavButtons();
     v.setHitReactions(pendingDamage ?? s.playHitReactions);
   }
@@ -2423,10 +2462,18 @@ export function createViewTab(els: Els) {
       const followChip = document.getElementById("viewFollow");
       if (followChip) {
         followChip.querySelector<HTMLButtonElement>(".followStop")!.onclick = () => viewer?.stopFollowing();
-        viewer.onFollowChange = (actor) => {
+        const modeBtn = followChip.querySelector<HTMLButtonElement>(".followMode")!;
+        modeBtn.onclick = () => viewer?.setFollowMode(viewer.following?.mode === "behind" ? "static" : "behind");
+        viewer.onFollowChange = (actor, mode) => {
           const e = actor ? entities.find((x) => x.actor === actor) : null;
           followChip.hidden = !e;
           if (e) followChip.querySelector(".followName")!.textContent = e.name || classLabelOf(e.cls);
+          modeBtn.textContent = mode === "behind" ? "Behind" : "Static";
+          // (the field of view slider: the camera behind a character has its own, the view's comes back after it)
+          els.fov.value = String(Math.round(viewer!.fovSetting));
+          syncFov();
+          modeBtn.title = mode === "behind" ? "Third-person camera behind the character. Click: keep the camera turned as it is instead (static)" : "The camera keeps its angle and moves with the character. Click: follow from behind instead (third person)";
+          renderEntities(); // (the outliner's follow label)
         };
       }
       viewer.onPick = (actor, hit, additive) => {
@@ -2460,6 +2507,8 @@ export function createViewTab(els: Els) {
       applySliders();
       applyPoint();
       viewer.setFov(+els.fov.value);
+      // (the field of view slider edits the camera behind a followed character's own while it is in use: that is a setting)
+      viewer.onBehindFov = (d) => { if (d !== settings().behindFov) void updateSetting("behindFov", d).catch(() => {}); };
       pushPost();
       void applySky().catch(() => {});
       void applyReflection().catch(() => {});
@@ -4069,6 +4118,13 @@ export function createViewTab(els: Els) {
       renderEntities();
     },
     lookThrough: (id) => lookThroughCamera(id),
+    // the follow label: follows the character (the way the last one was followed) or lets go; the hotkey (C) switches the way
+    cycleFollow: (id) => {
+      const e = entities.find((x) => x.id === id);
+      if (!e || !viewer) return;
+      if (viewer.following?.actor === e.actor) viewer.stopFollowing();
+      else viewer.focusActor(e.actor);
+    },
     remove: (picks) => {
       for (const p of picks) {
         if (p.kind !== "character") continue;
@@ -4342,6 +4398,7 @@ export function createViewTab(els: Els) {
         // (a robot has its class's icon)
         icon: buttons.get(robotOf(e.cls) ? CLASSES.find(([, , g]) => g === gameClassOf(e.cls))?.[1] ?? e.cls : e.cls)?.querySelector("img")?.src ?? "",
         fogged: e.actor.fogged,
+        follow: viewer?.following?.actor === e.actor ? viewer.following.mode : null,
         canClearParticles: !!viewer?.hasFrozenWeaponEffects(e.actor),
       })),
       ...lights.map((l): OutlinerNode => ({ kind: "light", id: l.id, label: l.name, sub: l.type, keywords: l.type, group: l.group, selected: selLights.has(l.id), off: !l.enabled, removable: true })),
@@ -4845,7 +4902,8 @@ export function createViewTab(els: Els) {
   const heldSlotOf = (e: Entity): PlaySlot | null => {
     const w = e.held;
     const cls = gameClassOf(e.cls);
-    if (!w || w.slot === "taunt" || !itemUsableBy(w, cls)) return null;
+    if (!w || !itemUsableBy(w, cls)) return null;
+    if (w.slot === "taunt") return "taunt";
     return weaponCategory(slotForClass(w, cls));
   };
 
@@ -4886,7 +4944,11 @@ export function createViewTab(els: Els) {
         defaults.set(slot, stock.sort((a, b) => rank(a) - rank(b) || a.id - b.id)[0]);
       }
     }
-    const available = PLAY_SLOTS.filter((s) => defaults.has(s));
+    // the taunt the character has on stays: it is one more slot to scroll to (clicking in it plays the taunt, G from any)
+    const taunt = e.held?.slot === "taunt" && itemUsableBy(e.held, cls) ? e.held : null;
+    const tauntWeapon = taunt?.tauntWeaponSlot ? await tauntWeaponFor(e, taunt.tauntWeaponSlot, cls) : null;
+    if (selected !== e || play?.active) return;
+    const available: PlaySlot[] = [...PLAY_SLOTS.filter((s) => defaults.has(s)), ...(taunt ? ["taunt" as const] : [])];
     playPicks.clear();
     const held = heldSlotOf(e);
     if (held && e.held) playPicks.set(held, e.held);
@@ -4901,7 +4963,7 @@ export function createViewTab(els: Els) {
     let weaponReady=false, weaponGeneration=0;
     let floor=e.actor.offset.y;
     const takeWeapon = (slot: PlaySlot) => {
-      const w = playPicks.get(slot) ?? defaults.get(slot);
+      const w = playPicks.get(slot) ?? (slot === "taunt" ? taunt : defaults.get(slot));
       if (!w) return;
       playPicks.set(slot, w);
       const generation=++weaponGeneration; weaponReady=false; v.retireWeaponEffects(e.actor);
@@ -4931,6 +4993,37 @@ export function createViewTab(els: Els) {
     leftAirborne.delete(e.actor);
     floor=e.actor.offset.y;
     const controlsEnabled = v.controls.enabled;
+    // a taunt playing when play mode starts goes on from where it is (its clip, the Animation panel's, is the taunt's)
+    const pb = e.actor.playback;
+    const tauntName = taunt ? tauntSequence(taunt.tauntScenes[cls] ?? "", cls, anim.sequenceNames(e.anim), itemModelFor(taunt, cls) ?? undefined)?.toLowerCase() : undefined;
+    const tauntShown = !!taunt && !!pb.clip && !e.actor.isPosing && !e.actor.holdsPose && (!!e.anim.targetPath || (!!tauntName && e.anim.seqName.toLowerCase() === tauntName));
+    let tauntBaked: ClipData | null = tauntShown ? pb.clip : null;
+    const tauntFrom = tauntShown && pb.clip ? pb.time % Math.max(1e-6, (pb.clip.frames - 1) / pb.clip.fps) : 0;
+    /**
+     * A scene of the taunt for play mode: the sequence its scene plays (else `fallback`), baked as the Animation panel bakes it (the same
+     * taunt in and out of play mode), and the loop the scene makes, in seconds of that sequence.
+     */
+    const tauntPart = async (scenePath: string | undefined, fallback?: string, baked?: ClipData | null): Promise<TauntPart | null> => {
+      const scene = scenePath ? await loadSceneCached(scenePath) : null;
+      const event = scene?.events.find((x) => x.kind === "sequence");
+      const loopEvent = scene?.events.find((x) => x.kind === "loop");
+      const names = [event?.params, fallback].filter((n): n is string => !!n).map((n) => n.toLowerCase());
+      const seq = e.anim.info?.sequences.find((s) => names.includes(s.name.toLowerCase()));
+      if (!seq || !e.anim.modelPath) return null;
+      const clip = baked ?? (await bakeClip(e.anim.modelPath, seq.index, e.anim.encoded.slice(), e.anim.targetPath));
+      const offset = event?.start ?? 0;
+      const to = loopEvent ? Number(loopEvent.params) - offset : NaN, at = loopEvent ? loopEvent.start - offset : NaN;
+      return { clip, loop: at > to && to >= 0 ? { to, at } : null };
+    };
+    let tauntPlan: Promise<TauntPlan | null> | null = null;
+    const makeTauntPlan = async (): Promise<TauntPlan | null> => {
+      if (!taunt) return null;
+      const main = await tauntPart(taunt.tauntScenePaths?.[cls], tauntName, tauntBaked);
+      if (!main) return null;
+      tauntBaked = main.clip;
+      const [outro, attack] = await Promise.all([tauntPart(taunt.tauntOutroPaths?.[cls]), tauntPart(taunt.tauntAttackPaths?.[cls])]);
+      return { main, outro, attack, move: taunt.tauntMove ?? null };
+    };
     play = new PlayController({
       actor: e.actor,
       anim: e.anim,
@@ -4949,7 +5042,21 @@ export function createViewTab(els: Els) {
         else if (event.type === "drop") v.fireWeapon(e.actor, event.direction);
       },
       surface: v.renderer.domElement,
-      weaponSets: () => (e.held && e.held.slot !== "taunt" ? setsOf(weaponIdleSequences(e.held, cls)) : []),
+      // (with the taunt out: the stand of the weapon it takes out, else of the one held before it, as the game taunts over the weapon out)
+      weaponSets: () => {
+        const w = e.held?.slot === "taunt" ? tauntWeapon ?? (e.weaponBeforeTaunt && itemUsableBy(e.weaponBeforeTaunt, cls) ? e.weaponBeforeTaunt : defaults.get(available[0])) : e.held;
+        return w && w.slot !== "taunt" ? setsOf(weaponIdleSequences(w, cls)) : [];
+      },
+      tauntPlan: () => (tauntPlan ??= makeTauntPlan()),
+      showTaunt: (clip, time, propTime) => {
+        const a = e.actor;
+        if (!clip) { a.setPropTime(null); return; }
+        a.playback.clip = clip;
+        a.playback.playing = false;
+        a.playback.time = time;
+        a.setPropTime(propTime ?? time);
+        a.poseBones();
+      },
       slots: () => available,
       heldSlot: () => heldSlotOf(e),
       switchSlot: takeWeapon,
@@ -4980,11 +5087,16 @@ export function createViewTab(els: Els) {
       onExit: stopPlay,
       onInputCapture: (active) => { v.controls.enabled = active ? false : controlsEnabled; },
       onInputError: (message) => { els.info.textContent = message; },
+      // (automated checks drive play mode without the OS mouse: the native capture needs the window in front, see verify-run)
+      captureMouse: (window as { __playCaptureMouse?: CaptureMouse }).__playCaptureMouse,
     });
     playActor = e.actor;
+    e.actor.setPropTime(null); // (the taunt's prop is out only while it plays)
     if (!held && available.length > 0) takeWeapon(available[0]);
     else if (e.held) takeWeapon(held!);
     play.start();
+    if (tauntBaked) void play.startTaunt(false, tauntFrom, true);
+    else if (heldSlotOf(e) === "taunt") void play.startTaunt(false); // (its slot is the taunt playing)
     void v.startProps(); // the props with collision fall, are shoved and push back until play mode ends
     syncHud();
   }
@@ -5001,6 +5113,7 @@ export function createViewTab(els: Els) {
     const pose = e?.actor.snapshotPose() ?? null;
     if(e) viewer?.freezeWeaponEffects(e.actor);
     p.stop();
+    e?.actor.clearPropTime();
     ammoLabel.textContent="";
     if (e && viewer) {
       const a = e.actor;
@@ -5069,7 +5182,7 @@ export function createViewTab(els: Els) {
     hudGame.classList.toggle("on", gaming);
     hudGame.title = gaming
       ? "Leave play mode (Esc)"
-      : "Play mode: hold LMB to fire, RMB holds minigun rev / toggles sniper scope, R reloads, Esc exits, WASD moves, Space jumps, Ctrl crouches, 1 ragdoll, 2 explode, 3-6 gestures, 8 reset damage, 9 damage on/off, mouse wheel or Q / E switch weapons";
+      : "Play mode: hold LMB to fire, RMB holds minigun rev / toggles sniper scope, R reloads, Esc exits, WASD moves, Space jumps, Ctrl crouches, C follow camera static / behind, 1 ragdoll, 2 explode, 3-6 gestures, 8 reset damage, 9 damage on/off, mouse wheel or Q / E switch weapons";
     hudGame.disabled = !actor || posing || !actor.playback.clip;
   }
   hudGame.onclick = () => {
@@ -5118,6 +5231,20 @@ export function createViewTab(els: Els) {
     if (!hotkeyMatches("view.focusSelected", ev) || ev.repeat || ev.defaultPrevented || target?.isContentEditable || (target && /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(target.tagName))) return;
     if (document.getElementById("view")?.hidden || play?.active || !selected || !viewer) return;
     viewer.focusActor(selected.actor);
+    ev.preventDefault();
+  });
+  // C: the followed character's camera between static and behind it (following no one: the selected character, from behind)
+  window.addEventListener("keydown", ev => {
+    const target = ev.target as HTMLElement | null;
+    // (in play mode the play button keeps the focus: it does not stop the key)
+    const playing = !!play?.active && !!playActor;
+    if (!hotkeyMatches("view.followMode", ev) || ev.repeat || ev.defaultPrevented || target?.isContentEditable || (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) || (!playing && target?.tagName === "BUTTON")) return;
+    if (document.getElementById("view")?.hidden || !viewer) return;
+    const who = playing ? playActor : selected?.actor ?? null;
+    const now = viewer.following;
+    if (now && (!playing || now.actor === who)) viewer.setFollowMode(now.mode === "behind" ? "static" : "behind");
+    else if (who) viewer.focusActor(who, "behind");
+    else return;
     ev.preventDefault();
   });
   // A: the camera back on all the characters (when the pointer is over the view)
@@ -8362,7 +8489,7 @@ export function createViewTab(els: Els) {
       app: "tf2-workbench",
       version: 1,
       spacing: v.getSpacing(),
-      fov: +els.fov.value,
+      fov: viewer?.viewFov ?? +els.fov.value,
       camera: v.getCamera(),
       cameras: v.cameras.snapshot(),
       viewportProjection: v.cameras.editorProjection(),

@@ -26,6 +26,11 @@ pub struct Settings {
     pub play_hit_reactions: bool,
     /// Mouse-wheel zoom multiplier (1 preserves the original strength).
     pub scroll_strength: f32,
+    /// The camera behind a followed character: how far back (character heights), how much higher than its spine it looks (units), and
+    /// its horizontal field of view (degrees).
+    pub behind_distance: f32,
+    pub behind_height: f32,
+    pub behind_fov: f32,
     /// Start with the scene of the last session (characters, loadouts, camera, lights) instead of a single Soldier (on by default).
     pub restore_last_scene: bool,
     /// Ask before closing a scene tab (on by default).
@@ -78,6 +83,9 @@ impl Default for Settings {
             restore_viewport_on_camera_exit: false,
             play_hit_reactions: true,
             scroll_strength: 1.0,
+            behind_distance: 1.6,
+            behind_height: 0.0,
+            behind_fov: 75.0,
             restore_last_scene: true,
             confirm_close_scene: true,
             allow_overlapping_cosmetics: false,

@@ -44,7 +44,8 @@ export const PLAY_DAMAGE_ACTIONS:{id:PlayDamageAction;label:string;key:string}[]
 ];
 
 export const PLAY_SLOTS = ["primary", "secondary", "melee", "utility"] as const;
-export type PlaySlot = (typeof PLAY_SLOTS)[number];
+/** A weapon slot, or the taunt the character has on (it is scrolled to like a weapon; clicking plays it). */
+export type PlaySlot = (typeof PLAY_SLOTS)[number] | "taunt";
 
 export function secondaryMode(gameClass: string, slot: PlaySlot | null, sets: readonly string[]): "minigun" | "scope" | null {
   if (slot !== "primary" || sets[0]?.toLowerCase() !== "primary") return null;
@@ -80,7 +81,7 @@ export function findScopedAttack(names: ReadonlyMap<string, number>, crouching: 
 
 /** The slot after (`step` 1) or before (-1) `current` among the slots that have a weapon; null when there are none. */
 export function nextSlot(current: PlaySlot | null, available: readonly PlaySlot[], step = 1): PlaySlot | null {
-  const order = PLAY_SLOTS.filter((s) => available.includes(s));
+  const order = ([...PLAY_SLOTS, "taunt"] as PlaySlot[]).filter((s) => available.includes(s));
   if (order.length === 0) return null;
   const at = current ? order.indexOf(current) : -1;
   if (at < 0) return order[step > 0 ? 0 : order.length - 1];

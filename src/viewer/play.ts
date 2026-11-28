@@ -2,6 +2,8 @@ import * as THREE from "three";
 import { evalPoses, type PoseRequest } from "../api";
 import type { Actor } from "./actor";
 import type { AnimState } from "./animUi";
+import type { ClipData } from "./payload";
+import { sampleClip } from "./poseRig";
 import { capturePlayMouse, type CaptureMouse } from "./playMouse";
 import type { WeaponProfile } from "../api";
 import { WeaponCycle, type WeaponEvent } from "./weaponCycle";
@@ -80,9 +82,47 @@ export interface PlayHost {
   onHealing?: (direction:THREE.Vector3,attack:boolean) => boolean;
   onFiring?: (firing: boolean) => void;
   onAmmo?: (text: string) => void;
+  /**
+   * The taunt the character has on (null: none): its scenes' clips, baked as the Animation panel plays them (the same taunt in and out of
+   * play mode), and how a moving taunt moves. It plays when its slot is taken out, or with G.
+   */
+  tauntPlan?: () => Promise<TauntPlan | null>;
+  /**
+   * Shows a taunt clip at a time, its prop at `propTime` of the taunt's own (main) clip, or ends the taunt (null: the prop is put away,
+   * play mode poses again).
+   */
+  showTaunt?: (clip: ClipData | null, time: number, propTime?: number) => void;
 }
 
+/** One scene of a taunt: its sequence's clip, and the loop its scene makes (seconds of the clip: at `at` it goes back to `to`). */
+export interface TauntPart {
+  clip: ClipData;
+  loop: { to: number; at: number } | null;
+}
+
+/** How a moving taunt moves (items_game's taunt move attributes): units / degrees per second, seconds to full speed, always forward. */
+export interface TauntMove {
+  speed: number;
+  turn: number;
+  moveAccel: number;
+  turnAccel: number;
+  forward: boolean;
+}
+
+/** A taunt: its scene, the one stopping it plays (outro) and the one the attack button plays (the Rocket Jockey's cheer), its movement. */
+export interface TauntPlan {
+  main: TauntPart;
+  outro: TauntPart | null;
+  attack: TauntPart | null;
+  move: TauntMove | null;
+}
+
+/** `v` moved toward `goal` by at most `step`. */
+const approach = (v: number, goal: number, step: number) => (v < goal ? Math.min(goal, v + step) : Math.max(goal, v - step));
+
 const FADE_TIME = 0.15;
+/** Seconds a taunt crossfades in from the pose the player was in, and out into play mode's again (studiomdl's default sequence fade, 0.2 s: the game's sequence transition). */
+const TAUNT_FADE = 0.2;
 const MOUSE_DEGREES_PER_PIXEL = 0.25;
 /** How high a step the character walks up or down without jumping or falling (the game's 18 units). */
 const STEP = 18;
@@ -108,7 +148,7 @@ interface Playing {
 
 /**
  * Steers a character like in the game: WASD walks relative to where it faces, moving the mouse over the view turns and tilts it
- * (the body_yaw / body_pitch aim), Space jumps, Ctrl or C crouches, 1-4 and Q change the weapon. The camera does not follow.
+ * (the body_yaw / body_pitch aim), Space jumps, Ctrl crouches (C is the follow camera's static / behind), 1-4 and Q change the weapon. The camera does not follow.
  * Every frame the engine side evaluates the sequences (with their blend grids and aim layers) at the chosen cycle and parameters,
  * and a change of animation fades over a short time like the game's.
  */
@@ -257,6 +297,9 @@ export class PlayController {
     this.host.setHeldHidden?.(false);
     this.host.actor.setHandLock(null);
     this.meal = null;
+    this.taunting = null;
+    this.tauntFade = null;
+    this.tauntToken++;
     this.host.actor.setHeldBodyState(0);
   }
 
@@ -270,7 +313,7 @@ export class PlayController {
     if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
     if (document.getElementById("view")?.hidden) return;
     const code = ev.code;
-    const mine = /^(Key[WASDCQER]|Space|Control(Left|Right)|Arrow(Up|Down|Left|Right)|Digit[1-689]|Escape)$/.test(code);
+    const mine = /^(Key[WASDQERG]|Space|Control(Left|Right)|Arrow(Up|Down|Left|Right)|Digit[1-689]|Escape)$/.test(code);
     if (!mine || ev.altKey || ev.metaKey) return;
     ev.preventDefault();
     ev.stopImmediatePropagation();
@@ -285,6 +328,7 @@ export class PlayController {
     else if (code === "KeyQ") this.cycleWeapon(1);
     else if (code === "KeyE") this.cycleWeapon(-1);
     else if (code === "KeyR") this.trigger("reload");
+    else if (code === "KeyG") { if (this.taunting) this.stopTaunt(); else void this.startTaunt(true); }
     else if (code.startsWith("Digit")) {
       const damage=PLAY_DAMAGE_ACTIONS.find(a=>a.key===code.slice(5));if(damage){this.damage(damage.id);return;}
       const action = PLAY_ACTIONS.find(a=>a.key===code.slice(5));
@@ -301,9 +345,13 @@ export class PlayController {
     if(this.host.isDamaged?.())return;
     const next = nextSlot(this.host.heldSlot(), this.host.slots(), step);
     if (next && next !== this.host.heldSlot()) {
+      if (next === "taunt") this.slotBeforeTaunt = this.host.heldSlot();
       this.resetWeaponInput();
       this.fight = null;
+      this.endTaunt();
       this.host.switchSlot(next);
+      // the taunt's slot plays it: standing in it with its prop and the weapon's stand is not a state the game has
+      if (next === "taunt") void this.startTaunt(false);
     }
   }
 
@@ -320,6 +368,17 @@ export class PlayController {
   private weaponMode() { return this.host.weaponProfile?.()?.weaponClass==="tf_weapon_compound_bow" ? null : secondaryMode(this.host.gameClass, this.host.heldSlot(), this.host.weaponSets()); }
 
   private onMouseButtons(flags: number) {
+    // the taunt's slot: the attack plays the taunt (again: stops it)
+    if (this.host.heldSlot() === "taunt") {
+      if (flags & 1) {
+        const tg = this.taunting;
+        // (a taunt with an attack scene plays it: the Rocket Jockey cheers; else the attack stops the taunt, as playing it again would)
+        if (tg?.plan.attack && tg.kind === "main") this.playTauntPart("attack");
+        else if (tg) { if (tg.kind !== "attack") this.stopTaunt(); }
+        else void this.startTaunt(false);
+      }
+      return;
+    }
     if (flags & 1) { this.primaryDown = true; if (this.weaponMode() !== "minigun") {
       if (this.host.weaponProfile?.()) this.updateFiring(0); else this.animate("attack");
     } }
@@ -408,6 +467,133 @@ export class PlayController {
     // Source reload events replace the current third-person gesture at its authored
     // rate. Viewmodel phase timers must never compress the full body gesture.
     this.fight = seqs.length ? {seqs:[seqs[index]],at:0,cycle:0,rate:this.weapon?.profile.reloadPlaybackRate ?? 1} : null;
+  }
+
+  // --- the taunt the character has on -------------------------------------------------------------------------------------------------
+  /**
+   * The taunt playing: its plan, the scene of it playing (the taunt's own, its attack's or its outro) with the seconds it has run, the time of
+   * the prop (it follows the taunt's own scene, looping with it), and a moving taunt's speed (units / s) and turning (degrees / s). While it
+   * plays its clip is the pose (the aim and the gestures wait); a moving taunt moves the player with the movement keys, the game's way.
+   */
+  private taunting: { plan: TauntPlan; kind: "main" | "attack" | "outro"; part: TauntPart; t: number; propT: number; speed: number; turn: number } | null = null;
+  private tauntToken = 0;
+  /** The slot out before the taunt's: a taunt that is over puts its weapon back in the hand (the game's player is in his weapon again). */
+  private slotBeforeTaunt: PlaySlot | null = null;
+  /** The pose a taunt crossfades from (into it, between its scenes, or out of it into play mode's pose), with the seconds of the fade left. */
+  private tauntFade: { pose: RawPose; left: number } | null = null;
+
+  /**
+   * Plays the taunt (G takes its slot out first). `from`: a moment to start at (seconds); `continuing`: the taunt is already showing (play mode
+   * started in it), so it goes on as it is instead of blending in.
+   */
+  async startTaunt(fromKey: boolean, from = 0, continuing = false) {
+    if (this.taunting || this.meal || this.host.isDamaged?.() || !grounded(this.motion)) return;
+    if (fromKey && this.host.heldSlot() !== "taunt" && this.host.slots().includes("taunt")) { this.slotBeforeTaunt = this.host.heldSlot(); this.resetWeaponInput(); this.host.switchSlot("taunt"); }
+    const token = ++this.tauntToken;
+    const plan = (await this.host.tauntPlan?.()) ?? null;
+    const clip = plan?.main.clip;
+    if (!plan || !clip || clip.fps <= 0 || clip.frames < 2 || token !== this.tauntToken || !this.running || this.taunting) return;
+    this.fight = this.signal = null;
+    this.motion.crouching = false;
+    this.motion.vx = this.motion.vz = 0;
+    const t = Math.min(Math.max(0, from), (clip.frames - 1) / clip.fps);
+    this.taunting = { plan, kind: "main", part: plan.main, t, propT: t, speed: 0, turn: 0 };
+    const snap = continuing ? null : this.host.actor.snapshotPose();
+    this.tauntFade = snap ? { pose: snap, left: TAUNT_FADE } : null;
+    this.showTauntFrame();
+  }
+
+  /** Goes on to another scene of the taunt playing (its attack's, its outro), from its start, blending into it. */
+  private playTauntPart(kind: "attack" | "outro") {
+    const tg = this.taunting;
+    const part = tg?.plan[kind];
+    if (!tg || !part || part.clip.frames < 2) return;
+    const snap = this.host.actor.snapshotPose();
+    this.tauntFade = snap ? { pose: snap, left: TAUNT_FADE } : null;
+    tg.kind = kind;
+    tg.part = part;
+    tg.t = 0;
+    this.showTauntFrame();
+  }
+
+  /** Stops the taunt the way the game does: its outro plays when it has one (then it ends), else it ends now. */
+  private stopTaunt() {
+    const tg = this.taunting;
+    if (!tg || tg.kind === "outro") return;
+    if (tg.plan.outro) this.playTauntPart("outro");
+    else this.endTaunt(true);
+  }
+
+  /** Advances the taunt: its scene's loop, its end (the attack's goes back to the taunt's loop, the rest end it), its prop. */
+  private advanceTaunt(dt: number) {
+    const tg = this.taunting;
+    if (!tg) return;
+    tg.t += dt;
+    tg.propT += dt;
+    const main = tg.plan.main;
+    if (main.loop && tg.propT >= main.loop.at) tg.propT -= main.loop.at - main.loop.to;
+    const loop = tg.part.loop;
+    if (loop && tg.t >= loop.at) tg.t -= loop.at - loop.to;
+    if (tg.t < (tg.part.clip.frames - 1) / tg.part.clip.fps) return;
+    if (tg.kind === "attack" && main.loop) {
+      const snap = this.host.actor.snapshotPose();
+      this.tauntFade = snap ? { pose: snap, left: TAUNT_FADE } : null;
+      tg.kind = "main"; tg.part = main; tg.t = tg.propT = main.loop.to;
+    } else this.endTaunt(true);
+  }
+
+  /**
+   * A moving taunt's step (CTFGameMovement while taunting): forward (or always, `forward`) and back at its speed, the strafe keys turn the
+   * player at its turn speed, each reached over its acceleration time. Its outro holds him where he is.
+   */
+  private moveTaunt(dt: number, forward: number, right: number) {
+    const tg = this.taunting, mv = tg?.plan.move, m = this.motion;
+    if (!tg || !mv || tg.kind === "outro") {
+      if (tg) tg.speed = tg.turn = 0;
+      m.vx = m.vz = 0;
+      return;
+    }
+    const want = mv.forward ? 1 : forward;
+    tg.speed = approach(tg.speed, want * mv.speed, mv.moveAccel > 0 ? (mv.speed / mv.moveAccel) * dt : Infinity);
+    tg.turn = approach(tg.turn, -right * mv.turn, mv.turnAccel > 0 ? (mv.turn / mv.turnAccel) * dt : Infinity);
+    m.yaw += THREE.MathUtils.degToRad(tg.turn) * dt;
+    m.feetYaw = m.goalFeetYaw = m.yaw;
+    m.vx = Math.sin(m.yaw) * tg.speed;
+    m.vz = Math.cos(m.yaw) * tg.speed;
+    m.x += m.vx * dt;
+    m.z += m.vz * dt;
+  }
+
+  /** The taunt's frame on the character, mixed with the pose it fades in from while the fade lasts. */
+  private showTauntFrame() {
+    const tg = this.taunting;
+    if (!tg) return;
+    const clip = tg.part.clip;
+    const fade = this.tauntFade;
+    if (!fade || fade.left <= 0) { this.host.showTaunt?.(clip, tg.t, tg.propT); return; }
+    const target = sampleClip(clip, tg.t * clip.fps);
+    if (target.pos.length !== fade.pose.pos.length) { this.tauntFade = null; this.host.showTaunt?.(clip, tg.t, tg.propT); return; }
+    const a = this.host.actor;
+    a.setLive(blendPoses(fade.pose, target, 1 - fade.left / TAUNT_FADE, { pos: new Float32Array(target.pos.length), quat: new Float32Array(target.quat.length) }));
+    a.setPropTime(tg.propT);
+  }
+
+  /** Ends the taunt; `over`: it finished (or was stopped) in its slot, which gives the hand back to the weapon out before it. */
+  private endTaunt(over = false) {
+    this.tauntToken++;
+    if (!this.taunting) return;
+    // (play mode's pose takes over from the taunt's last frame over a fade)
+    const snap = this.host.actor.snapshotPose();
+    this.tauntFade = snap ? { pose: snap, left: TAUNT_FADE } : null;
+    this.taunting = null;
+    this.motion.vx = this.motion.vz = 0;
+    this.cur = this.prev = null; // (play mode poses from the stand again, not from before the taunt)
+    this.host.showTaunt?.(null, 0);
+    if (over && this.host.heldSlot() === "taunt") {
+      const slots = this.host.slots();
+      const back = this.slotBeforeTaunt && this.slotBeforeTaunt !== "taunt" && slots.includes(this.slotBeforeTaunt) ? this.slotBeforeTaunt : slots.find((x) => x !== "taunt");
+      if (back) { this.resetWeaponInput(); this.host.switchSlot(back); }
+    }
   }
 
   // --- lunchboxes ------------------------------------------------------------------------------------------------------------------
@@ -520,6 +706,7 @@ export class PlayController {
 
   private onPointerMove(x: number, y: number) {
     if (!this.running || !document.hasFocus() || document.getElementById("view")?.hidden) return;
+    if (this.taunting) return; // (a taunt holds the player as he stands: the mouse does not turn him)
     const m = this.motion;
     m.yaw -= x * MOUSE_DEGREES_PER_PIXEL * (Math.PI / 180);
     m.pitch = Math.min(Math.max(m.pitch - y * MOUSE_DEGREES_PER_PIXEL, this.pitchRange.start), this.pitchRange.end);
@@ -532,19 +719,27 @@ export class PlayController {
     const m = this.motion;
     this.updateWeaponInput(dt);
     for (const [item, left] of this.mealMeter) this.mealMeter.set(item, Math.max(0, left - dt));
+    if (this.taunting) {
+      if (this.tauntFade) this.tauntFade.left -= dt;
+      this.advanceTaunt(dt);
+      this.showTauntFrame();
+    } else if (this.tauntFade && (this.tauntFade.left -= dt) <= 0) this.tauntFade = null;
+    const still = !!this.meal || !!this.taunting;
     this.updateFiring(dt);
     this.updateHeldVisibility();
     this.updateHandLock();
     const aiming = this.scoped || this.spin !== "idle" || this.weapon?.chargeTime!==null && this.weapon?.chargeTime!==undefined;
     const run = aiming ? (this.weaponMode() === "minigun" ? 110 : 80) : CLASS_SPEED[this.host.gameClass] ?? 300;
-    stepMotion(
+    const moving = this.taunting?.plan.move;
+    if (moving) this.moveTaunt(dt, (key("KeyW", "ArrowUp") ? 1 : 0) - (key("KeyS", "ArrowDown") ? 1 : 0), (key("KeyD", "ArrowRight") ? 1 : 0) - (key("KeyA", "ArrowLeft") ? 1 : 0));
+    else stepMotion(
       m,
       {
         // (a taunt holds the player where he stands)
-        forward: this.meal ? 0 : (key("KeyW", "ArrowUp") ? 1 : 0) - (key("KeyS", "ArrowDown") ? 1 : 0),
-        right: this.meal ? 0 : (key("KeyD", "ArrowRight") ? 1 : 0) - (key("KeyA", "ArrowLeft") ? 1 : 0),
-        crouch: !this.meal && key("ControlLeft", "ControlRight", "KeyC"),
-        jump: !this.meal && (this.jumpQueued || key("Space")),
+        forward: still ? 0 : (key("KeyW", "ArrowUp") ? 1 : 0) - (key("KeyS", "ArrowDown") ? 1 : 0),
+        right: still ? 0 : (key("KeyD", "ArrowRight") ? 1 : 0) - (key("KeyA", "ArrowLeft") ? 1 : 0),
+        crouch: !still && key("ControlLeft", "ControlRight"),
+        jump: !still && (this.jumpQueued || key("Space")),
       },
       dt,
       run,
@@ -552,7 +747,7 @@ export class PlayController {
     this.jumpQueued = false;
     // TF2 cancels rifle zoom when the player jumps.
     if (this.scoped && !grounded(m)) this.scoped = false;
-    stepFeet(m, isMoving(m, run), dt);
+    if (!moving) stepFeet(m, isMoving(m, run), dt);
     const o = this.startPose;
     // the height is over the floor under the feet: the start's, or a map's where the character is
     this.floorY ??= o.y;
@@ -578,6 +773,7 @@ export class PlayController {
     this.host.actor.setPlacement(o.x + m.x, this.floorY + m.h, o.z + m.z, m.feetYaw);
     this.host.onFrame?.(o.x + m.x, o.z + m.z, m.yaw);
 
+    if (this.taunting) return; // (the taunt's clip is the pose)
     this.chooseAnimation(run);
     this.advance(dt, run);
     void this.pose(run);
@@ -715,12 +911,14 @@ export class PlayController {
       const requests: PoseRequest[] = [this.request(cur)];
       if (prev && fade > 0) requests.push(this.request(prev));
       const buf = await evalPoses(path, requests, this.params(run), this.params(run, true));
-      if (!this.running || this.host.isDamaged?.()) return;
+      if (!this.running || this.host.isDamaged?.() || this.taunting) return;
       const f = new Float32Array(buf);
       const nb = f.length / (7 * requests.length);
       const at = (i: number): RawPose => ({ pos: f.subarray(i * nb * 7, i * nb * 7 + nb * 3), quat: f.subarray(i * nb * 7 + nb * 3, (i + 1) * nb * 7) });
       let pose = at(0);
       if (requests.length > 1) pose = blendPoses(at(1), at(0), 1 - fade, { pos: new Float32Array(nb * 3), quat: new Float32Array(nb * 4) });
+      const out = this.tauntFade;
+      if (out && out.left > 0 && out.pose.pos.length === pose.pos.length) pose = blendPoses(out.pose, pose, 1 - out.left / TAUNT_FADE, { pos: new Float32Array(nb * 3), quat: new Float32Array(nb * 4) });
       a.setLive({ pos: pose.pos.slice(), quat: pose.quat.slice() });
     } catch (err) {
       console.error(err);

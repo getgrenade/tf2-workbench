@@ -2,11 +2,13 @@ import { editedItems } from "./editedItems";
 import { isRobotOnlyItem } from "./robotItems";
 import { onSettingsChange, settings } from "../settingsStore";
 import { showContextMenu } from "./contextMenu";
-import { itemIcon } from "./itemIcons";
+import { itemIcon, trimmedItemIcon } from "./itemIcons";
 import { createBrowserSort, createBrowserView, makeTile, setTileImage } from "./browserView";
 import { loadItemDb } from "./itemCatalog";
 import { attachItemTooltip, itemTooltipLines } from "./itemTooltip";
 import { itemImageFor, itemUsableBy, newestFirst, slotForClass, weaponCategory, type ItemDb, type ItemInfo } from "./payload";
+
+import { UNUSUAL_ICON } from "./unusualIcon";
 
 export interface WeaponsEls {
   search: HTMLInputElement;
@@ -34,6 +36,8 @@ export interface WeaponsHooks {
   inspect: (weapon: ItemInfo) => void;
   /** Its card was clicked: its options (war paint, killstreak, Festivizer) open under the card, or close. */
   options: (weapon: ItemInfo, card: DOMRect) => void;
+  /** The name of the held taunt's unusual effect, or null (its card shows the unusual icon). */
+  unusualOf?: (item: ItemInfo) => string | null;
 }
 
 /** Border colours by item quality, same as the cosmetics browser. */
@@ -110,7 +114,7 @@ export function createWeaponsUi(els: WeaponsEls, hooks: WeaponsHooks) {
           iconObserver?.unobserve(tile);
           const image = tile.dataset.image;
           if (!image) continue;
-          void itemIcon(image).then((url) => {
+          void (tile.classList.contains("tauntTile") ? trimmedItemIcon(image) : itemIcon(image)).then((url) => {
             if (url && tile.isConnected) setTileImage(tile, url);
           });
         }
@@ -127,8 +131,9 @@ export function createWeaponsUi(els: WeaponsEls, hooks: WeaponsHooks) {
         sub: category === "taunt" ? "taunt" : slotForClass(w, cls),
         edited: editedItems.has(w.id),
       });
+      if (category === "taunt") tile.classList.add("tauntTile");
       tile.onclick = () => pick(w);
-      attachItemTooltip(tile, () => itemTooltipLines(w, { hint: category === "taunt" ? "Click to play the taunt" : `${slotForClass(w, cls)} · click to hold it` }));
+      attachItemTooltip(tile, () => itemTooltipLines(w));
       if (category !== "taunt") {
         tile.oncontextmenu = (ev) => {
           ev.preventDefault();
@@ -153,12 +158,14 @@ export function createWeaponsUi(els: WeaponsEls, hooks: WeaponsHooks) {
     if (!current) return;
     const card = document.createElement("div");
     card.className = "equip held";
-    card.innerHTML = `<div class="equipIcon"><b class="x" title="Put it away">✕</b></div><div class="equipName">${escapeText(current.displayName)}</div>`;
+    const effect = current.slot === "taunt" ? hooks.unusualOf?.(current) ?? null : null;
+    const star = effect ? `<img class="unusualBadge" src="${UNUSUAL_ICON}" alt="" title="${escapeText(`Unusual effect: ${effect}`)}">` : "";
+    card.innerHTML = `<div class="equipIcon">${star}<b class="x" title="Put it away">✕</b></div><div class="equipName">${escapeText(current.displayName)}</div>`;
     card.title = `${current.displayName} (${current.slot === "taunt" ? "taunt" : slotForClass(current, hooks.gameClass())})`;
     const image = itemImageFor(current);
     if (image) {
       const icon = card.querySelector<HTMLElement>(".equipIcon")!;
-      void itemIcon(image).then((url) => { if (url && card.isConnected) icon.style.backgroundImage = `url(${url})`; });
+      void (current.slot === "taunt" ? trimmedItemIcon(image) : itemIcon(image)).then((url) => { if (url && card.isConnected) icon.style.backgroundImage = `url(${url})`; });
     }
     card.onclick = (ev) => {
       if ((ev.target as HTMLElement).classList.contains("x")) putAway();
@@ -226,6 +233,8 @@ export function createWeaponsUi(els: WeaponsEls, hooks: WeaponsHooks) {
   editedItems.onChange(() => render());
   return {
     reloadCatalog(next: ItemDb) { db = next; render(); },
+    /** Redraws the held item's card (its unusual icon). */
+    refreshEquipped: () => renderEquipped(),
     /** The held item as picked, even when the displayed class cannot use it. */
     getHeld: () => held,
     /** Shows another character's held item (nothing is applied). */

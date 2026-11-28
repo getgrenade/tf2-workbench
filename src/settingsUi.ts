@@ -133,6 +133,31 @@ export async function createSettingsUi(root: HTMLElement) {
     return el;
   }
 
+  /** A number setting with a scrubbable field. */
+  function numberRow(key: "behindDistance" | "behindHeight" | "behindFov", label: string, description: string, min: number, max: number, step: number, drag: number): HTMLElement {
+    const input = document.createElement("input");
+    input.type = "number"; input.className = "settingNumber";
+    input.min = String(min); input.max = String(max); input.step = String(step);
+    const decimals = step < 1 ? String(step).split(".")[1].length : 0;
+    const sync = () => { if (document.activeElement !== input) input.value = String(currentSettings()[key]); };
+    input.setAttribute("aria-label", label);
+    input.onchange = async () => {
+      if (!Number.isFinite(input.valueAsNumber)) { input.value = String(settings[key]); return; }
+      const value = +Math.max(min, Math.min(max, input.valueAsNumber)).toFixed(decimals); input.value = String(value);
+      try { await updateSetting(key, value); settings = { ...settings, [key]: value }; } catch (error) { failed(error); }
+    };
+    onSettingsChange(sync); sync();
+    const el = row(label, description, input);
+    el.classList.add("scrubRow");
+    attachNumberDrag(input, drag, { start() {}, change: value => { input.value = String(+Math.max(min, Math.min(max, value)).toFixed(decimals)); input.dispatchEvent(new Event("change")); }, end() { input.dispatchEvent(new Event("change")); } });
+    return el;
+  }
+  const behindRows = () => [
+    numberRow("behindDistance", "Distance", "How far back the camera behind a followed character is, in the character's heights (1.6: over its shoulders, the character most of the view).", .3, 8, .1, .01),
+    numberRow("behindHeight", "Vertical offset", "How much higher (or lower, below 0) than the character's spine the camera behind it looks, in units.", -100, 100, 1, .5),
+    numberRow("behindFov", "Field of view", "The horizontal field of view of the camera behind a followed character, in degrees (TF2's own third person: 90). While you follow from behind, the World field of view slider changes it too.", 10, 120, 1, .2),
+  ];
+
   function scaleRow(): HTMLElement {
     const select = document.createElement("select");
     select.add(new Option("Auto (fits the screen)", "0"));
@@ -252,7 +277,7 @@ export async function createSettingsUi(root: HTMLElement) {
   const builders: Record<SectionId, () => HTMLElement[]> = {
     general: () => [aboutGroup(), group("", ...toggles("general"))],
     interface: () => [group("Size", scaleRow()), group("Style", templateRow(), fontRow()), createThemeSection(), group("Display", ...toggles("interface"))],
-    viewport: () => [group("Navigation", ...toggles("viewport").slice(0, 2), scrollRow()), group("Screenshots", screenshotRow(), ...toggles("viewport").slice(2))],
+    viewport: () => [group("Navigation", ...toggles("viewport").slice(0, 2), scrollRow()), group("Follow from behind", ...behindRows()), group("Screenshots", screenshotRow(), ...toggles("viewport").slice(2))],
     hotkeys: () => [createHotkeysSection()],
     rigs: () => [createRigSettings()],
     storage: () => [cacheGroup()],

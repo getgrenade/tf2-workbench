@@ -171,6 +171,22 @@ function halton(i: number, base: number): number {
 /** A map's light at a place: its ambient cube (+X -X +Y -Y +Z -Z of the view) and its strongest light (direction toward it, colour). */
 export interface WorldLight { cube: THREE.Vector3[]; keyDir: THREE.Vector3 | null; keyColor: THREE.Vector3 }
 
+/** How the view follows a character: `static` keeps the camera as it is turned, moved along; `behind` is a third-person camera behind its spine. */
+export type FollowMode = "static" | "behind";
+
+/**
+ * The character the view follows, where it was a frame ago, how, the height of its spine over its feet (what the camera behind it looks at),
+ * the time of the last frame, and the static view to go back to from behind it (camera and orbit centre, from the character).
+ */
+interface FollowState {
+  actor: Actor;
+  at: THREE.Vector3;
+  mode: FollowMode;
+  spine: number;
+  t: number;
+  staticView: { position: THREE.Vector3; target: THREE.Vector3 } | null;
+}
+
 export class Viewer {
   readonly cameras: CameraRig;
   readonly cameraOverlay: CameraOverlay;
@@ -3449,15 +3465,25 @@ void main() {
     }
     this.camera.aspect = w / h;
     // hlmv specifies a horizontal FOV; three wants vertical.
-    this.camera.fov = this.fixedVerticalFov ?? (2 * Math.atan(Math.tan((this.fovX * Math.PI) / 360) / this.camera.aspect) * 180) / Math.PI;
+    this.camera.fov = this.fixedVerticalFov ?? (2 * Math.atan(Math.tan((this.fovSetting * Math.PI) / 360) / this.camera.aspect) * 180) / Math.PI;
     this.camera.updateProjectionMatrix();
   }
 
   /** Sets the horizontal field of view in degrees; the camera position is unchanged. */
   setFov(degrees: number) {
-    this.fovX = degrees;
+    // (while the view follows a character from behind, the field of view is that camera's own)
+    if (this.followState?.mode === "behind") { this.behindFovX = degrees; this.onBehindFov(degrees); }
+    else this.fovX = degrees;
     this.resize();
   }
+  /** The horizontal field of view in use: the view's, or the camera behind a followed character's own. */
+  get fovSetting(): number { return this.followState?.mode === "behind" ? this.behindFovX : this.fovX; }
+  /** The view's own horizontal field of view (not the one behind a followed character). */
+  get viewFov(): number { return this.fovX; }
+  /** The field of view of the camera behind a followed character (horizontal degrees; TF2's own is 90). */
+  private behindFovX = 75;
+  /** The field of view behind a followed character was changed (to keep it). */
+  onBehindFov: (degrees: number) => void = () => {};
 
   /** Camera on the selected character's face (its eyes, or its head when it has none), from the way the view looks now. */
   focusFace(navigated = false) {
@@ -3582,36 +3608,128 @@ void main() {
     this.controls.zoomSpeed = Number.isFinite(strength) ? Math.max(.1, Math.min(10, strength)) : 1;
   }
 
-  /** The character the view follows since it was double-clicked, and where it was then (the view moves as much as it moves). */
-  private followState: { actor: Actor; at: THREE.Vector3 } | null = null;
+  /**
+   * The character the view follows (a double click, or its outliner label), where it was a frame ago, how (`static`: the camera moves as
+   * much as it moves, turned as it was; `behind`: a third-person camera over its shoulders, swinging round behind it as it turns), and the
+   * height of its spine over its feet (what the camera behind it looks at).
+   */
+  private followState: FollowState | null = null;
   private get followed() { return this.followState; }
-  private set followed(f: { actor: Actor; at: THREE.Vector3 } | null) {
-    const was = this.followState?.actor ?? null;
+  private set followed(f: FollowState | null) {
+    const was = this.followState;
     this.followState = f;
-    if ((f?.actor ?? null) !== was) this.onFollowChange(f?.actor ?? null);
+    if (was?.mode === "behind" || f?.mode === "behind") this.resize(); // (the field of view: behind it has its own)
+    if ((f?.actor ?? null) !== (was?.actor ?? null)) this.onFollowChange(f?.actor ?? null, f?.mode ?? null);
   }
-  /** The character the view starts or stops following (null: none now), for the view's "Following" chip. */
-  onFollowChange: (actor: Actor | null) => void = () => {};
+  /**
+   * The camera behind a character (Settings, Viewport): how far back (in the character's heights), how much higher than its spine it
+   * looks (units), and how high it is (radians). The wheel and a drag change it only until it starts behind a character again.
+   */
+  private behindView = { back: 1.6, height: 0, el: 0.2 };
+  /** The camera behind a followed character's distance (heights), vertical offset (units) and horizontal field of view (degrees). */
+  setBehindCamera(back: number, height: number, fov: number) {
+    const changed = back !== this.behindView.back || height !== this.behindView.height;
+    this.behindView = { ...this.behindView, back, height };
+    this.behindFovX = fov;
+    const f = this.followState;
+    if (f?.mode === "behind") { this.resize(); if (changed) this.startBehind(f); }
+  }
+  /** The way a newly followed character is followed: the last one picked. */
+  private followModePick: FollowMode = "static";
+  /** The character the view starts or stops following (null: none now), and how; for the view's "Following" chip and the outliner. */
+  onFollowChange: (actor: Actor | null, mode: FollowMode | null) => void = () => {};
   /** Lets go of the character the view follows (the camera stays where it is). */
   stopFollowing() { this.followed = null; }
+  /** The character the view follows and how (null: none). */
+  get following(): { actor: Actor; mode: FollowMode } | null { return this.followState ? { actor: this.followState.actor, mode: this.followState.mode } : null; }
+  /** Follows the character it follows another way (and the next one that way too). */
+  setFollowMode(mode: FollowMode) {
+    this.followModePick = mode;
+    const f = this.followState;
+    if (!f || f.mode === mode) return;
+    f.t = performance.now();
+    if (mode === "behind") {
+      // (the static view is kept, where it is from the character, for going back to it)
+      f.staticView = { position: this.camera.position.clone().sub(f.actor.offset), target: this.controls.target.clone().sub(f.actor.offset) };
+      f.mode = mode;
+      this.resize();
+      this.startBehind(f);
+    } else {
+      f.mode = mode;
+      this.resize();
+      const v = f.staticView;
+      if (v) {
+        this.camera.position.copy(f.actor.offset).add(v.position);
+        this.controls.target.copy(f.actor.offset).add(v.target);
+      }
+      f.at.copy(f.actor.offset);
+    }
+    this.onFollowChange(f.actor, mode);
+  }
 
-  /** Frames a character (zoomed in on it, from where the camera looks now) and keeps the view on it until something else moves the view. */
-  focusActor(actor: Actor) {
+  /**
+   * Frames a character (zoomed in on it, from where the camera looks now) and keeps the view on it until something else moves the view;
+   * `mode`: how (else the way the last one was followed).
+   */
+  focusActor(actor: Actor, mode: FollowMode = this.followModePick) {
     if (!actor.hasModel) return;
     const box = actor.computeBounds(new THREE.Box3());
     if (box.isEmpty()) return;
+    this.followModePick = mode;
     this.cameras.prepareNavigation();
-    this.followed = { actor, at: actor.offset.clone() };
+    // (the spine: three quarters of the way up the character from its feet)
+    const f: FollowState = { actor, at: actor.offset.clone(), mode, spine: Math.max(10, (box.max.y - actor.offset.y) * 0.72), t: performance.now(), staticView: null };
+    this.followed = null;
+    this.followed = f;
+    if (mode === "behind") {
+      f.staticView = { position: this.camera.position.clone().sub(actor.offset), target: this.controls.target.clone().sub(actor.offset) };
+      this.startBehind(f);
+      return;
+    }
     this.frameCamera(box, true, undefined, true);
     const center = box.getCenter(new THREE.Vector3());
     window.setTimeout(() => this.ping(center), this.controls.enableDamping ? 250 : 0);
   }
 
-  /** While the view follows a character: moves the camera and what it looks at by as much as the character moved. */
+  /**
+   * The camera behind a character starts as far back and as high as the last one behind a character was (at first: over its shoulders,
+   * a little above, the character most of the view's height); the wheel takes it nearer or farther, a drag up or down higher or lower.
+   */
+  private startBehind(f: FollowState) {
+    const target = f.actor.offset.clone().add(new THREE.Vector3(0, f.spine + this.behindView.height, 0));
+    const back = new THREE.Vector3(-Math.sin(f.actor.yaw), 0, -Math.cos(f.actor.yaw));
+    const dist = (f.spine / 0.72) * this.behindView.back;
+    const el = this.behindView.el;
+    this.controls.target.copy(target);
+    this.camera.position.copy(target).addScaledVector(back, dist * Math.cos(el)).add(new THREE.Vector3(0, dist * Math.sin(el), 0));
+  }
+
+  /**
+   * While the view follows a character. Static: moves the camera and what it looks at by as much as the character moved. Behind: looks at
+   * its spine from where the camera is above it and as far as it is (dragging up or down and the wheel change those), swinging round behind
+   * it as it turns (a dragged-away view swings back).
+   */
   private followActor() {
     const f = this.followed;
     if (!f) return;
     if (!this.actorList.includes(f.actor) || this.cameras.active) { this.followed = null; return; }
+    const now = performance.now();
+    const dt = Math.min(0.1, Math.max(0, (now - f.t) / 1000));
+    f.t = now;
+    if (f.mode === "behind") {
+      f.at.copy(f.actor.offset);
+      const target = f.actor.offset.clone().add(new THREE.Vector3(0, f.spine + this.behindView.height, 0));
+      const off = this.camera.position.clone().sub(this.controls.target);
+      const dist = Math.max(1, off.length());
+      const el = Math.asin(THREE.MathUtils.clamp(off.y / dist, -0.6, 1.3));
+      let az = Math.atan2(off.x, off.z);
+      const want = Math.atan2(-Math.sin(f.actor.yaw), -Math.cos(f.actor.yaw));
+      const diff = Math.atan2(Math.sin(want - az), Math.cos(want - az));
+      az += diff * (1 - Math.exp(-dt * 5));
+      this.controls.target.copy(target);
+      this.camera.position.set(target.x + Math.sin(az) * Math.cos(el) * dist, target.y + Math.sin(el) * dist, target.z + Math.cos(az) * Math.cos(el) * dist);
+      return;
+    }
     const moved = f.actor.offset.clone().sub(f.at);
     if (moved.lengthSq() < 1e-8) return;
     f.at.copy(f.actor.offset);

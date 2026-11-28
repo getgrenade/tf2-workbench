@@ -26,6 +26,7 @@ export const HOTKEYS = [
   { id: "select.box", label: "Box select", group: "Selection and view", hint: "Drag a box to select several things; pressed again (or Esc) it goes off.", default: "KeyQ", kind: "key" },
   { id: "view.focus", label: "Focus under pointer", group: "Selection and view", hint: "Moves the camera to what the pointer is over.", default: "KeyF", kind: "key" },
   { id: "view.focusSelected", label: "Frame selected", group: "Selection and view", hint: "Zooms in on the selected character and keeps the view on it as it moves (a double click on a character does the same; a double click on nothing lets go).", default: "Period", kind: "key" },
+  { id: "view.followMode", label: "Follow: static / behind", group: "Selection and view", hint: "Switches the camera following a character between static (turned as it is) and behind it (third person). Following no one, it follows the selected character from behind. Works in play mode too.", default: "KeyC", kind: "key" },
   { id: "view.focusAll", label: "Frame everything", group: "Selection and view", hint: "Moves the camera back to show all the characters (with the pointer over the view).", default: "KeyA", kind: "key" },
   { id: "view.fullscreen", label: "Hide the panels", group: "Selection and view", hint: "Hides the header and the docks so the 3D view fills the window; the same key brings them back.", default: "Tab", kind: "key" },
   { id: "play.toggle", label: "Play / pause", group: "Selection and view", hint: "Starts or pauses the animation.", default: "Space", kind: "key" },

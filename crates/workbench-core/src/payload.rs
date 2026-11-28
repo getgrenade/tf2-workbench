@@ -516,6 +516,13 @@ struct ItemJson<'a> {
     /// A taunt's forced weapon slot (`primary`, `secondary`, `melee`): the weapon the player takes out for it.
     #[serde(skip_serializing_if = "str::is_empty")]
     taunt_weapon_slot: &'a str,
+    /// A taunt's outro scene and its attack button's scene (class -> scene path), and how a moving taunt moves.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    taunt_outro_paths: &'a std::collections::BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    taunt_attack_paths: &'a std::collections::BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    taunt_move: Option<TauntMoveJson>,
     /// The sounds the item plays while its wearer taunts.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     taunt_sounds: Vec<ItemSoundJson<'a>>,
@@ -532,6 +539,17 @@ struct ItemJson<'a> {
 
 fn is_zero(n: &u64) -> bool { *n == 0 }
 fn is_zero_f32(n: &f32) -> bool { *n == 0.0 }
+
+/// How a moving taunt moves (units per second, degrees per second, seconds to full speed, always forward).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TauntMoveJson {
+    speed: f32,
+    turn: f32,
+    move_accel: f32,
+    turn_accel: f32,
+    forward: bool,
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -600,6 +618,9 @@ fn item_json(i: &source_formats::items::Item) -> ItemJson<'_> {
         taunt_attack: &i.taunt_attack,
         taunt_attack_time: i.taunt_attack_time,
         taunt_weapon_slot: &i.taunt_weapon_slot,
+        taunt_outro_paths: &i.taunt_outro_paths,
+        taunt_attack_paths: &i.taunt_attack_paths,
+        taunt_move: i.taunt_move.map(|m| TauntMoveJson { speed: m.speed, turn: m.turn, move_accel: m.move_accel, turn_accel: m.turn_accel, forward: m.forward }),
         taunt_sounds: i.taunt_sounds.iter().map(|t| ItemSoundJson { name: &t.name, offset: t.offset, looping: t.looping }).collect(),
         taunt_activity: &i.taunt_activity,
         build_activity: &i.build_activity,

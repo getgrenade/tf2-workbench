@@ -1185,7 +1185,7 @@ export class Actor {
     const playback = new Playback();
     playback.clip = clip;
     this.prop = { rig, bones, group, playback };
-    group.visible = !(this.reactionHidden || this.listHidden);
+    group.visible = !(this.reactionHidden || this.listHidden || this.propHidden);
     this.poseProp();
     this.changed = true;
   }
@@ -1195,7 +1195,7 @@ export class Actor {
     const p = this.prop;
     if (!p) return;
     const pb = this.playback;
-    p.playback.time = pb.time;
+    p.playback.time = this.propTime ?? pb.time;
     p.playback.loopAll = pb.loopAll;
     if (p.playback.clip) {
       p.rig.poseFromClip(p.playback.clip, p.playback.frame());
@@ -1800,11 +1800,27 @@ export class Actor {
 
   private reactionHidden = false;
   private listHidden = false;
+  /** The taunt prop out of sight (play mode: it is out only while the taunt plays). */
+  private propHidden = false;
+  /** The taunt prop's own clock (play mode's taunt; null: the class animation's). */
+  private propTime: number | null = null;
   private syncHidden() {
     const hidden = this.reactionHidden || this.listHidden;
     if (this.modelGroup) this.modelGroup.visible = !hidden;
-    if (this.prop) this.prop.group.visible = !hidden;
+    if (this.prop) this.prop.group.visible = !hidden && !this.propHidden;
     this.changed = true;
+  }
+  /** Play mode's taunt: the prop shown at a time of its scene, or put away (null). */
+  setPropTime(time: number | null) {
+    this.propTime = time;
+    this.propHidden = time === null;
+    this.syncHidden();
+  }
+  /** Back to the prop following the class animation, in sight. */
+  clearPropTime() {
+    this.propTime = null;
+    this.propHidden = false;
+    this.syncHidden();
   }
   setReactionHidden(hidden: boolean) { this.reactionHidden = hidden; this.syncHidden(); }
   /** Hidden from the scene list (the eye of the hierarchy): not drawn, not cast as a shadow, not clickable. */

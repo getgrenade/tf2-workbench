@@ -9,6 +9,7 @@ import { onSettingsChange, settings } from "../settingsStore";
 import { itemIcon } from "./itemIcons";
 import { createBrowserSort, createBrowserView, makeTile, setTileImage } from "./browserView";
 import { itemImageFor, itemUsableBy, newestFirst, styleLabel, type ItemDb, type ItemInfo, type PaintInfo } from "./payload";
+import { UNUSUAL_ICON } from "./unusualIcon";
 
 export interface ItemsEls {
   search: HTMLInputElement;
@@ -78,6 +79,10 @@ export interface ItemsHooks {
   paintTemporary?: (paint: PaintInfo | null) => void;
   /** Opens just this item, alone, in a scene of its own. */
   inspect: (item: ItemInfo) => void;
+  /** More of one worn cosmetic's popup (its unusual effect), or null. */
+  itemSection?: (item: number) => HTMLElement | null;
+  /** The name of the unusual effect over a worn cosmetic, or null (its card shows the unusual icon). */
+  unusualOf?: (item: number) => string | null;
   /** Opens the Styles panel of a workshop item (its styles, and the zips linked to it as styles) at a screen position. */
   workshopStyles?: (item: ItemInfo, x: number, y: number) => void;
   /** The right-click menu's entry that sends an item to a promo board, as a picture of it alone (with its boards to pick from). */
@@ -213,7 +218,9 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
       // the eye: the item is taken off for the moment and stays in the loadout (the ✕ takes it out)
       const eye = `<b class="eye" title="${e.hidden ? "Show it again" : "Hide it (it stays in the loadout)"}">${e.hidden ? "◌" : "●"}</b>`;
       const mark = editedItems.has(e.item.id) ? `<i class="tileEdited" title="${escapeHtml(EDITED_TITLE)}">!</i>` : "";
-      card.innerHTML = `<div class="equipIcon">${dot}${eye}${mark}<b class="x" title="Remove">✕</b></div><div class="equipName">${escapeHtml(e.item.displayName)}</div>`;
+      const effect = hooks.unusualOf?.(e.item.id) ?? null;
+      const star = effect ? `<img class="unusualBadge" src="${UNUSUAL_ICON}" alt="" title="${escapeHtml(`Unusual effect: ${effect}`)}">` : "";
+      card.innerHTML = `<div class="equipIcon">${dot}${eye}${mark}${star}<b class="x" title="Remove">✕</b></div><div class="equipName">${escapeHtml(e.item.displayName)}</div>`;
       const cardHint = e.item.paintable ? "Click to pick a paint (Shift + click selects several)" : "Cannot be painted";
       card.title = cardHint;
       attachItemTooltip(card, () => itemTooltipLines(e.item, { paint: e.paint, hint: cardHint }));
@@ -466,6 +473,8 @@ export function createItemsUi(els: ItemsEls, hooks: ItemsHooks) {
       skinRow.appendChild(b);
     }
     if (wearing.length) menu.appendChild(skinRow);
+    const extra = chosen.length === 1 && wearing.length === 1 ? hooks.itemSection?.(wearing[0].item.id) ?? null : null;
+    if (extra) menu.appendChild(extra);
     if (paintable.length === 0) return;
     const palette = document.createElement("div");
     palette.className = "palette";

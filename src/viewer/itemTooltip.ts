@@ -45,7 +45,8 @@ export function itemTooltipLines(item: ItemInfo, extra: { paint?: PaintInfo | nu
       ? { text: `Halloween: ${extra.paint.displayName} (spell only active during event)`, kind: "halloween" }
       : { text: `Paint Color: ${extra.paint.displayName}`, kind: "neutral" });
   }
-  if (item.description) lines.push({ text: item.description, kind: "neutral" });
+  // (not a taunt's: it only says who made it and for which class, "Community Created Demoman Taunt")
+  if (item.description && item.slot !== "taunt") lines.push({ text: item.description, kind: "neutral" });
   if (item.workshop) lines.push({ text: "Your own item, from the workshop importer", kind: "hint" });
   if (extra.hint) lines.push({ text: extra.hint, kind: "hint" });
   return lines;
