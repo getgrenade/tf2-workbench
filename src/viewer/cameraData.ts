@@ -1,5 +1,4 @@
 import * as THREE from "three";
-import { parseOverlay, type CameraOverlayData } from "./overlayData";
 
 export const CAMERA_RATIOS = ["16:9", "1:1", "9:16", "4:3", "3:4"] as const;
 export type CameraRatio = typeof CAMERA_RATIOS[number];
@@ -18,7 +17,6 @@ export interface SceneCamera {
   navigateView?: boolean;
   /** A shot of this camera includes the background (the sky or the colour) and the ground plane. Defaults off: they are left out. */
   captureBackground?: boolean;
-  overlay?: CameraOverlayData;
   /** The outliner folder the camera is in. */
   group?: string;
 }
@@ -70,7 +68,6 @@ export function parseCameras(raw: unknown): CameraCollection {
     if (c.navigateView === true) copy.navigateView = true;
     if (c.captureBackground === true) copy.captureBackground = true;
     if (typeof c.group === "string" && c.group) copy.group = c.group.slice(0, 64);
-    const overlay = parseOverlay(c.overlay); if (overlay) copy.overlay = overlay;
     cameras.push(copy); ids.add(c.id);
   }
   return { cameras, active: typeof value?.active === "string" && ids.has(value.active) ? value.active : null };

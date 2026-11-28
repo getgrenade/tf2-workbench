@@ -108,20 +108,11 @@ test("camera navigation advances damping before rendering and defaults off in ol
   rig.dispose();
 });
 
-test("overlay edit mode owns viewport input and independent camera overlays persist across scene restore", () => {
-  const { rig, orbit } = fixture();
-  rig.restore({ cameras: [data(), { ...data(), id: "two" }], active: "one" });
-  rig.setNavigateView("one", true); rig.editOverlay("one");
-  assert.equal(rig.overlayEditing, "one"); assert.equal(orbit.enabled, false); assert.equal(rig.hot, true);
-  rig.update(); rig.prepareNavigation(); assert.equal(rig.active, "one"); assert.equal(orbit.enabled, false);
-  rig.cameras[0].overlay = { border: { color: "#ff0000", width: .01, inset: .02, radius: 0, opacity: .7 }, elements: [{ id: "title", kind: "text", text: "Loadout", x: .5, y: .1, size: .04, opacity: 1, color: "#ffffff", bold: true }] };
-  const snapshot = rig.snapshot(); snapshot.cameras[0].overlay!.elements[0].x = .2;
-  assert.equal(rig.cameras[0].overlay!.elements[0].x, .5);
-  const scene = parseScene(JSON.stringify({ app: "tf2-workbench", version: 1, camera: rig.editorView(), cameras: rig.snapshot(), entities: [{ cls: "soldier" }] }));
-  rig.restore(scene.cameras); assert.equal(rig.overlayEditing, null);
-  assert.equal(rig.cameras[0].overlay!.elements[0].x, .5); assert.equal(rig.cameras[1].overlay, undefined);
-  rig.editOverlay("one"); rig.edit("two"); assert.equal(rig.overlayEditing, null); assert.equal(rig.editing, "two");
-  rig.view("one"); rig.editOverlay("one"); rig.editOverlay("one");
-  assert.equal(rig.overlayEditing, null); assert.equal(orbit.enabled, true);
-  rig.remove("one"); assert.equal(rig.active, null); rig.dispose();
+test("a camera's overlay of an older scene is left out when it is read", () => {
+  const { rig } = fixture();
+  const old = { ...data(), overlay: { border: { color: "#ff0000", width: .01, inset: .02, radius: 0, opacity: .7 }, elements: [] } };
+  const scene = parseScene(JSON.stringify({ app: "tf2-workbench", version: 1, camera: rig.editorView(), cameras: { cameras: [old], active: null }, entities: [{ cls: "soldier" }] }));
+  rig.restore(scene.cameras);
+  assert.equal(rig.cameras.length, 1); assert.equal("overlay" in rig.cameras[0], false);
+  rig.dispose();
 });

@@ -3,7 +3,6 @@ import { emptyLayout, type DockLayout } from "./dockModel";
 /** The panels that can be moved about: id, title on the tab, and the id of the element that is the panel. */
 export const PANEL_DEFS: { id: string; title: string; element: string }[] = [
   { id: "outliner", title: "Outliner", element: "panelOutliner" },
-  { id: "overlay", title: "Overlay", element: "overlayPane" },
   { id: "properties", title: "Properties", element: "panelProperties" },
   { id: "textures", title: "Textures", element: "panelTextures" },
   { id: "cosmetics", title: "Cosmetics", element: "cosmeticsPane" },
@@ -33,7 +32,7 @@ export function defaultLayout({ props = true }: { props?: boolean } = {}): DockL
   l.docks.bottom.groups = [
     { tabs: ["animation", "flex", "poses"], active: "flex", weight: 1.8 },
     { tabs: ["particles"], active: "particles", weight: 0.72 },
-    { tabs: ["post", "overlay"], active: "post", weight: 0.48 },
+    { tabs: ["post"], active: "post", weight: 0.48 },
   ];
   for (const dock of ["left", "right", "bottom"] as const) for (const g of l.docks[dock].groups) for (const id of g.tabs) l.lastDock[id] = dock;
   return l;
@@ -43,7 +42,7 @@ export function defaultLayout({ props = true }: { props?: boolean } = {}): DockL
 export const SIMPLIFIED_PANELS = ["outliner", "properties", "textures", "lighting", "cosmetics", "weapons", "animation"];
 
 /**
- * A simplified layout for posing and dressing: the default one without the particles, post-processing, overlay and the extra windows (flex,
+ * A simplified layout for posing and dressing: the default one without the particles, post-processing and the extra windows (flex,
  * pose library, light setups, props). Every panel it leaves out can be brought back from the Layout menu.
  */
 export function simplifiedLayout(): DockLayout {

@@ -11,7 +11,7 @@ const shown = (l: ReturnType<typeof defaultLayout>) => Object.values(l.docks).fl
 test("the simplified layout keeps the main panels and puts the others away, as the docks read it", () => {
   const l = parseLayout(simplifiedLayout(), ids, defaultLayout());
   assert.deepEqual(new Set(shown(l)), new Set(SIMPLIFIED_PANELS));
-  for (const away of ["particles", "post", "overlay", "flex", "poses", "props", "lightsetups"]) assert.ok(l.hidden.includes(away), away);
+  for (const away of ["particles", "post", "flex", "poses", "props", "lightsetups"]) assert.ok(l.hidden.includes(away), away);
 });
 
 test("a workspace file gives back the layout it was saved with, and nothing else is taken for one", () => {

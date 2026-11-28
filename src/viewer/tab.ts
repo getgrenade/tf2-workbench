@@ -71,7 +71,6 @@ import { createSkyUi } from "./skyUi";
 import { createReflectionUi } from "./reflectionUi";
 import { CUBEMAP_MATERIAL, loadCubemapTexture } from "./reflection";
 import { DEFAULT_REFLECTION, type ReflectionState } from "./reflectionState";
-import { createOverlayPanel } from "./overlayPanel";
 import { createGroundUi } from "./groundUi";
 import { DEFAULT_GROUND, type GroundState } from "./groundPlane";
 import { DEFAULT_SKY, loadSkyTexture, type SkyState } from "./skybox";
@@ -103,7 +102,7 @@ import { createRigControls, type RigControls } from "../rig/rigControls";
 import type { LimbId } from "./poseRig";
 import type { CaptureMouse } from "./playMouse";
 import { PLAY_ACTIONS, PLAY_DAMAGE_ACTIONS, PLAY_SLOTS, encodeParam, setsOf, type PlaySlot } from "./playLogic";
-import { itemImageFor, newestFirst, itemMaterialOverride, itemModelFor, slotForClass, weaponCategory, itemSkinFor, itemUsableBy, parseAnimInfo, parseClip, parseMaterial, parsePayload, tauntPropSequence, tauntSequence, weaponIdleSequences, type ClipData, type ItemDb, type ItemInfo, type PaintInfo, type MaterialData, type ModelData } from "./payload";
+import { newestFirst, itemMaterialOverride, itemModelFor, slotForClass, weaponCategory, itemSkinFor, itemUsableBy, parseAnimInfo, parseClip, parseMaterial, parsePayload, tauntPropSequence, tauntSequence, weaponIdleSequences, type ClipData, type ItemDb, type ItemInfo, type PaintInfo, type MaterialData, type ModelData } from "./payload";
 import { createWeaponsUi, type WeaponsEls } from "./weaponsUi";
 import { loadSettings, onSettingsChange, settings, updateSetting } from "../settingsStore";
 import { accentHex } from "../theme";
@@ -874,8 +873,27 @@ export function createViewTab(els: Els) {
     if (id) return unusualCatalog.find((x) => x.id === id)?.name ?? `Effect #${id}`;
     return kind === "hat" ? (e.unusuals.silver ? "Silver Serenade" : null) : e.unusuals.arctic ? "Arctic Delight" : null;
   }
-  function hatValue(e: Entity | null): string {
-    if (!e || (unusualHatFor !== null && e.unusuals.hatItem !== unusualHatFor)) return "";
+  /** The same pickers in the Particles panel (the hat's: whichever hat the effect is over). */
+  const panePickers = {
+    hat: document.getElementById("unusualHatPane") as HTMLSelectElement | null,
+    taunt: document.getElementById("unusualTauntPane") as HTMLSelectElement | null,
+    hatClear: document.getElementById("unusualHatPaneClear") as HTMLButtonElement | null,
+    tauntClear: document.getElementById("unusualTauntPaneClear") as HTMLButtonElement | null,
+  };
+  const tauntValue = (e: Entity | null) => (e?.unusuals.tauntEffect ? `effect:${e.unusuals.tauntEffect}` : e?.unusuals.arctic ? "arctic" : "");
+  function syncPanePickers() {
+    const e = selected;
+    for (const kind of ["hat", "taunt"] as const) {
+      const pane = panePickers[kind], clear = panePickers[`${kind}Clear`];
+      if (!pane) continue;
+      if (pane.innerHTML !== els.unusual[kind].innerHTML) pane.innerHTML = els.unusual[kind].innerHTML;
+      pane.value = kind === "hat" ? hatValue(e, true) : tauntValue(e);
+      pane.disabled = !e;
+      if (clear) clear.disabled = !e || !pane.value;
+    }
+  }
+  function hatValue(e: Entity | null, anyHat = false): string {
+    if (!e || (!anyHat && unusualHatFor !== null && e.unusuals.hatItem !== unusualHatFor)) return "";
     return e.unusuals.hatEffect ? `effect:${e.unusuals.hatEffect}` : e.unusuals.silver ? "silver" : "";
   }
   function syncUnusuals() {
@@ -888,6 +906,7 @@ export function createViewTab(els: Els) {
     els.unusual.hat.disabled = els.unusual.taunt.disabled = !e;
     els.unusual.hatClear.disabled = !e || !els.unusual.hat.value;
     els.unusual.tauntClear.disabled = !e || !els.unusual.taunt.value;
+    syncPanePickers();
     els.unusual.restart.disabled = !e || !(e.unusuals.silver || e.unusuals.arctic || e.unusuals.hatEffect || e.unusuals.tauntEffect);
     els.unusual.status.textContent = e?.unusualError || (e?.unusuals.silver
       ? viewer?.unusualUsesNativeSilver(e.actor) ? "Silver Serenade: native simulation" : "Silver Serenade: compatibility preview"
@@ -923,6 +942,7 @@ export function createViewTab(els: Els) {
       if (custom.children.length) picker.insertBefore(custom, picker.children[1] ?? null);
       picker.value = selectedValue;
     }
+    syncPanePickers();
   }
   function loadUnusualCatalog() {
     if (catalogLoading) return catalogLoading;
@@ -1010,19 +1030,22 @@ export function createViewTab(els: Els) {
   }
 
   /** One picker changed (the other effect stays: the hat picker of another cosmetic shows none while the effect is over this one). */
-  const changeUnusuals = (kind: "hat" | "taunt") => {
+  const changeUnusuals = (kind: "hat" | "taunt", v = els.unusual[kind].value, hatFor = unusualHatFor) => {
     const e = selected;
     if (!e) return;
-    const v = els.unusual[kind].value;
     const { hatEffect, tauntEffect, ...rest } = e.unusuals;
     e.unusuals = kind === "hat"
-      ? { ...rest, silver: v === "silver", hatItem: v ? unusualHatFor ?? e.unusuals.hatItem : null, ...(v.startsWith("effect:") ? { hatEffect: Number(v.slice(7)) } : {}), ...(tauntEffect ? { tauntEffect } : {}) }
+      ? { ...rest, silver: v === "silver", hatItem: v ? hatFor ?? e.unusuals.hatItem : null, ...(v.startsWith("effect:") ? { hatEffect: Number(v.slice(7)) } : {}), ...(tauntEffect ? { tauntEffect } : {}) }
       : { ...rest, arctic: v === "arctic", ...(v.startsWith("effect:") ? { tauntEffect: Number(v.slice(7)) } : {}), ...(hatEffect ? { hatEffect } : {}) };
     syncUnusuals();
     els.unusual.status.textContent = "Loading effects…";
     void applyUnusuals(e);
   };
   for (const kind of ["hat", "taunt"] as const) {
+    // (the Particles panel's: the hat's effect stays over the hat it is over, else goes on the first hat worn)
+    const pane = panePickers[kind], clear = panePickers[`${kind}Clear`];
+    if (pane) pane.onchange = () => changeUnusuals(kind, pane.value, null);
+    if (clear) clear.onclick = () => changeUnusuals(kind, "", null);
     els.unusual[kind].onchange = () => changeUnusuals(kind);
     els.unusual[`${kind}Clear`].onclick = () => {
       els.unusual[kind].value = "";
@@ -2354,7 +2377,7 @@ export function createViewTab(els: Els) {
         inBox: (box) => viewer!.boxHits(box),
         atPoint: (x, y) => viewer!.pointHits(x, y),
         apply: applyBox,
-        allowed: () => !play?.active && !viewer?.rig.active && !viewer?.cameras.overlayEditing && !viewer?.modalActive && !viewer?.gizmoHot,
+        allowed: () => !play?.active && !viewer?.rig.active && !viewer?.modalActive && !viewer?.gizmoHot,
       });
       // dev builds: a handle for inspecting the scene from the console
       if (import.meta.env.DEV) (window as unknown as { __workbench: unknown }).__workbench = { viewer, entities, models };
@@ -2363,13 +2386,6 @@ export function createViewTab(els: Els) {
       viewer.faceRig = faceRig;
       syncFaceRig();
       viewer.onConditionsChanged = (actor) => { if (selected?.actor === actor) renderConditions(); };
-      viewer.cameraOverlay.attachProperties(propsEl("overlayProps"));
-      viewer.cameraOverlay.onChange(() => { overlayPanel.refresh(); syncOverlayMode(); });
-      viewer.cameraOverlay.items = () => entities.flatMap(entity => {
-        const items = entity.applied.map(equipped => ({ item: equipped.item, style: equipped.style }));
-        if (entity.held?.slot === "taunt") items.push({ item: entity.held, style: 0 });
-        return items.flatMap(({ item, style }) => { const image = itemImageFor(item, style); return image ? [{ image, label: item.displayName }] : []; });
-      });
       viewer.cameras.onChange = () => {
         renderCameraUi();
         renderEntities();
@@ -3596,7 +3612,7 @@ export function createViewTab(els: Els) {
 
   // --- properties: the panel under the outliner shows what the selected character, light or camera has ---------------------------
 
-  type PropsKind = "character" | "light" | "camera" | "effect" | "overlay" | "rig";
+  type PropsKind = "character" | "light" | "camera" | "effect" | "rig";
   let propsKind: PropsKind = "character";
   /** Who the cosmetic picks go to, and their classes, as last shown by the browser. */
   let lastTargetKey = "";
@@ -3696,36 +3712,6 @@ export function createViewTab(els: Els) {
   });
   let cameraTransformEl: HTMLElement | null = null;
 
-  // --- the overlay of the camera that is looked through: its list is a panel, its settings are in the properties ---------------------
-  const overlayPanel = createOverlayPanel({
-    list: propsEl("overlayList"),
-    add: propsEl("overlayAdd") as HTMLButtonElement,
-    edit: propsEl("overlayEdit") as HTMLButtonElement,
-    hint: propsEl("overlayHint"),
-    grid: propsEl("overlayGrid"),
-    overlay: () => viewer?.cameraOverlay ?? null,
-    cameraActive: () => !!viewer?.cameras.active,
-    toggle: () => {
-      const rig = viewer?.cameras;
-      if (!rig?.active) return;
-      if (rig.overlayEditing) rig.stopOverlayEditing();
-      else { prepareCamera(); rig.editOverlay(rig.active); }
-    },
-  });
-  /** The overlay editing started or ended: the properties show its settings (and go back to the camera's when it ends), and the panels come forward. */
-  function syncOverlayMode() {
-    const editing = !!viewer?.cameraOverlay.isEditing;
-    if (editing && propsKind !== "overlay") {
-      propsKind = "overlay";
-      nothingSelected = false;
-      els.reveal("properties");
-      renderEntities();
-    } else if (!editing && propsKind === "overlay") {
-      propsKind = "camera";
-      renderEntities();
-    }
-  }
-
   /** Looks through a camera (making it the picked one), or comes back out when the view already is through it. */
   /** Looks through a camera, or leaves its view; with `select` the camera is also selected (the outliner button), without it the selection stays as it is (the camera button of the view). */
   function lookThroughCamera(id: string, select = true) {
@@ -3773,10 +3759,9 @@ export function createViewTab(els: Els) {
     if (!rigPanel.el.hidden) rigPanel.refresh();
     propsEl("propCamera").hidden = nothingSelected || propsKind !== "camera";
     propsEl("propEffect").hidden = propsKind !== "effect";
-    propsEl("overlayProps").hidden = propsKind !== "overlay";
     const effectKind = postItems.find((i) => i.id === propsEffect)?.kind;
     for (const section of propsEl("propEffect").querySelectorAll<HTMLElement>("[data-effect]")) section.hidden = section.dataset.effect !== effectKind;
-    propsEl("propEmpty").hidden = !nothingSelected || propsKind === "effect" || propsKind === "overlay";
+    propsEl("propEmpty").hidden = !nothingSelected || propsKind === "effect";
     characterTransform.el.hidden = nothingSelected || propsKind !== "character";
     lightTransform.el.hidden = nothingSelected || propsKind !== "light";
     if (cameraTransformEl) cameraTransformEl.hidden = nothingSelected || propsKind !== "camera";
@@ -3902,7 +3887,7 @@ export function createViewTab(els: Els) {
     if (target?.isContentEditable || (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
     // text that is selected somewhere is the browser's to copy
     if (copy && (window.getSelection()?.toString().length ?? 0) > 0) return;
-    if (document.getElementById("view")?.hidden || play?.active || viewer?.cameras.overlayEditing || viewer?.cameras.editing || selected?.actor.isPosing) return;
+    if (document.getElementById("view")?.hidden || play?.active || viewer?.cameras.editing || selected?.actor.isPosing) return;
     ev.preventDefault();
     if (copy) { if (!nothingSelected) clipboard = currentPicks().map((p) => ({ ...p })); }
     else void pasteClipboard();
@@ -4242,7 +4227,7 @@ export function createViewTab(els: Els) {
     if (ev.defaultPrevented || !hotkeyMatches("outliner.delete", ev)) return;
     const target = ev.target as HTMLElement | null;
     if (target?.isContentEditable || (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
-    if (document.getElementById("view")?.hidden || play?.active || viewer?.cameras.overlayEditing || viewer?.cameras.editing || viewer?.modalActive || selected?.actor.isPosing || nothingSelected) return;
+    if (document.getElementById("view")?.hidden || play?.active || viewer?.cameras.editing || viewer?.modalActive || selected?.actor.isPosing || nothingSelected) return;
     const picks = currentPicks();
     if (!picks.length) return;
     ev.preventDefault();

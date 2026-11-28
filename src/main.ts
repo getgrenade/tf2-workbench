@@ -81,7 +81,6 @@ app.innerHTML = `
       </div>
       <div id="propLight" class="lightPane lightProps" hidden></div>
       <div id="propCamera" class="propCamera" hidden></div>
-      <div id="overlayProps" class="overlayProps" hidden></div>
       <div id="propEffect" class="lightPane lightProps propEffect" hidden>
         <section class="lightCol" data-effect="shadow" hidden>
           <h3>Ground shadows <button id="shadowReset" title="Reset the shadow settings">Reset</button></h3>
@@ -260,6 +259,10 @@ app.innerHTML = `
       <section id="lightSetupsPane" class="lightPane lightSetupsPane" hidden><section id="lightSetupsBody" class="lightCol lightSetups"></section></section>
       <div id="particlesPane" class="particlesPane" hidden>
         <div id="unusualBar" class="particleFind"><input id="unusualSearch" class="text" placeholder="Filter unusual effects by name or ID…" aria-label="Filter unusual effects" /></div>
+        <div class="particlePickers">
+          <div><label for="unusualHatPane">Hat effect</label><div class="particlePickerRow"><select id="unusualHatPane" aria-label="Hat unusual effect" title="The hat's unusual effect (on the first hat worn unless picked on another hat's card)"><option value="">None</option></select><button id="unusualHatPaneClear" title="Remove hat effect" aria-label="Remove hat effect" disabled>×</button></div></div>
+          <div><label for="unusualTauntPane">Taunt effect</label><div class="particlePickerRow"><select id="unusualTauntPane" aria-label="Taunt unusual effect"><option value="">None</option></select><button id="unusualTauntPaneClear" title="Remove taunt effect" aria-label="Remove taunt effect" disabled>×</button></div></div>
+        </div>
         <div class="row2"><button id="unusualLoadZip" title="Adds an effect from a .zip (a folder tree with particles/*.pcf and the materials it uses). It is kept by the app and shows up in both pickers under Custom effects.">Load custom effect (.zip)…</button></div>
         <div id="unusualCustom" class="particleCustom"></div>
         <div id="unusualCatalog" class="dim hint">Loading the installed unusual catalog…</div>
@@ -335,12 +338,6 @@ app.innerHTML = `
           <label class="colorRow">Colour <input type="color" id="pointColor" value="#ffffff" /></label>
           <div class="dim hint">Distance and radius are in model sizes.</div>
         </section>
-      </div>
-      <div id="overlayPane" class="postPane overlayPane" hidden>
-        <div class="postHead"><span class="dim">Overlay of the camera</span><span class="overlayButtons"><button id="overlayEdit" disabled>Edit</button> <button id="overlayAdd" aria-haspopup="menu" title="Add a border, a picture, an icon or a text to the overlay" disabled>+ Add</button></span></div>
-        <div id="overlayList" class="entList hier postList"></div>
-        <div id="overlayHint" class="dim hint overlayHint"></div>
-        <div id="overlayGrid" class="overlayGrid" hidden></div>
       </div>
       <div id="postPane" class="postPane" hidden>
         <div class="postHead"><span class="dim">Effects in the scene</span><button id="postAdd" aria-haspopup="menu" title="Add an effect to the scene">+ Add</button></div>

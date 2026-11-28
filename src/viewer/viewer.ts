@@ -8,8 +8,6 @@ import { keyboardScaleFactor } from "./scaleGizmo";
 import { PlacementHistory, type PlacementSnapshot } from "./placementHistory";
 import { editHistory } from "./editHistory";
 import { CameraRig } from "./cameraRig";
-import { CameraOverlay } from "./cameraOverlay";
-import { parseOverlay } from "./overlayData";
 import { ViewportCamera } from "./viewportCamera";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
@@ -189,7 +187,6 @@ interface FollowState {
 
 export class Viewer {
   readonly cameras: CameraRig;
-  readonly cameraOverlay: CameraOverlay;
   onUnusualError: (actor: Actor, error: unknown) => void = () => {};
   private readonly unusualEffects = new Map<Actor, { key: string; settings: UnusualSettings; effect: ActorEffects | null; pending: Promise<void> }>();
   /** The particles of the conditions a character is in (drips, flames), and the seconds left of the conditions Play mode applied. */
@@ -238,7 +235,7 @@ export class Viewer {
   /** The ground plane (it has a colour, so it is kept out of the passes that draw the casters, the marks and the picks, like the decals of the shadows). */
   private ground!: GroundPlane;
   private groundState: GroundState = { ...DEFAULT_GROUND };
-  private shadowQuads(): THREE.Object3D[] { return [...this.groundShadows.map((s) => s.quad), this.ground.mesh, this.reflection.mesh, this.cameras.backdrop.mesh]; }
+  private shadowQuads(): THREE.Object3D[] { return [...this.groundShadows.map((s) => s.quad), this.ground.mesh, this.reflection.mesh]; }
   private readonly presentScene = new THREE.Scene();
   private readonly presentCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   readonly scene = new THREE.Scene();
@@ -831,7 +828,6 @@ void main() {
     this.blenderRig = new BlenderRigOverlay(this.camera, this.renderer.domElement, this.controls, this.scene);
     this.cameras = new CameraRig(this.scene, this.camera, this.controls, container, this.renderer.domElement);
     this.cameras.holdOrbit = () => this.gizmoHot;
-    this.cameraOverlay = new CameraOverlay(this.cameras, container);
     this.cameras.onEnter = () => { this.viewAnim++; this.setActorGizmo(null); this.rig.setActor(null); this.blenderRig.setActor(null); };
     this.lightGizmos = new LightGizmos(this.scene, this.camera, this.controls, this.renderer.domElement,
       () => this.light.rig?.lights.find(l => l.id === this.light.rig?.selected) ?? null,
@@ -855,7 +851,6 @@ void main() {
       this.updateBoneGizmo();
       this.updateBoneHelper();
       this.updateBoneAimHandle();
-      this.cameraOverlay.update();
       let moved = false;
       this.propSim?.step(dt);
       for (const a of this.actorList) {
@@ -3861,7 +3856,7 @@ void main() {
 
   /** Turns the camera about what it looks at by a mouse movement in pixels: a drag on the navigation gizmo, like Alt + drag in Blender. */
   orbitBy(dx: number, dy: number) {
-    if (this.cameras.overlayEditing || this.cameras.locked) return;
+    if (this.cameras.locked) return;
     this.cameras.prepareNavigation();
     this.viewAnim++;
     const target = this.controls.target;
@@ -3881,7 +3876,6 @@ void main() {
 
   /** Turns the camera (about what it looks at) to the `dir` side, smoothly: a click on an axis of the navigation gizmo. */
   snapView(dir: THREE.Vector3) {
-    if (this.cameras.overlayEditing) return;
     this.cameras.prepareNavigation();
     const token = ++this.viewAnim;
     const target = this.controls.target;
@@ -3912,7 +3906,6 @@ void main() {
 
   /** Moves the camera closer (`factor` below 1) or further away from what it looks at. */
   zoomBy(factor: number) {
-    if (this.cameras.overlayEditing) return;
     if (this.cameras.locked) { this.cameras.zoomView(factor); return; } // a fixed camera: only the view zooms
     this.cameras.prepareNavigation();
     this.viewAnim++;
@@ -3929,7 +3922,6 @@ void main() {
 
   /** Moves the view sideways and up / down by a mouse movement in pixels (what the right mouse button does, too). */
   panBy(dx: number, dy: number) {
-    if (this.cameras.overlayEditing) return;
     if (this.cameras.locked) { this.cameras.panView(dx, dy); return; } // a fixed camera: the view slides over the screen
     this.cameras.prepareNavigation();
     this.viewAnim++;
@@ -4214,7 +4206,6 @@ void main() {
   ): Promise<{ blob: Blob; width: number; height: number; layers?: ExportLayer[]; merged?: Uint8ClampedArray; canvas?: HTMLCanvasElement }> {
     const r = this.renderer;
     const shot = !opts?.camera && !opts?.only ? this.cameras.captureCamera() : null;
-    const overlay = shot ? parseOverlay(this.cameras.activeCamera?.overlay) : undefined;
     if (shot) opts = { ...opts, camera: shot.camera, size: shot.size, fullScene: true };
     // a shot of a camera has the background (the sky or the colour) and the ground plane when the camera says so; any other shot, when the setting does not ask for a transparent one
     if (shot) transparent = this.cameras.activeCamera?.captureBackground !== true;
@@ -4337,8 +4328,6 @@ void main() {
       this.aimEyesAt(cam);
       this.renderLightShadows(true);
       this.updateParticleDepth(cam, w, h);
-      // the picture behind the scene is the camera's own: it is in a shot of the camera, over the whole of it, and in no other picture
-      this.cameras.backdrop.beginCapture(!!shot, w / h);
       // the reflection in the floor is part of a picture of the scene (not of a thumbnail or an icon), seen from the camera of the picture
       if (sceneLook && reflectionWas) this.reflection.render(r, this.scene, cam, w, h, this.reflectionHidden());
       else this.reflection.mesh.visible = false;
@@ -4450,7 +4439,7 @@ void main() {
           material.uniforms.uAoOn.value = 0;
           material.uniforms.uFogCount.value = 0;
           this.shared.uStudioRimCount.value = 0;
-          const backdrop = this.cameras.backdrop.mesh, ground = this.ground.mesh;
+          const ground = this.ground.mesh;
           const groundShows = ground.visible;
           /** Hides what is in the scene and not `keep` (the lights stay: the number of them is part of how the materials are made). */
           const only = (keep: (o: THREE.Object3D) => boolean) => {
@@ -4472,12 +4461,12 @@ void main() {
           const full = exportLayers[0].data;
           const split: ExportLayer[] = [];
           // the pictures with a background: of the background alone, and with the ground plane over it
-          let restore = only((o) => o === backdrop);
+          let restore = only(() => false);
           const backPixels = drawLayer(false);
           restore();
           let under = backPixels;
           if (groundShows) {
-            restore = only((o) => o === backdrop || o === ground);
+            restore = only((o) => o === ground);
             under = drawLayer(false);
             restore();
           }
@@ -4492,7 +4481,7 @@ void main() {
             adaptAlpha(layer, backPixels, under);
             split.push({ name: "Ground plane", blend: "normal", data: layer });
           }
-          restore = only((o) => o !== ground && o !== backdrop);
+          restore = only((o) => o !== ground);
           const charPixels = drawLayer(true);
           restore();
           adaptAlpha(charPixels, under, full);
@@ -4507,7 +4496,6 @@ void main() {
       if (opts?.orbit) { cam.position.copy(camPosition); cam.quaternion.copy(camQuaternion); cam.updateMatrixWorld(true); }
       (restoreVisibility as (() => void) | null)?.();
       this.shared.uStudioRimCount.value = rimCountWas;
-      this.cameras.backdrop.endCapture();
       r.setRenderTarget(null);
       r.setClearColor(prevClear, prevAlpha);
       this.scene.background = background;
@@ -4542,17 +4530,9 @@ void main() {
     canvas.width = w;
     canvas.height = h;
     canvas.getContext("2d")!.putImageData(new ImageData(flipped, w, h), 0, 0);
-    if (overlay) await this.cameraOverlay.composite(canvas.getContext("2d")!, overlay, w, h);
     if (opts?.canvas) return { blob: new Blob([]), width: w, height: h, canvas };
     if (opts?.layers) {
-      // the layered export wants the merged picture and the pixels, not a PNG; what is drawn over the picture (the frame, the text, the images) is a layer too
-      if (overlay) {
-        const over = document.createElement("canvas");
-        over.width = w;
-        over.height = h;
-        await this.cameraOverlay.composite(over.getContext("2d")!, overlay, w, h);
-        exportLayers.push({ name: "Camera overlay", blend: "normal", data: over.getContext("2d")!.getImageData(0, 0, w, h).data });
-      }
+      // the layered export wants the merged picture and the pixels, not a PNG
       return { blob: new Blob([]), width: w, height: h, layers: exportLayers, merged: canvas.getContext("2d")!.getImageData(0, 0, w, h).data };
     }
     const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("PNG encoding failed"))), "image/png"));
@@ -4654,7 +4634,6 @@ void main() {
 
   dispose() {
     this.lightGizmos.dispose();
-    this.cameraOverlay.dispose();
     this.cameras.dispose();
     this.finishEntityModal(false);
     for (const control of [this.entityMove,this.entityRotate,this.entityScale,this.entityView,this.entityViewMove]) control.dispose();

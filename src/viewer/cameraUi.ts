@@ -26,7 +26,7 @@ export function createCameraUi(root: HTMLElement, getRig: () => CameraRig, prepa
   const status = root.querySelector<HTMLElement>("[data-status]")!;
   let selected = "";
   let deselected = false;
-  const rows = new Map<string, { row: HTMLDivElement; label: HTMLSpanElement; view: HTMLButtonElement; overlay: HTMLButtonElement; remove: HTMLButtonElement }>();
+  const rows = new Map<string, { row: HTMLDivElement; label: HTMLSpanElement; view: HTMLButtonElement; remove: HTMLButtonElement }>();
   const scrubbing = new Set<HTMLInputElement>();
   const setValue = (input: HTMLInputElement, value: string) => { if (!scrubbing.has(input) && document.activeElement !== input) input.value = value; };
   const render = () => {
@@ -42,8 +42,6 @@ export function createCameraUi(root: HTMLElement, getRig: () => CameraRig, prepa
       const label = document.createElement("span"); label.className = "entName";
       const view = document.createElement("button"); view.title = "Show / hide camera transform gizmos (G / R; cameras have no scale)";
       view.innerHTML = icon("move");
-      const overlay = document.createElement("button"); overlay.title = "Edit camera overlay: border, item icons and text";
-      overlay.innerHTML = icon("frame");
       const remove = document.createElement("button"); remove.className = "entX"; remove.textContent = "✕"; remove.title = "Delete camera"; remove.setAttribute("aria-label", `Delete ${data.name}`);
       const select = () => {
         if (rig.active === data.id) { selected = ""; deselected = true; rig.exit(); }
@@ -81,17 +79,14 @@ export function createCameraUi(root: HTMLElement, getRig: () => CameraRig, prepa
         else { prepare(); rig.edit(data.id); }
       };
       remove.onclick = event => { event.stopPropagation(); rig.remove(data.id); };
-      overlay.onclick = event => { event.stopPropagation(); selected = data.id; deselected = false; prepare(); rig.editOverlay(data.id); };
-      row.append(label, view, overlay, remove); list.append(row);
-      entry = { row, label, view, overlay, remove }; rows.set(data.id, entry);
+      row.append(label, view, remove); list.append(row);
+      entry = { row, label, view, remove }; rows.set(data.id, entry);
       }
       entry.row.className = "ent" + (data.id === selected && (rig.active === data.id || rig.editing === data.id) ? " on" : "");
       if (!entry.label.querySelector("input")) entry.label.textContent = `${index + 1}  ${data.name}`;
       entry.label.title = `${data.name} (right-click to rename)`;
       entry.view.className = "entGizmo" + (rig.editing === data.id ? " on" : "");
       entry.view.setAttribute("aria-label", `Transform ${data.name}`); entry.view.setAttribute("aria-pressed", String(rig.editing === data.id));
-      entry.overlay.className = "entGizmo" + (rig.overlayEditing === data.id ? " on" : "");
-      entry.overlay.setAttribute("aria-label", `Edit overlay for ${data.name}`); entry.overlay.setAttribute("aria-pressed", String(rig.overlayEditing === data.id));
       entry.remove.setAttribute("aria-label", `Delete ${data.name}`);
       if (list.children[index] !== entry.row) list.insertBefore(entry.row, list.children[index] ?? null);
     });

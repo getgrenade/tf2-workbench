@@ -1,6 +1,5 @@
 import * as THREE from "three";
 import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { Backdrop } from "./backdropImage";
 import { cameraFrame, cameraProjection, cameraSize, parseCameras, type CameraCollection, type SceneCamera } from "./cameraData";
 import { GizmoSet, gizmoKey } from "./gizmos";
 
@@ -9,7 +8,6 @@ export class CameraRig {
   cameras: SceneCamera[] = [];
   active: string | null = null;
   editing: string | null = null;
-  overlayEditing: string | null = null;
   onChange = () => {};
   onEnter = () => {};
   readonly objects: THREE.Object3D[];
@@ -23,8 +21,6 @@ export class CameraRig {
   private modal: { mode: "translate" | "rotate"; axis: "x" | "y" | "z" | null; position: THREE.Vector3; quaternion: THREE.Quaternion; pointer: { x: number; y: number }; plane: THREE.Plane; hit: THREE.Vector3 } | null = null;
   private readonly events = new AbortController();
   private readonly visuals = new THREE.Group();
-  /** The user's picture behind the scene of the camera that is looked through. */
-  readonly backdrop: Backdrop;
   private readonly frame: HTMLDivElement;
   private freeView: { camera: THREE.PerspectiveCamera; target: THREE.Vector3 } | null = null;
   constructor(private readonly scene: THREE.Scene, private readonly camera: THREE.PerspectiveCamera, private readonly orbit: OrbitControls, private readonly container: HTMLElement, dom: HTMLElement) {
@@ -44,7 +40,6 @@ export class CameraRig {
       this.onChange();
     });
     this.gizmos.exclusiveDrag(() => this.applyParts());
-    this.backdrop = new Backdrop(scene);
     this.frame = document.createElement("div");
     this.frame.className = "cameraFrame"; this.frame.hidden = true;
     container.append(this.frame);
@@ -52,7 +47,7 @@ export class CameraRig {
     orbit.addEventListener("change", this.saveNavigation);
   }
   private get controls() { return this.gizmos.all; }
-  get hot() { return !!this.overlayEditing || !!this.modal || this.controls.some(control => control.enabled && control.axis !== null); }
+  get hot() { return !!this.modal || this.controls.some(control => control.enabled && control.axis !== null); }
   setSpace(space: "local" | "world") { this.gizmos.setSpace(space); }
   setParts(parts: typeof this.parts) { this.parts = { ...parts, scale: false }; this.applyParts(); }
   private applyParts() {
@@ -66,7 +61,7 @@ export class CameraRig {
   get activeCamera() { return this.cameras.find(c => c.id === this.active) ?? null; }
   get navigatingView() { return this.activeCamera?.navigateView === true; }
   /** The view is through a camera and cannot be turned or moved: the camera is fixed, only the zoom of the view works. */
-  get locked() { return !!this.active && !this.navigatingView && !this.overlayEditing; }
+  get locked() { return !!this.active && !this.navigatingView; }
   /** How much the view is zoomed into the shot of the active camera (only the view: the camera itself, and so every picture taken, stays as it is). */
   private viewZoom = 1;
   get zoom() { return this.viewZoom; }
@@ -94,7 +89,7 @@ export class CameraRig {
    */
   frameBall(center: THREE.Vector3, radius: number, fit = 1.15): boolean {
     const data = this.activeCamera;
-    if (!data?.navigateView || this.overlayEditing) return false;
+    if (!data?.navigateView) return false;
     const size = cameraSize(data);
     const half = Math.tan(THREE.MathUtils.degToRad(data.fov) / 2) * Math.min(1, size.w / size.h);
     const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(new THREE.Quaternion().fromArray(data.quaternion));
@@ -108,16 +103,7 @@ export class CameraRig {
     this.onChange();
     return true;
   }
-  prepareNavigation() { if (!this.overlayEditing && this.active && !this.navigatingView) this.leave(true); }
-  editOverlay(id: string) {
-    if (this.overlayEditing === id) { this.stopOverlayEditing(); return; }
-    // the view stays as it is (zoomed and moved or not): only a camera that is not yet looked through is entered
-    if (this.active !== id) this.view(id);
-    else this.stopEditing();
-    if (this.active !== id) return;
-    this.overlayEditing = id; this.orbit.enabled = false; this.onChange();
-  }
-  stopOverlayEditing() { this.overlayEditing = null; this.orbit.enabled = !this.active || this.navigatingView; this.onChange(); }
+  prepareNavigation() { if (this.active && !this.navigatingView) this.leave(true); }
   setCaptureBackground(id: string, enabled: boolean) {
     const data = this.cameras.find(c => c.id === id); if (!data) return;
     if (enabled) data.captureBackground = true; else delete data.captureBackground;
@@ -148,7 +134,7 @@ export class CameraRig {
   }
   private readonly saveNavigation = () => {
     const data = this.activeCamera;
-    if (!data?.navigateView || this.resettingOrbit || this.overlayEditing) return;
+    if (!data?.navigateView || this.resettingOrbit) return;
     this.applyRoll();
     if (this.camera.position.equals(new THREE.Vector3().fromArray(data.position)) && this.camera.quaternion.equals(new THREE.Quaternion().fromArray(data.quaternion))) return;
     data.position = this.camera.position.toArray(); data.quaternion = this.camera.quaternion.toArray();
@@ -190,7 +176,6 @@ export class CameraRig {
   }
   view(id: string) {
     if (!this.cameras.some(c => c.id === id)) return;
-    this.overlayEditing = null;
     this.onEnter(); this.stopEditing();
     if (!this.freeView) this.freeView = { camera: this.camera.clone(), target: this.orbit.target.clone() };
     this.resetOrbitMotion();
@@ -208,8 +193,7 @@ export class CameraRig {
   leave(keepView = false) {
     // the viewport that is left behind has the shot as it was made, not as the view was zoomed
     if (this.viewZoom !== 1 || this.viewPan.x || this.viewPan.y) { this.viewZoom = 1; this.viewPan = { x: 0, y: 0 }; this.update(); }
-    this.overlayEditing = null;
-    this.active = null; this.frame.hidden = true; this.viewZoom = 1; this.viewPan = { x: 0, y: 0 }; this.backdrop.hide();
+    this.active = null; this.frame.hidden = true; this.viewZoom = 1; this.viewPan = { x: 0, y: 0 };
     if (this.camera.view?.enabled) this.camera.clearViewOffset();
     if (this.freeView && !keepView) {
       this.camera.copy(this.freeView.camera); this.orbit.target.copy(this.freeView.target);
@@ -294,7 +278,7 @@ export class CameraRig {
   update(resetTarget = false) {
     const data = this.activeCamera;
     this.visuals.visible = !data;
-    if (!data) { this.backdrop.hide(); this.shotFrame = null; return; }
+    if (!data) { this.shotFrame = null; return; }
     const width = Math.max(1, this.container.clientWidth), height = Math.max(1, this.container.clientHeight);
     const size = cameraSize(data), rect = cameraFrame(width, height, size.w / size.h);
     this.camera.position.fromArray(data.position); this.camera.quaternion.fromArray(data.quaternion);
@@ -309,15 +293,14 @@ export class CameraRig {
       const direction = this.camera.getWorldDirection(new THREE.Vector3());
       this.orbit.target.copy(this.camera.position).addScaledVector(direction, 100);
     }
-    this.orbit.enabled = !this.overlayEditing && !this.holdOrbit() && (!!data.navigateView || !!this.navigation);
+    this.orbit.enabled = !this.holdOrbit() && (!!data.navigateView || !!this.navigation);
     // Apply damping and save the shot before particles and rendering.
-    if (data.navigateView && !this.overlayEditing && !resetTarget) { this.orbit.update(); this.applyRoll(); this.camera.updateMatrixWorld(true); }
+    if (data.navigateView && !resetTarget) { this.orbit.update(); this.applyRoll(); this.camera.updateMatrixWorld(true); }
     this.frame.hidden = false;
     // the border of the shot is the size of the shot on the screen: it grows when the view zooms in and shrinks when it zooms out, with the world around it
     const z = this.viewZoom, w = rect.w * z, h = rect.h * z;
     const fx = (width - w) / 2 + this.viewPan.x, fy = (height - h) / 2 + this.viewPan.y;
     Object.assign(this.frame.style, { left: `${fx}px`, top: `${fy}px`, width: `${w}px`, height: `${h}px` });
-    this.backdrop.update(data.overlay?.background, { x: fx, y: fy, w, h }, { w: width, h: height });
     this.shotFrame = { x: fx / width, y: 1 - (fy + h) / height, w: w / width, h: h / height, pixels: size };
   }
   /** While looking through a camera: where the picture is in the view (fractions, y up) and its size in pixels. */
@@ -387,7 +370,7 @@ export class CameraRig {
       this.pointer = { x: event.clientX, y: event.clientY };
       if (this.modal) this.updateModal(dom);
     }, { capture: true, signal });
-    const end = () => { this.navigation = null; if (this.active) this.orbit.enabled = !this.overlayEditing && !this.holdOrbit() && this.navigatingView; };
+    const end = () => { this.navigation = null; if (this.active) this.orbit.enabled = !this.holdOrbit() && this.navigatingView; };
     dom.addEventListener("pointerup", end, { capture: true, signal });
     dom.addEventListener("pointercancel", end, { capture: true, signal });
     // in a fixed camera the wheel zooms the view; nothing else of the navigation works
@@ -439,5 +422,5 @@ export class CameraRig {
     if (data && !confirm) { data.position = modal.position.toArray(); data.quaternion = modal.quaternion.toArray(); }
     this.orbit.enabled = !this.active; this.applyParts(); this.refresh();
   }
-  dispose() { this.backdrop.dispose(); this.orbit.removeEventListener("change", this.saveNavigation); this.events.abort(); this.stopEditing(); this.leave(); this.clearVisuals(); this.gizmos.dispose(); this.scene.remove(this.pivot, this.visuals); this.frame.remove(); }
+  dispose() { this.orbit.removeEventListener("change", this.saveNavigation); this.events.abort(); this.stopEditing(); this.leave(); this.clearVisuals(); this.gizmos.dispose(); this.scene.remove(this.pivot, this.visuals); this.frame.remove(); }
 }

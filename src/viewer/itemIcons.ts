@@ -87,5 +87,4 @@ async function trimIcon(url: string): Promise<string> {
   return out.toDataURL();
 }
 
-/** Native large inventory artwork, loaded only for icons placed in camera overlays. */
-export function overlayItemIcon(image: string): Promise<string | null> { return cache.overlay(image); }
+
