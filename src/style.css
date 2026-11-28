@@ -19,7 +19,7 @@ body { background: var(--bg); color: var(--fg); font: var(--ui-fw-body) var(--ui
 #canvasWrap { flex: 1; }
 .playMouseCaptured, .playMouseCaptured * { cursor: none !important; }
 #canvasWrap.playMode::after { content: ""; position: absolute; inset: 0; z-index: 8; border: 2px solid var(--accent); box-shadow: inset 0 0 18px var(--ui-accent-line), inset 0 0 4px var(--ui-accent-line); pointer-events: none; }
-#viewPlayHint[hidden] { display: none; }
+#viewPlayHint[hidden], #viewFlyHint[hidden] { display: none; }
 #viewFollow[hidden] { display: none; }
 #dockRight { grid-area: 1 / 3 / 3 / 4; border-right: 0; border-left: 1px solid var(--line); }
 #dockBottom { grid-area: 2 / 2; border-right: 0; border-top: 1px solid var(--line); }
@@ -1033,6 +1033,7 @@ body.dockDragging * { cursor: grabbing !important; }
 #viewHud button:disabled, .phBtn:disabled, .phToggle:has(input:disabled) { opacity: .4; cursor: default; }
 #viewToolbar svg, #viewHud svg, #hudBody svg, .phBtn svg { width: var(--ui-icon-l); height: var(--ui-icon-l); }
 #viewHud svg { fill: currentColor; }
+#viewHud #hudFly svg { fill: none; }
 #hudBody { background: var(--ui-float); border-radius: var(--ui-radius-xl); width: calc(var(--ui-h-float) + 8px); height: calc(var(--ui-h-float) + 8px); }
 #hudBody svg { fill: none; stroke: currentColor; }
 #viewToolbar #viewSelect button.once { outline: 1px dashed var(--accent); outline-offset: -3px; }
@@ -1173,8 +1174,9 @@ div.setRow:hover { background: none; }
 #viewActions kbd { display: inline-grid; place-items: center; min-width: 16px; height: 16px; padding: 0 3px; border-radius: var(--ui-radius-s); border: 1px solid var(--line); background: var(--ui-canvas); color: var(--accent); font: 600 var(--ui-fs-micro) var(--ui-mono); }
 .playStatus { grid-column: 1 / -1; height: var(--ui-h); padding: 0 var(--ui-3); display: flex; align-items: center; border-radius: var(--ui-radius-l); background: var(--ui-float); color: var(--ui-text); font: var(--ui-fs-small) var(--ui-mono); }
 .playStatus:empty { display: none; }
-#viewPlayHint { position: absolute; top: 44px; left: 50%; transform: translateX(-50%); z-index: 9; display: flex; align-items: center; gap: var(--ui-3); height: var(--ui-h-l); padding: 0 var(--ui-4) 0 var(--ui-3); border: 1px solid var(--ui-accent-line); border-radius: var(--ui-radius-xl); background: var(--ui-float); color: var(--ui-accent-text); font-size: var(--ui-fs-micro); font-weight: 600; letter-spacing: .06em; white-space: nowrap; }
-#viewPlayHint kbd { display: grid; place-items: center; min-width: 26px; height: 18px; padding: 0 4px; border: 1px solid var(--accent); border-radius: var(--ui-radius-s); background: color-mix(in srgb, var(--accent) 16%, var(--ui-canvas)); color: var(--accent); font: 600 var(--ui-fs-micro) var(--ui-mono); letter-spacing: 0; }
+#viewPlayHint, #viewFlyHint { position: absolute; top: 44px; left: 50%; transform: translateX(-50%); z-index: 9; display: flex; align-items: center; gap: var(--ui-3); height: var(--ui-h-l); padding: 0 var(--ui-4) 0 var(--ui-3); border: 1px solid var(--ui-accent-line); border-radius: var(--ui-radius-xl); background: var(--ui-float); color: var(--ui-accent-text); font-size: var(--ui-fs-micro); font-weight: 600; letter-spacing: .06em; white-space: nowrap; }
+#viewFlyHint .flyKeys { color: var(--ui-text); font-weight: 400; letter-spacing: 0; }
+#viewPlayHint kbd, #viewFlyHint kbd { display: grid; place-items: center; min-width: 26px; height: 18px; padding: 0 4px; border: 1px solid var(--accent); border-radius: var(--ui-radius-s); background: color-mix(in srgb, var(--accent) 16%, var(--ui-canvas)); color: var(--accent); font: 600 var(--ui-fs-micro) var(--ui-mono); letter-spacing: 0; }
 .videoGo.on { border-color: var(--ui-accent-line); background: var(--ui-accent-soft); color: var(--fg); }
 
 /* the prop browser */

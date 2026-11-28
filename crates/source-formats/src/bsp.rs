@@ -105,6 +105,61 @@ pub struct MapMesh {
     pub tangents_s: Vec<f32>,
     pub tangents_t: Vec<f32>,
     pub indices: Vec<u32>,
+    /// Part of the 3D skybox (see [`SkyCamera`]): in the skybox's own small units, where the map keeps it.
+    pub sky: bool,
+    /// Part of a door (an index into [`Map::doors`]): it moves as the door opens.
+    pub door: Option<usize>,
+}
+
+/// A sliding door (`func_door`): which way it opens and how far (map units), how fast (units a second), and whether it starts open
+/// (its spawn position, or a gate the round's logic opens rather than a trigger: open, as the round has begun).
+pub struct MapDoor {
+    pub name: String,
+    pub dir: [f32; 3],
+    pub distance: f32,
+    pub speed: f32,
+    pub start_open: bool,
+    /// The animations it starts on props as it opens or closes (`OnOpen`/`OnClose` outputs to `SetAnimation`): (`open` or `close`, the
+    /// prop's name, a pattern maybe ending in `*`, the sequence).
+    pub anims: Vec<(String, String, String)>,
+}
+
+/// Whether an entity's name is what an output targets (a name, or the start of names ending in `*`; lower case).
+pub fn name_matches(name: &str, target: &str) -> bool {
+    match target.strip_suffix('*') {
+        Some(prefix) => name.starts_with(prefix),
+        None => name == target,
+    }
+}
+
+/// A trigger (`trigger_multiple`) that opens doors while someone is in it: its box (map units) and the doors it opens on being entered
+/// and closes on being left (by name).
+pub struct MapTrigger {
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+    pub open: Vec<String>,
+    pub close: Vec<String>,
+}
+
+/// The 3D skybox: a small copy of the scenery around the map, built somewhere out of the way in the map. The game draws it first, seen
+/// from `origin + eye / scale` (so a point `p` of it shows where `(p - origin) * scale` is in the map), then the map over it.
+#[derive(Clone, Copy)]
+pub struct SkyCamera {
+    pub origin: [f32; 3],
+    pub scale: f32,
+    /// Its fog (`fogenable`): colour (0..1, gamma), where it starts and ends (in the map's units, seen from the eye) and how thick it gets.
+    pub fog: Option<([f32; 3], f32, f32, f32)>,
+}
+
+/// The fog an entity sets (`env_fog_controller`, `sky_camera`), when it turns it on: colour (0..1, gamma), start, end, most thickness.
+fn entity_fog(e: &HashMap<String, String>) -> Option<([f32; 3], f32, f32, f32)> {
+    if !e.get("fogenable").is_some_and(|v| v.trim() == "1") {
+        return None;
+    }
+    let num = |k: &str| e.get(k).and_then(|v| v.trim().parse::<f32>().ok());
+    let c: Vec<f32> = e.get("fogcolor").map(|c| c.split_whitespace().filter_map(|v| v.parse().ok()).collect()).unwrap_or_default();
+    let color = if c.len() >= 3 { [c[0] / 255.0, c[1] / 255.0, c[2] / 255.0] } else { [1.0; 3] };
+    Some((color, num("fogstart").unwrap_or(500.0), num("fogend").unwrap_or(2000.0), num("fogmaxdensity").filter(|d| *d > 0.0).unwrap_or(1.0).min(1.0)))
 }
 
 /// A model the map places: a static prop or a prop entity.
@@ -124,10 +179,16 @@ pub struct MapProp {
     pub sunlit: bool,
     /// The strongest light that reaches it (not in `ambient`): the direction toward it and its colour.
     pub key: Option<([f32; 3], [f32; 3])>,
+    /// The door it is attached to (`parentname`, an index into [`Map::doors`]): it moves with it.
+    pub door: Option<usize>,
     /// Where the game lights it from, when the map says (a static prop's lighting origin).
     pub lighting_origin: Option<[f32; 3]>,
     /// The sequence a prop entity plays (its DefaultAnim; none: its first). Static props do not move.
     pub animation: Option<String>,
+    /// It stands in the 3D skybox (see [`SkyCamera`]).
+    pub sky: bool,
+    /// A prop entity's name (`targetname`, lower case), when it has one.
+    pub name: Option<String>,
 }
 
 /// How the map's characters cast their shadows (its `shadow_control`): the way the shadows fall (a direction, the map's axes), their
@@ -179,6 +240,13 @@ pub struct Map {
     pub cubemaps: Vec<[i32; 3]>,
     /// The map's light where something stands (for the characters).
     pub light: MapLight,
+    /// Its 3D skybox, when it has one (the meshes and props with `sky` set).
+    pub sky_camera: Option<SkyCamera>,
+    /// Its fog (`env_fog_controller`, the first one on): colour (0..1, gamma), start, end (map units) and how thick it gets at most.
+    pub fog: Option<([f32; 3], f32, f32, f32)>,
+    /// Its sliding doors and the triggers that open them.
+    pub doors: Vec<MapDoor>,
+    pub triggers: Vec<MapTrigger>,
 }
 
 /// What the light of a map is made of, to ask it where things stand: its BSP tree (which leaf a point is in), its brushes (whether a
@@ -649,6 +717,12 @@ impl Atlas {
 
 /// Reads a map from its bytes.
 pub fn read(file: &[u8]) -> Result<Map> {
+    read_with(file, &|_| None)
+}
+
+/// [`read`], with where each model is lit from (`illum`: a model's illumination position, its own units, by its path): a prop entity is
+/// lit there, as the game lights it, rather than a little up from its origin (a gate whose origin is at the floor of a dark doorway).
+pub fn read_with(file: &[u8], illum: &dyn Fn(&str) -> Option<[f32; 3]>) -> Result<Map> {
     let bsp = Bsp::new(file)?;
     let planes = bsp.lump(LUMP_PLANES);
     let verts = bsp.lump(LUMP_VERTEXES);
@@ -732,6 +806,14 @@ pub fn read(file: &[u8]) -> Result<Map> {
     let mut shown_models: Vec<(usize, [f32; 3], [f32; 3])> = vec![(0, [0.0; 3], [0.0; 3])];
     let mut sun = None;
     let mut sky_camera = None;
+    let mut fog = None;
+    // the doors (model, name, movedir angles, speed, lip, starts open), the triggers (model, origin, opens, closes), and the doors that
+    // something other than a trigger opens
+    let mut door_ents: Vec<(usize, String, [f32; 3], f32, f32, bool, Vec<(String, String, String)>)> = Vec::new();
+    let mut trigger_ents: Vec<(usize, [f32; 3], Vec<String>, Vec<String>)> = Vec::new();
+    let mut opened_elsewhere: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // the prop entities attached to something (by its name): the ones on a door move with it
+    let mut prop_parents: Vec<(usize, String)> = Vec::new();
     let (mut exposure_min, mut exposure_max) = (None, None);
     for e in &entities {
         // the outputs that set the auto exposure's limits (target, input, parameter, delay, times; split by commas or ESC)
@@ -756,7 +838,11 @@ pub fn read(file: &[u8]) -> Result<Map> {
         let angles = e.get("angles").map(|s| parse3(s)).unwrap_or([0.0; 3]);
         match class {
             "worldspawn" => sky = e.get("skyname").filter(|s| !s.is_empty()).cloned(),
-            "sky_camera" => sky_camera = Some(origin),
+            "sky_camera" => {
+                let scale = e.get("scale").and_then(|v| v.trim().parse::<f32>().ok()).filter(|s| *s > 0.0).unwrap_or(16.0);
+                sky_camera = Some(SkyCamera { origin, scale, fog: entity_fog(e) });
+            }
+            "env_fog_controller" => fog = fog.or_else(|| entity_fog(e)),
             "light_environment" => {
                 // the direction the light comes from: its angles, with "pitch" in place of theirs when given
                 let pitch = e.get("pitch").and_then(|p| p.parse::<f32>().ok()).unwrap_or(angles[0]);
@@ -773,6 +859,46 @@ pub fn read(file: &[u8]) -> Result<Map> {
             }
             "info_player_teamspawn" => spawns.push(MapSpawn { origin, yaw: angles[1], team: e.get("teamnum").and_then(|t| t.parse().ok()).unwrap_or(0) }),
             _ => {}
+        }
+        // the outputs' targets with a given input (`target,input,parameter,delay,times`, one per line), of the keys starting with any of
+        // the given names
+        let targets = |keys: &[&str], input: &str| -> Vec<String> {
+            e.iter()
+                .filter(|(k, _)| keys.iter().any(|p| k.starts_with(p)))
+                .flat_map(|(_, v)| v.lines())
+                .filter_map(|o| {
+                    let parts: Vec<&str> = o.split([',', '\u{1b}']).collect();
+                    (parts.len() >= 2 && parts[1].trim().eq_ignore_ascii_case(input)).then(|| parts[0].trim().to_ascii_lowercase())
+                })
+                .collect()
+        };
+        let brush = e.get("model").and_then(|m| m.strip_prefix('*')).and_then(|n| n.parse::<usize>().ok());
+        match (class, brush) {
+            ("func_door", Some(n)) => {
+                let num = |k: &str| e.get(k).and_then(|v| v.trim().parse::<f32>().ok());
+                let start_open = num("spawnflags").is_some_and(|f| (f as i64) & 1 != 0) || num("spawnpos").is_some_and(|p| p == 1.0);
+                let name = e.get("targetname").map(|n| n.to_ascii_lowercase()).unwrap_or_default();
+                let movedir = e.get("movedir").map(|s| parse3(s)).unwrap_or([0.0; 3]);
+                // the animations its opening and closing start on props
+                let mut anims = Vec::new();
+                for (key, event) in [("onopen", "open"), ("onclose", "close")] {
+                    for o in e.get(key).into_iter().flat_map(|v| v.lines()) {
+                        let parts: Vec<&str> = o.split([',', '\u{1b}']).collect();
+                        if parts.len() >= 3 && parts[1].trim().eq_ignore_ascii_case("setanimation") && !parts[2].trim().is_empty() {
+                            anims.push((event.to_string(), parts[0].trim().to_ascii_lowercase(), parts[2].trim().to_string()));
+                        }
+                    }
+                }
+                door_ents.push((n, name, movedir, num("speed").filter(|v| *v > 0.0).unwrap_or(100.0), num("lip").unwrap_or(0.0), start_open, anims));
+            }
+            ("trigger_multiple" | "trigger_once", Some(n)) => {
+                let open = targets(&["onstarttouch", "ontrigger"], "open");
+                let close = targets(&["onendtouch"], "close");
+                if !open.is_empty() {
+                    trigger_ents.push((n, origin, open, close));
+                }
+            }
+            _ => opened_elsewhere.extend(targets(&["on"], "open")),
         }
         let Some(model) = e.get("model") else { continue };
         if let Some(n) = model.strip_prefix('*') {
@@ -792,17 +918,33 @@ pub fn read(file: &[u8]) -> Result<Map> {
                 key: None,
                 lighting_origin: None,
                 animation: e.get("defaultanim").map(|a| a.trim().to_string()).filter(|a| !a.is_empty()),
+                sky: false,
+                name: e.get("targetname").map(|n| n.trim().to_ascii_lowercase()).filter(|n| !n.is_empty()),
+                door: None,
             });
+            if let Some(parent) = e.get("parentname").filter(|p| !p.is_empty()) {
+                prop_parents.push((props.len() - 1, parent.to_ascii_lowercase()));
+            }
         }
     }
     props.extend(static_props(&bsp));
     let texinfo_flags: Vec<i32> = texinfos.iter().map(|t| t.flags).collect();
     let light = map_light(&bsp, sun, &texinfo_flags);
     let sun = light.sun;
-    // the 3D skybox (the small copy of the scenery around the map that the game draws far away) is left out: its area
-    let sky_area = sky_camera.and_then(|o| light.area_at(o)).filter(|&a| a != 0);
+    // the 3D skybox (the small copy of the scenery around the map that the game draws far away): what is in its area is marked
+    let sky_area = sky_camera.and_then(|c| light.area_at(c.origin)).filter(|&a| a != 0);
+    let sky_camera = sky_camera.filter(|_| sky_area.is_some());
     let in_sky = |p: [f32; 3]| sky_area.is_some() && light.area_at(p) == sky_area;
-    props.retain(|p| !in_sky(p.origin));
+    for p in &mut props {
+        p.sky = in_sky(p.origin);
+    }
+    let mut illum_of: HashMap<String, Option<[f32; 3]>> = HashMap::new();
+    for p in props.iter_mut().filter(|p| p.static_index.is_none() && p.lighting_origin.is_none()) {
+        let Some(at) = *illum_of.entry(p.model.clone()).or_insert_with(|| illum(&p.model)) else { continue };
+        let rot = rotation(p.angles);
+        let s = p.scale;
+        p.lighting_origin = Some(std::array::from_fn(|i| p.origin[i] + (rot[i][0] * at[0] + rot[i][1] * at[1] + rot[i][2] * at[2]) * s));
+    }
     let mut lit_at: HashMap<[i32; 3], ([[f32; 3]; 6], bool, Option<([f32; 3], [f32; 3])>)> = HashMap::new();
     for p in &mut props {
         // lit where the game lights it: its lighting origin when it has one, else a little up from its origin; a point in a wall (a
@@ -876,13 +1018,48 @@ pub fn read(file: &[u8]) -> Result<Map> {
         [(ax as f32 + s + 0.5) / width as f32, (ay as f32 + u + 0.5) / height as f32]
     };
 
+    // the doors and their triggers: a door opens as far as it is wide along its direction, less its lip (func_door's Spawn)
+    let model_box = |n: usize| -> Option<([f32; 3], [f32; 3])> {
+        let m = models.data.get(n * 48..n * 48 + 48)?;
+        Some((vec3(m, 0), vec3(m, 12)))
+    };
+    let opened_by_trigger: Vec<&String> = trigger_ents.iter().flat_map(|t| t.2.iter()).collect();
+    let mut doors = Vec::new();
+    let mut door_of: HashMap<usize, usize> = HashMap::new();
+    for (n, name, movedir, speed, lip, start_open, anims) in &door_ents {
+        let Some((lo, hi)) = model_box(*n) else { continue };
+        let (p, y) = (movedir[0].to_radians(), movedir[1].to_radians());
+        let dir = [p.cos() * y.cos(), p.cos() * y.sin(), -p.sin()];
+        let size = sub(hi, lo);
+        let distance = (dir[0].abs() * (size[0] - 2.0) + dir[1].abs() * (size[1] - 2.0) + dir[2].abs() * (size[2] - 2.0) - lip).max(0.0);
+        // (outputs may name many doors at once: `door_middle_*`)
+        let gate = !name.is_empty()
+            && opened_elsewhere.iter().any(|t| name_matches(name, t))
+            && !opened_by_trigger.iter().any(|t| name_matches(name, t));
+        door_of.insert(*n, doors.len());
+        doors.push(MapDoor { name: name.clone(), dir, distance, speed: *speed, start_open: *start_open || gate, anims: anims.clone() });
+    }
+    for (n, parent) in prop_parents {
+        props[n].door = doors.iter().position(|d: &MapDoor| d.name == parent);
+    }
+    let triggers: Vec<MapTrigger> = trigger_ents
+        .into_iter()
+        .filter_map(|(n, origin, open, close)| {
+            let (lo, hi) = model_box(n)?;
+            Some(MapTrigger { min: [lo[0] + origin[0], lo[1] + origin[1], lo[2] + origin[2]], max: [hi[0] + origin[0], hi[1] + origin[1], hi[2] + origin[2]], open, close })
+        })
+        .collect();
+
     // the faces of the shown models, by material
-    let mut by_material: HashMap<String, MapMesh> = HashMap::new();
+    let mut by_material: HashMap<(String, bool, Option<usize>), MapMesh> = HashMap::new();
+    // the displacements of the world, by face: the overlays on them follow their surface
+    let mut disp_grids: HashMap<usize, DispGrid> = HashMap::new();
     let mut bounds = [f32::MAX, f32::MAX, f32::MAX, f32::MIN, f32::MIN, f32::MIN];
     for &(model, origin, angles) in &shown_models {
         let Some(m) = models.data.get(model * 48..model * 48 + 48) else { continue };
         let (first, count) = (i32_at(m, 40).unwrap_or(0).max(0) as usize, i32_at(m, 44).unwrap_or(0).max(0) as usize);
         let rotate = rotation(angles);
+        let door = door_of.get(&model).copied();
         let place = |p: [f32; 3]| -> [f32; 3] {
             let r = mul3(&rotate, p);
             [r[0] + origin[0], r[1] + origin[1], r[2] + origin[2]]
@@ -900,18 +1077,17 @@ pub fn read(file: &[u8]) -> Result<Map> {
                 continue;
             }
             let water = t.flags & SURF_WARP != 0;
-            if sky_area.is_some() && model == 0 {
+            // (a face of the 3D skybox: the point just in front of its middle is in the skybox's area)
+            let sky = sky_area.is_some() && model == 0 && {
                 let poly = face_vertices(f);
-                if !poly.is_empty() {
+                !poly.is_empty() && {
                     let c = poly.iter().fold([0.0; 3], |a, v| [a[0] + v[0], a[1] + v[1], a[2] + v[2]]).map(|v| v / poly.len() as f32);
                     let pn = vec3(planes, f.plane * 20);
                     let n = if f.side { pn.map(|v| -v) } else { pn };
-                    if in_sky([c[0] + n[0] * 2.0, c[1] + n[1] * 2.0, c[2] + n[2] * 2.0]) {
-                        continue;
-                    }
+                    in_sky([c[0] + n[0] * 2.0, c[1] + n[1] * 2.0, c[2] + n[2] * 2.0])
                 }
-            }
-            let mesh = by_material.entry(material.clone()).or_insert_with(|| MapMesh { material: material.clone(), ..Default::default() });
+            };
+            let mesh = by_material.entry((material.clone(), sky, door)).or_insert_with(|| MapMesh { material: material.clone(), sky, door, ..Default::default() });
             let uv = |p: [f32; 3]| -> [f32; 2] {
                 [(dot(p, [t.texture[0][0], t.texture[0][1], t.texture[0][2]]) + t.texture[0][3]) / tw, (dot(p, [t.texture[1][0], t.texture[1][1], t.texture[1][2]]) + t.texture[1][3]) / th]
             };
@@ -1000,6 +1176,16 @@ pub fn read(file: &[u8]) -> Result<Map> {
                         tri.swap(1, 2);
                     }
                 }
+                if model == 0 {
+                    let up = |v: [f32; 3]| if flip { normalize(v).map(|x| -x) } else { normalize(v) };
+                    disp_grids.insert(i, DispGrid {
+                        corners: [c[0], c[1], c[2], c[3]],
+                        n,
+                        positions: grid.iter().map(|g| g.0).collect(),
+                        lightmap: grid.iter().map(|g| g.2).collect(),
+                        normals: normals.iter().map(|&v| up(v)).collect(),
+                    });
+                }
                 for (j, (p, tuv, luv, alpha)) in grid.into_iter().enumerate() {
                     let nn = normalize(normals[j]);
                     let nn = if flip { [-nn[0], -nn[1], -nn[2]] } else { nn };
@@ -1011,7 +1197,9 @@ pub fn read(file: &[u8]) -> Result<Map> {
                     let (ts, tt) = tangents(nn);
                     mesh.tangents_s.extend_from_slice(&ts);
                     mesh.tangents_t.extend_from_slice(&tt);
-                    grow(&mut bounds, p);
+                    if !sky {
+                        grow(&mut bounds, p);
+                    }
                 }
             } else {
                 for &p in &corners {
@@ -1024,7 +1212,9 @@ pub fn read(file: &[u8]) -> Result<Map> {
                     let (ts, tt) = tangents(normal);
                     mesh.tangents_s.extend_from_slice(&ts);
                     mesh.tangents_t.extend_from_slice(&tt);
-                    grow(&mut bounds, at);
+                    if !sky {
+                        grow(&mut bounds, at);
+                    }
                 }
                 // a convex polygon, wound clockwise seen from its front (the game's way): a fan, turned to counter-clockwise
                 for k in 1..corners.len() as u32 - 1 {
@@ -1046,9 +1236,7 @@ pub fn read(file: &[u8]) -> Result<Map> {
         let pts: Vec<[f32; 3]> = (0..4).map(|k| vec3(o, 280 + k * 12)).collect();
         let origin = vec3(o, 328);
         let normal = normalize(vec3(o, 340));
-        if in_sky(origin) {
-            continue;
-        }
+        let sky = in_sky(origin);
         // the basis: U from the points' third components, V = normal x U (the engine's unpacking)
         let bu = normalize([pts[0][2], pts[1][2], pts[2][2]]);
         let bv = cross(normal, bu);
@@ -1057,7 +1245,7 @@ pub fn read(file: &[u8]) -> Result<Map> {
             [p[0] + normal[0] * 0.25, p[1] + normal[1] * 0.25, p[2] + normal[2] * 0.25]
         }).collect();
         let uvs = [[u[0], v[0]], [u[0], v[1]], [u[1], v[1]], [u[1], v[0]]];
-        let mesh = by_material.entry(format!("{OVERLAY_PREFIX}{material}")).or_insert_with(|| MapMesh { material: format!("{OVERLAY_PREFIX}{material}"), ..Default::default() });
+        let mesh = by_material.entry((format!("{OVERLAY_PREFIX}{material}"), sky, None)).or_insert_with(|| MapMesh { material: format!("{OVERLAY_PREFIX}{material}"), sky, ..Default::default() });
         let ts = bu;
         let tt = bv.map(|c| -c);
         // wound to face along the normal
@@ -1109,7 +1297,47 @@ pub fn read(file: &[u8]) -> Result<Map> {
             }
         }
         for (piece, fi) in pieces {
+            // on a displacement: laid over its triangles (as the game clips an overlay to a displacement's surface)
+            if let Some(g) = fi.and_then(|fi| disp_grids.get(&fi)) {
+                for tri in g.drape(&piece, normal) {
+                    let base = (mesh.positions.len() / 3) as u32;
+                    let n = normalize(cross(sub(tri[1].0, tri[0].0), sub(tri[2].0, tri[0].0)));
+                    let up = tri.iter().fold([0.0; 3], |a, v| [a[0] + v.3[0], a[1] + v.3[1], a[2] + v.3[2]]);
+                    for (p, uv, luv, vn) in &tri {
+                        // (a little off the surface, along it)
+                        mesh.positions.extend_from_slice(&[p[0] + vn[0] * 0.5, p[1] + vn[1] * 0.5, p[2] + vn[2] * 0.5]);
+                        mesh.normals.extend_from_slice(vn);
+                        mesh.uvs.extend_from_slice(uv);
+                        mesh.lightmap_uvs.extend_from_slice(luv);
+                        mesh.blend.push(0.0);
+                        mesh.tangents_s.extend_from_slice(&ts);
+                        mesh.tangents_t.extend_from_slice(&tt);
+                    }
+                    // wound counter-clockwise seen from above the surface
+                    if dot(n, up) >= 0.0 {
+                        mesh.indices.extend_from_slice(&[base, base + 1, base + 2]);
+                    } else {
+                        mesh.indices.extend_from_slice(&[base, base + 2, base + 1]);
+                    }
+                }
+                continue;
+            }
             let lit = fi.and_then(|fi| faces.get(fi).and_then(|f| texinfos.get(f.texinfo as usize).map(|ft| (fi, f, ft))));
+            // on its face's plane, along its normal, as the engine projects an overlay (its origin may be well off the surface)
+            let plane = lit.map(|(_, f, _)| (vec3(planes, f.plane * 20), f32_at(planes, f.plane * 20 + 12).unwrap_or(0.0)));
+            let piece: Vec<([f32; 3], [f32; 2])> = piece
+                .into_iter()
+                .map(|(p, uv)| {
+                    let Some((pn, pd)) = plane else { return (p, uv) };
+                    let along_n = dot(pn, normal);
+                    if along_n.abs() < 1e-3 {
+                        return (p, uv);
+                    }
+                    // (a little off it along its normal, as the corners were)
+                    let t = (dot(pn, p) - pd) / along_n - 0.25;
+                    ([p[0] - normal[0] * t, p[1] - normal[1] * t, p[2] - normal[2] * t], uv)
+                })
+                .collect();
             let base = (mesh.positions.len() / 3) as u32;
             for (p, uv) in &piece {
                 mesh.positions.extend_from_slice(p);
@@ -1130,7 +1358,7 @@ pub fn read(file: &[u8]) -> Result<Map> {
         }
     }
     let mut meshes: Vec<MapMesh> = by_material.into_values().filter(|m| !m.indices.is_empty()).collect();
-    meshes.sort_by(|a, b| a.material.cmp(&b.material));
+    meshes.sort_by(|a, b| (a.sky, &a.material).cmp(&(b.sky, &b.material)));
     if bounds[0] > bounds[3] {
         bounds = [0.0; 6];
     }
@@ -1150,7 +1378,132 @@ pub fn read(file: &[u8]) -> Result<Map> {
         let distance = control.and_then(|c| c.get("distance")).and_then(|d| d.trim().parse().ok()).filter(|d: &f32| *d > 0.0).unwrap_or(75.0);
         Some(MapShadow { dir: [p.cos() * y.cos(), p.cos() * y.sin(), -p.sin()], color, distance })
     };
-    Ok(Map { meshes, props, spawns, lightmap_width: width, lightmap_height: height, lightmap, sky, bounds, sun, light, exposure_min, exposure_max, cubemaps, shadow })
+    Ok(Map { meshes, props, spawns, lightmap_width: width, lightmap_height: height, lightmap, sky, bounds, sun, light, exposure_min, exposure_max, cubemaps, shadow, sky_camera, fog, doors, triggers })
+}
+
+/// A displacement of the world: its flat quad (from the corner its grid starts at: the grid's y runs toward the second, x toward the
+/// fourth) and its grid (n x n, row by row): where each point is, its lightmap position and its normal.
+struct DispGrid {
+    corners: [[f32; 3]; 4],
+    n: usize,
+    positions: Vec<[f32; 3]>,
+    lightmap: Vec<[f32; 2]>,
+    normals: Vec<[f32; 3]>,
+}
+
+/// A vertex of an overlay laid over a displacement: where it is, its overlay uv, its lightmap uv, its normal.
+type DrapedVertex = ([f32; 3], [f32; 2], [f32; 2], [f32; 3]);
+
+impl DispGrid {
+    /// Where a point over the flat quad is in its grid (x, y in 0..1), seen along a direction (the overlay's normal: the game projects
+    /// an overlay onto a sloped face along it, not across the face): the bilinear quad's parameters, by a few Newton steps.
+    fn param(&self, p: [f32; 3], along: [f32; 3]) -> [f32; 2] {
+        // (vectors with their part along the direction taken out)
+        let flat = |v: [f32; 3]| { let d = dot(v, along); [v[0] - along[0] * d, v[1] - along[1] * d, v[2] - along[2] * d] };
+        let [c0, c1, c2, c3] = self.corners;
+        let at = |x: f32, y: f32| lerp3(lerp3(c0, c1, y), lerp3(c3, c2, y), x);
+        let (mut x, mut y) = (0.5f32, 0.5f32);
+        for _ in 0..8 {
+            let e = flat(sub(at(x, y), p));
+            // d/dx and d/dy of the quad
+            let dx = flat(sub(lerp3(c3, c2, y), lerp3(c0, c1, y)));
+            let dy = flat(sub(lerp3(c1, c2, x), lerp3(c0, c3, x)));
+            // least squares: [dx dy] [ix iy] = -e (seen along the direction)
+            let (a, b, c) = (dot(dx, dx), dot(dx, dy), dot(dy, dy));
+            let (r0, r1) = (-dot(dx, e), -dot(dy, e));
+            let det = a * c - b * b;
+            if det.abs() < 1e-9 {
+                break;
+            }
+            x += (r0 * c - r1 * b) / det;
+            y += (a * r1 - b * r0) / det;
+        }
+        [x, y]
+    }
+
+    /// An overlay's piece (a convex polygon with its uv, over the flat quad) laid over the displacement's triangles: the triangles of it.
+    fn drape(&self, piece: &[([f32; 3], [f32; 2])], along: [f32; 3]) -> Vec<[DrapedVertex; 3]> {
+        let n = self.n;
+        let m = (n - 1) as f32;
+        // the piece in the grid's space, with its uv
+        let poly: Vec<([f32; 2], [f32; 2])> = piece.iter().map(|(p, uv)| (self.param(*p, along), *uv)).collect();
+        let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
+        for (q, _) in &poly {
+            for k in 0..2 {
+                lo[k] = lo[k].min(q[k]);
+                hi[k] = hi[k].max(q[k]);
+            }
+        }
+        let cell = |v: f32| ((v * m).floor().max(0.0) as usize).min(n - 2);
+        let mut out = Vec::new();
+        for gy in cell(lo[1])..=cell(hi[1]) {
+            for gx in cell(lo[0])..=cell(hi[0]) {
+                let (a, b, c2, d2) = (gy * n + gx, (gy + 1) * n + gx, (gy + 1) * n + gx + 1, gy * n + gx + 1);
+                let tris = if (gx + gy) % 2 == 0 { [[a, b, c2], [a, c2, d2]] } else { [[a, b, d2], [b, c2, d2]] };
+                for tri in tris {
+                    let gp = tri.map(|k| [(k % n) as f32 / m, (k / n) as f32 / m]);
+                    // the piece clipped to the triangle (its three edges, toward its third corner)
+                    let mut clipped = poly.clone();
+                    for e in 0..3 {
+                        let (p0, p1, p2) = (gp[e], gp[(e + 1) % 3], gp[(e + 2) % 3]);
+                        let edge = |q: [f32; 2]| (p1[0] - p0[0]) * (q[1] - p0[1]) - (p1[1] - p0[1]) * (q[0] - p0[0]);
+                        let inside = edge(p2).signum();
+                        let side = |q: [f32; 2]| edge(q) * inside;
+                        let mut next = Vec::new();
+                        for j in 0..clipped.len() {
+                            let (pa, pb) = (clipped[j], clipped[(j + 1) % clipped.len()]);
+                            let (da, db) = (side(pa.0), side(pb.0));
+                            if da >= 0.0 {
+                                next.push(pa);
+                            }
+                            if (da >= 0.0) != (db >= 0.0) {
+                                let t = da / (da - db);
+                                let l2 = |u: [f32; 2], v: [f32; 2]| [u[0] + (v[0] - u[0]) * t, u[1] + (v[1] - u[1]) * t];
+                                next.push((l2(pa.0, pb.0), l2(pa.1, pb.1)));
+                            }
+                        }
+                        clipped = next;
+                        if clipped.len() < 3 {
+                            break;
+                        }
+                    }
+                    if clipped.len() < 3 {
+                        continue;
+                    }
+                    // each vertex on the displaced triangle: by its barycentric weights there
+                    let det = (gp[1][1] - gp[2][1]) * (gp[0][0] - gp[2][0]) + (gp[2][0] - gp[1][0]) * (gp[0][1] - gp[2][1]);
+                    if det.abs() < 1e-12 {
+                        continue;
+                    }
+                    let vert = |(q, uv): ([f32; 2], [f32; 2])| -> DrapedVertex {
+                        let w0 = ((gp[1][1] - gp[2][1]) * (q[0] - gp[2][0]) + (gp[2][0] - gp[1][0]) * (q[1] - gp[2][1])) / det;
+                        let w1 = ((gp[2][1] - gp[0][1]) * (q[0] - gp[2][0]) + (gp[0][0] - gp[2][0]) * (q[1] - gp[2][1])) / det;
+                        let w = [w0, w1, 1.0 - w0 - w1];
+                        let mix3 = |v: &[[f32; 3]]| -> [f32; 3] {
+                            let mut o = [0.0; 3];
+                            for (k, &idx) in tri.iter().enumerate() {
+                                for c in 0..3 {
+                                    o[c] += v[idx][c] * w[k];
+                                }
+                            }
+                            o
+                        };
+                        let mut l = [0.0; 2];
+                        for (k, &idx) in tri.iter().enumerate() {
+                            l[0] += self.lightmap[idx][0] * w[k];
+                            l[1] += self.lightmap[idx][1] * w[k];
+                        }
+                        (mix3(&self.positions), uv, l, normalize(mix3(&self.normals)))
+                    };
+                    let vs: Vec<DrapedVertex> = clipped.into_iter().map(vert).collect();
+                    for k in 1..vs.len() - 1 {
+                        out.push([vs[0], vs[k], vs[k + 1]]);
+                    }
+                }
+            }
+        }
+        out
+    }
 }
 
 fn grow(b: &mut [f32; 6], p: [f32; 3]) {
@@ -1283,9 +1636,9 @@ fn static_props(bsp: &Bsp) -> Vec<MapProp> {
             let Some(model) = names.get(u16_at(p, 24).unwrap_or(0) as usize) else { continue };
             // version 11 ends with a uniform scale
             let scale = if version >= 11 { f32_at(p, stride - 4).filter(|s| *s > 0.0 && s.is_finite()).unwrap_or(1.0) } else { 1.0 };
-            out.push(MapProp { static_index: Some(k as u32), model: model.clone(), origin: vec3(p, 0), angles: vec3(p, 12), skin: i32_at(p, 32).unwrap_or(0), scale, ambient: [[0.0; 3]; 6], sunlit: false, key: None,
+            out.push(MapProp { static_index: Some(k as u32), model: model.clone(), origin: vec3(p, 0), angles: vec3(p, 12), skin: i32_at(p, 32).unwrap_or(0), scale, ambient: [[0.0; 3]; 6], sunlit: false, key: None, door: None, name: None,
                 // (flag 2: STATIC_PROP_USE_LIGHTING_ORIGIN)
-                lighting_origin: (p[31] & 2 != 0).then(|| vec3(p, 44)), animation: None });
+                lighting_origin: (p[31] & 2 != 0).then(|| vec3(p, 44)), animation: None, sky: false });
         }
     }
     out
@@ -1386,6 +1739,7 @@ const MAP_MATERIAL_PARAMS: &[&str] = &[
     "$bumptransform", "$nodiffusebumplighting", "$selfillumtint", "$detailscale", "$detailblendfactor", "$detailblendmode", "$decal",
     "$detailtexturetransform", "$phong", "$phongexponent", "$phongboost", "$phongfresnelranges", "$phongtint", "$basemapalphaphongmask",
     "$rimlight", "$rimlightexponent", "$rimlightboost", "$rimmask", "$selfillum", "$halflambert", "$phongalbedotint", "$invertphongmask",
+    "$nofog", "$texture2transform",
 ];
 
 /// The biggest face of a material's cubemap (reflections are blurry).
@@ -1402,6 +1756,8 @@ pub fn map_material(vpk: &crate::VpkSet, name: &str, max_size: u32) -> std::resu
     for (slot, keys) in [
         ("base", &["$basetexture"][..]),
         ("base2", &["$basetexture2"][..]),
+        // (UnlitTwoTexture's second texture, multiplied in)
+        ("texture2", &["$texture2"][..]),
         ("bump", &["$bumpmap", "$normalmap"][..]),
         ("bump2", &["$bumpmap2"][..]),
         ("envmask", &["$envmapmask"][..]),

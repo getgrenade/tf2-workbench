@@ -21,6 +21,7 @@ fn main() {
             blender::export_blend_rig,
             play_mouse::play_mouse_start,
             play_mouse::play_mouse_stop,
+            play_mouse::play_mouse_take,
             screen_color::pick_screen_color,
             commands::find_tf2,
             commands::index_tf2,

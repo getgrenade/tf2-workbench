@@ -1,10 +1,12 @@
 //! Native relative input avoids WebView2's unconfigurable pointer-lock banner.
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex};
+use std::sync::{atomic::{AtomicBool, AtomicI32, Ordering}, Arc, Mutex};
 use tauri::Emitter;
 
 #[derive(Default)]
 pub struct PlayMouse(Mutex<Option<Capture>>);
-struct Capture { id: String, stop: Arc<AtomicBool>, thread: Option<std::thread::JoinHandle<()>> }
+/// `motion`: the raw motion not yet taken (see play_mouse_take): the page takes it once a frame, so each frame turns by exactly the
+/// motion since the last (sent on a timer of its own, it beat against the frames: some frames turned twice, some not at all).
+struct Capture { id: String, stop: Arc<AtomicBool>, thread: Option<std::thread::JoinHandle<()>>, motion: Arc<[AtomicI32; 2]> }
 impl Drop for Capture {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
@@ -15,7 +17,7 @@ impl Drop for Capture {
 #[cfg(windows)]
 mod win {
     use super::*;
-    use std::{ffi::c_void, mem::size_of, ptr::null, time::{Duration, Instant}};
+    use std::{ffi::c_void, mem::size_of, ptr::null, time::Duration};
     type Hwnd = *mut c_void;
     #[repr(C)] #[derive(Default, Copy, Clone)] struct Point { x: i32, y: i32 }
     #[repr(C)] struct Rect { left: i32, top: i32, right: i32, bottom: i32 }
@@ -54,6 +56,8 @@ mod win {
         let stop = Arc::new(AtomicBool::new(false));
         let running = stop.clone();
         let capture_id = id.clone();
+        let motion: Arc<[AtomicI32; 2]> = Arc::new([AtomicI32::new(0), AtomicI32::new(0)]);
+        let moved = motion.clone();
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
         let thread = std::thread::spawn(move || unsafe {
             // A thread-owned message-only window receives raw motion even with a stationary cursor.
@@ -74,8 +78,6 @@ mod win {
             let rect = Rect { left: center.x, top: center.y, right: center.x + 1, bottom: center.y + 1 };
             let locked = SetCursorPos(center.x, center.y) != 0 && ClipCursor(&rect) != 0;
             let _ = ready_tx.send(if locked { Ok(()) } else { Err("Could not lock the cursor".into()) });
-            let mut delta = [0i32; 2];
-            let mut sent = Instant::now();
             while locked && !running.load(Ordering::Acquire) {
                 if GetForegroundWindow() as usize != hwnd || GetAsyncKeyState(0x1b) < 0 { break; }
                 let mut msg = Message::default();
@@ -86,8 +88,8 @@ mod win {
                         let read = GetRawInputData(msg.lp as Hwnd, 0x10000003, &mut input as *mut _ as *mut c_void, &mut bytes, size_of::<Header>() as u32);
                         if read == size_of::<Input>() as u32 && input.header.kind == 0 {
                             if input.mouse.flags & 1 == 0 {
-                                delta[0] = delta[0].saturating_add(input.mouse.x);
-                                delta[1] = delta[1].saturating_add(input.mouse.y);
+                                moved[0].fetch_add(input.mouse.x, Ordering::AcqRel);
+                                moved[1].fetch_add(input.mouse.y, Ordering::AcqRel);
                             }
                             if input.mouse.buttons & 0x400 != 0 { // RI_MOUSE_WHEEL, signed WHEEL_DELTA units
                                 let wheel = (input.mouse.buttons >> 16) as u16 as i16;
@@ -99,10 +101,6 @@ mod win {
                     }
                     DispatchMessageW(&msg);
                 }
-                if sent.elapsed() >= Duration::from_millis(8) {
-                    if delta != [0, 0] { let _ = window.emit("play-mouse-motion", (&id, delta)); delta = [0, 0]; }
-                    sent = Instant::now();
-                }
                 std::thread::sleep(Duration::from_millis(1));
             }
             ClipCursor(null());
@@ -112,7 +110,7 @@ mod win {
             DestroyWindow(sink);
             let _ = window.emit("play-mouse-released", &id);
         });
-        let capture = Capture { id: capture_id, stop, thread: Some(thread) };
+        let capture = Capture { id: capture_id, stop, thread: Some(thread), motion };
         ready_rx.recv().map_err(|e| e.to_string())??;
         Ok(capture)
     }
@@ -124,6 +122,17 @@ pub fn play_mouse_start(window: tauri::WebviewWindow, state: tauri::State<PlayMo
     capture.take();
     #[cfg(windows)] { *capture = Some(win::start(window, x, y, id)?); Ok(()) }
     #[cfg(not(windows))] { let _ = (window, x, y, id); Err("Native play input requires Windows".into()) }
+}
+
+/// The raw mouse motion since it was last taken (x, y counts), for the capture `id`.
+#[tauri::command]
+// (async: off the main thread, which may be busy, so a frame's take is never held up)
+pub async fn play_mouse_take(state: tauri::State<'_, PlayMouse>, id: String) -> Result<[i32; 2], String> {
+    let Ok(capture) = state.0.lock() else { return Ok([0, 0]) };
+    Ok(match capture.as_ref().filter(|c| c.id == id) {
+        Some(c) => [c.motion[0].swap(0, Ordering::AcqRel), c.motion[1].swap(0, Ordering::AcqRel)],
+        None => [0, 0],
+    })
 }
 
 #[tauri::command]

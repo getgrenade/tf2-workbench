@@ -411,10 +411,15 @@ export function createViewTab(els: Els) {
   /** The map in the scene (one at a time), and the sky from before it brought its own. */
   let worldMap: MapScene | null = null;
   let skyBeforeMap: SkyState | null = null;
-  /** The game's maps (asked for once). */
+  /** The game's maps: the list from the last session at once (the game is indexed only seconds after the start), then read again once
+   * the game is indexed (see onIndexed) and kept for the next start. */
   let mapNames: string[] | null = null;
+  try { const saved = JSON.parse(localStorage.getItem("tf2workbench.mapNames") ?? "null"); if (Array.isArray(saved)) mapNames = saved; } catch { /* read when indexed */ }
   let mapNamesLoading: Promise<void> | null = null;
-  const fetchMapNames = () => (mapNamesLoading ??= listMaps().then((m) => { mapNames = m; }).catch(() => { mapNamesLoading = null; }));
+  const fetchMapNames = () => (mapNamesLoading ??= listMaps().then((m) => {
+    mapNames = m;
+    try { localStorage.setItem("tf2workbench.mapNames", JSON.stringify(m)); } catch { /* read again next start */ }
+  }).catch(() => { mapNamesLoading = null; }));
   // newly downloaded content (Source Filmmaker's workshop, tf/custom, the user's folders, workshop maps) is found when the window comes
   // back (from Steam or SFM, where it was downloaded): at most every ten seconds; the prop browser and the map list then have it
   let contentChecked = 0;
@@ -4938,7 +4943,8 @@ export function createViewTab(els: Els) {
     const held = heldSlotOf(e);
     if (held && e.held) playPicks.set(held, e.held);
     const profiles = new Map<number,WeaponProfile>();
-    await Promise.all([...new Map([...defaults.values(),...playPicks.values()].map(w=>[w.id,w])).values()].map(async w=> {
+    // (a taunt has no weapon script: its item class is no_entity)
+    await Promise.all([...new Map([...defaults.values(),...playPicks.values()].filter(w=>w.slot!=="taunt").map(w=>[w.id,w])).values()].map(async w=> {
       const key=`${w.id}:${cls}:${e.team}`;
       let promise=weaponProfiles.get(key);
       if (!promise) {promise=getWeaponProfile(w.id,cls,e.team).catch(error=>{weaponProfiles.delete(key);throw error;});weaponProfiles.set(key,promise);}
@@ -5121,6 +5127,9 @@ export function createViewTab(els: Els) {
   const hudPlay = document.getElementById("hudPlay") as HTMLButtonElement;
   const hudPose = document.getElementById("hudPose") as HTMLButtonElement;
   const hudGame = document.getElementById("hudGame") as HTMLButtonElement;
+  const hudFly = document.getElementById("hudFly") as HTMLButtonElement;
+  const flyHint = document.getElementById("viewFlyHint") as HTMLElement;
+  hudFly.innerHTML = svgIcon("drone");
   const ICON_GAME = svgIcon("gamepad2");
   const ICON_PLAY = svgIcon("play");
   const ICON_PAUSE = svgIcon("pause");
@@ -5154,6 +5163,11 @@ export function createViewTab(els: Els) {
     playHint.hidden = !gaming;
     els.wrap.classList.toggle("playMode", gaming);
     const state = `${playing}|${posing}|${!!actor?.playback.clip}|${gaming}|${!!actor?.holdsPose}`;
+    const flying = !!viewer?.flying;
+    hudFly.classList.toggle("on", flying);
+    hudFly.disabled = gaming;
+    hudFly.title = flying ? "Leave fly mode (Esc)" : "Fly mode: fly the camera like noclip in the game. WASD moves, the mouse aims, Q / E down / up, Shift faster, Ctrl slower, the wheel sets the speed, Esc exits";
+    flyHint.hidden = !flying;
     if (state === hudState) return;
     hudState = state;
     hudPlay.innerHTML = playing ? ICON_PAUSE : ICON_PLAY;
@@ -5170,7 +5184,14 @@ export function createViewTab(els: Els) {
       : "Play mode: hold LMB to fire, RMB holds minigun rev / toggles sniper scope, R reloads, Esc exits, WASD moves, Space jumps, Ctrl crouches, C follow camera static / behind, 1 ragdoll, 2 explode, 3-6 gestures, 8 reset damage, 9 damage on/off, mouse wheel or Q / E switch weapons";
     hudGame.disabled = !actor || posing || !actor.playback.clip;
   }
+  hudFly.onclick = () => {
+    if (!viewer || play?.active) return;
+    if (viewer.flying) viewer.stopFly();
+    else viewer.startFly(() => { hudFly.blur(); syncHud(); });
+    syncHud();
+  };
   hudGame.onclick = () => {
+    if (viewer?.flying) viewer.stopFly();
     if (play?.active) stopPlay();
     else void startPlay();
     syncHud();
@@ -9750,13 +9771,26 @@ export function createViewTab(els: Els) {
       return !!hit && hit.distance < len - 16;
     });
     worldSounds = sounds;
-    v.setWorld(map.group, 1e5);
+    v.setWorld(map.group, 1e5, map.skyboxDraw);
+    v.setSkyExposure(1);
     v.worldRaycast = (o, d, max) => map.raycast(o, d, max);
     // every frame: the eye for its reflections, the characters' shadow on its floors, and (now and then) its light where each stands
     let lightAsked = 0;
     const lightAt = new Map<Actor, THREE.Vector3>();
+    // the game's auto exposure, from the pictures drawn (a few times a second); the characters' light is asked again when it has moved
+    let measured = 0, litExposure = 0, doorsAt = 0;
     v.onWorldFrame = (camera, shadows) => {
       if (worldMap !== map || isPromoTab(activeTab)) return;
+      const t = performance.now();
+      // the doors: open while a character is in a trigger that opens them
+      map.updateDoors(doorsAt ? Math.min(0.1, (t - doorsAt) / 1000) : 0, entities.map((e) => e.actor.offset));
+      doorsAt = t;
+      if (t - measured > 100 && map.exposure) {
+        const lum = v.measureLuminance();
+        if (lum && map.adaptExposure(lum, measured ? (t - measured) / 1000 : 0.1)) v.setSkyExposure(map.skyExposure);
+        measured = t;
+        if (litExposure && Math.abs(map.exposure / litExposure - 1) > 0.05) lightAt.clear();
+      }
       map.setEye(camera);
       map.tick(performance.now());
       sounds.update(camera, !voiceMuted());
@@ -9775,6 +9809,7 @@ export function createViewTab(els: Els) {
       if (!asked.length) return;
       lightAsked = now;
       for (const { actor, at } of asked) lightAt.set(actor, at);
+      litExposure = map.exposure;
       void mapLightAt(name, asked.map(({ at }) => { const p = map.toMap(at); return [p.x, p.y, p.z] as [number, number, number]; })).then((r) => {
         if (worldMap !== map || !r) return;
         // the map's cube faces (+X -X +Y -Y +Z -Z, z up) as the view's (+X -X +Y -Y +Z -Z, y up)
@@ -9805,7 +9840,7 @@ export function createViewTab(els: Els) {
       syncMapRow();
       if (worldMap !== map) return;
       for (const n of moved) map.setPropHidden(n, true);
-      v.setWorld(map.group, Math.max(20000, map.extent * 1.5));
+      v.setWorld(map.group, Math.max(20000, map.extent * 1.5), map.skyboxDraw);
       syncWorldForTab();
       if (map.sky) {
         skyBeforeMap ??= { ...sky };
@@ -9838,6 +9873,7 @@ export function createViewTab(els: Els) {
     worldMap = null;
     mapStatus = "";
     viewer?.setWorld(null);
+    viewer?.setSkyExposure(1);
     viewer?.setWorldLight(null);
     if (viewer) viewer.worldRaycast = null;
     syncMapRow();
@@ -10851,6 +10887,7 @@ export function createViewTab(els: Els) {
     },
     async onIndexed() {
       void loadUnusualCatalog();
+      void fetchMapNames();
       void loadIcons();
       if (selected) await show(selected, selected.cls);
       else await startFirstEntity();

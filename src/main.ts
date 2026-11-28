@@ -198,6 +198,7 @@ app.innerHTML = `
       <div id="viewActions" hidden></div>
       <div id="viewFollow" role="status" hidden><span class="followKey">Following</span><span class="followName"></span><button class="followMode" type="button">Static</button><button class="followStop" title="Stop following (the camera stays where it is). A double click on empty space does the same" aria-label="Stop following">×</button></div>
       <div id="viewPlayHint" role="status" hidden><kbd aria-label="Escape key">Esc</kbd><span>TO EXIT PLAY MODE</span></div>
+      <div id="viewFlyHint" role="status" hidden><kbd aria-label="Escape key">Esc</kbd><span>TO EXIT FLY MODE</span><span class="flyKeys">WASD move · Q / E down / up · Shift fast · Ctrl slow · wheel speed</span></div>
       <div id="viewTools">
       </div>
       <div id="viewToolbar">
@@ -215,6 +216,7 @@ app.innerHTML = `
         <button id="hudPlay" title="Play / pause the animation of the selected character (Space)" aria-label="Play or pause"></button>
         <button id="hudPose" title="Enter / exit pose mode: freezes the current frame into an editable pose" aria-label="Pose mode"></button>
         <button id="hudGame" title="Play mode: steer the character like in the game" aria-label="Play mode"></button>
+        <button id="hudFly" title="Fly mode" aria-label="Fly mode"></button>
       </div>
     </div>
     </div>

@@ -185,6 +185,9 @@ interface FollowState {
   staticView: { position: THREE.Vector3; target: THREE.Vector3 } | null;
 }
 
+/** A map's 3D skybox as the viewer draws it (see MapScene.skyboxDraw). */
+export interface SkyboxDraw { object: THREE.Object3D; scale: number; drawing(camera: THREE.Camera | null): void }
+
 export class Viewer {
   readonly cameras: CameraRig;
   onUnusualError: (actor: Actor, error: unknown) => void = () => {};
@@ -884,7 +887,9 @@ void main() {
       if (this.faceRig?.active) this.faceRig.update();
       this.mats.updateDynamic(now / 1000);
       this.followActor();
-      if (!this.cameras.active) this.controls.update();
+      if (this.fly) this.stepFly(dt);
+      else if (!this.cameras.active) this.controls.update();
+      this.fitNearPlane();
       this.aimEyesAt(this.camera);
       this.updateLight();
       this.updatePointLight();
@@ -3351,12 +3356,18 @@ void main() {
   private gridHiddenForWorld = false;
   /** What a ray meets in the map (see MapScene.raycast); null: no map. */
   worldRaycast: ((origin: THREE.Vector3, dir: THREE.Vector3, max: number) => { point: THREE.Vector3; normal: THREE.Vector3; distance: number } | null) | null = null;
-  setWorld(world: THREE.Object3D | null, far = 0) {
+  setWorld(world: THREE.Object3D | null, far = 0, skybox: SkyboxDraw | null = null) {
     if (this.world && this.world !== world) this.scene.remove(this.world);
     this.world = world;
     this.worldFar = far;
     if (world && world.parent !== this.scene) this.scene.add(world);
+    this.skybox = world ? skybox : null;
+    if (this.skybox && this.skybox.object.parent !== this.skyboxScene) this.skyboxScene.add(this.skybox.object);
   }
+
+  /** The map's 3D skybox (see MapScene.skybox), drawn in a pass of its own before the scene (see renderScene). */
+  private skybox: SkyboxDraw | null = null;
+  private readonly skyboxScene = new THREE.Scene();
 
   /** Puts the map in the scene or takes it out for a while (a promo's scene), keeping it loaded for when it comes back. */
   showWorld(on: boolean) {
@@ -3393,6 +3404,8 @@ void main() {
    */
   private renderScene(r: THREE.WebGLRenderer, cam: THREE.Camera) {
     const scene = this.scene, sky = this.sky;
+    const box = this.skybox;
+    if (box && this.world?.parent === scene && this.world.visible && (cam as THREE.PerspectiveCamera).isPerspectiveCamera) { this.renderWithSkybox(r, cam as THREE.PerspectiveCamera, box); return; }
     if (!(cam as THREE.PerspectiveCamera & { isOrthographicCamera?: boolean }).isOrthographicCamera || !sky || scene.background !== sky) { r.render(scene, cam); return; }
     if (!this.skyQuad) {
       this.skyQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
@@ -3435,12 +3448,108 @@ void main() {
     }
   }
 
+  /**
+   * The scene behind its map's 3D skybox, as the game draws it: the sky and the skybox first (seen from its own camera: this one with its
+   * near and far planes as far out as the skybox is bigger), then the depth cleared and the scene over it, so the map always hides it.
+   */
+  private renderWithSkybox(r: THREE.WebGLRenderer, cam: THREE.PerspectiveCamera, box: SkyboxDraw) {
+    const scene = this.scene, pass = this.skyboxScene;
+    pass.background = scene.background;
+    pass.backgroundRotation.copy(scene.backgroundRotation);
+    pass.backgroundIntensity = scene.backgroundIntensity;
+    pass.backgroundBlurriness = scene.backgroundBlurriness;
+    pass.environment = scene.environment;
+    const { near, far } = cam;
+    const background = scene.background, autoClear = r.autoClear;
+    try {
+      cam.near = near * box.scale;
+      cam.far = Math.max(far, this.worldFar) * box.scale;
+      cam.updateProjectionMatrix();
+      box.drawing(cam);
+      r.render(pass, cam);
+    } finally {
+      box.drawing(null);
+      cam.near = near;
+      cam.far = far;
+      cam.updateProjectionMatrix();
+    }
+    try {
+      scene.background = null;
+      r.autoClear = false;
+      r.clearDepth();
+      r.render(scene, cam);
+    } finally {
+      scene.background = background;
+      r.autoClear = autoClear;
+      pass.background = null;
+    }
+  }
+
+  /** How much brighter the sky is drawn for the map's exposure (1: no map). */
+  private skyExposure = 1;
+  setSkyExposure(k: number) {
+    if (k === this.skyExposure) return;
+    this.skyExposure = k;
+    if (this.scene.background === this.sky) this.scene.backgroundIntensity = this.skyBrightness * k;
+  }
+
+  private lumTarget: THREE.WebGLRenderTarget | null = null;
+  private lumScene: THREE.Scene | null = null;
+  private lumQuad: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial> | null = null;
+  private lumPixels: Float32Array | null = null;
+  /** A reading of the luminance on its way back from the GPU, and the last one that came (not yet handed out). */
+  private lumPending = false;
+  private lumReady: Float32Array | null = null;
+  /**
+   * The luminance of the scene as the game's auto exposure counts it (viewpostprocess.cpp): in gamma space, each pixel's at most 1, in
+   * the middle of the picture (90% of its width, 85% of its height): a grid of its pixels. It is read back without waiting for the GPU
+   * (a reading that waited stalled the frame, some 8 ms, ten times a second: play mode stuttered on a map): this starts a reading and
+   * returns the last one that has come back since it was last asked (null: none yet).
+   */
+  measureLuminance(): Float32Array | null {
+    const W = 64, H = 36;
+    if (!this.lumTarget) {
+      this.lumTarget = new THREE.WebGLRenderTarget(W, H, { type: THREE.FloatType, depthBuffer: false });
+      this.lumQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
+        uniforms: { tScene: { value: null } },
+        vertexShader: "varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }",
+        fragmentShader: "uniform sampler2D tScene; varying vec2 vUv; void main() { vec3 c = texture2D(tScene, mix(vec2(0.05, 0.075), vec2(0.95, 0.925), vUv)).rgb; gl_FragColor = vec4(dot(pow(clamp(c, 0.0, 1.0), vec3(1.0 / 2.2)), vec3(0.2126, 0.7152, 0.0722)), 0.0, 0.0, 1.0); }",
+        depthTest: false, depthWrite: false,
+      }));
+      this.lumQuad.frustumCulled = false;
+      this.lumScene = new THREE.Scene();
+      this.lumScene.add(this.lumQuad);
+      this.lumPixels = new Float32Array(W * H * 4);
+    }
+    const ready = this.lumReady;
+    this.lumReady = null;
+    if (this.lumPending) return ready;
+    const r = this.renderer, before = r.getRenderTarget();
+    this.lumQuad!.material.uniforms.tScene.value = this.sceneTarget.texture;
+    try {
+      r.setRenderTarget(this.lumTarget);
+      r.render(this.lumScene!, this.presentCamera);
+    } catch {
+      return ready;
+    } finally {
+      r.setRenderTarget(before);
+    }
+    this.lumPending = true;
+    const pixels = this.lumPixels!;
+    r.readRenderTargetPixelsAsync(this.lumTarget!, 0, 0, W, H, pixels).then(() => {
+      const out = new Float32Array(W * H);
+      for (let i = 0; i < out.length; i++) out[i] = pixels[i * 4];
+      this.lumReady = out;
+    }, () => undefined).finally(() => { this.lumPending = false; });
+    return ready;
+  }
+
   private applyBackground() {
     const scene = this.scene;
     if (this.backgroundColor === null && this.sky) {
       scene.background = this.sky;
       scene.backgroundRotation.set(0, this.skyRotation * Math.PI / 180, 0);
-      scene.backgroundIntensity = this.skyBrightness;
+      scene.backgroundIntensity = this.skyBrightness * this.skyExposure;
     } else if (this.backgroundColor === null && this.backdropTexture) scene.background = this.backdropTexture;
     else scene.background = new THREE.Color(this.backgroundColor ?? this.backdropColor);
   }
@@ -3497,6 +3606,20 @@ void main() {
     const way = this.camera.position.clone().sub(this.controls.target).normalize();
     if (!Number.isFinite(way.x) || way.lengthSq() < 0.5) way.set(0, 0, 1);
     this.glideTo(c.clone().addScaledVector(way, dist), c);
+  }
+
+  /**
+   * The near plane as far out as the view allows, every frame: the depth buffer's precision goes with it (a tenth of a unit near plane
+   * makes a cosmetic over the body flicker through it a few hundred units away). The game keeps it at 7; here it follows how far the
+   * view is from what it looks at (a close look at a face needs it nearer), and flying keeps the game's. A scene camera keeps its own.
+   */
+  private fitNearPlane() {
+    const c = this.camera;
+    if (this.cameras.active || c.isOrthographicCamera) return;
+    const want = this.fly ? 4 : THREE.MathUtils.clamp(c.position.distanceTo(this.controls.target) / 60, 0.1, 7);
+    if (Math.abs(c.near - want) <= want * 0.05) return;
+    c.near = want;
+    c.updateProjectionMatrix();
   }
 
   /** Where the view is now, to come back to it with {@link glideBack}: the camera's place, what it looks at, its near plane and size. */
@@ -3732,7 +3855,143 @@ void main() {
     this.controls.target.add(moved);
   }
 
-  /** Center the actual posed surface under the pointer and orbit around that point. */
+  // --- fly mode: the game's noclip flight (wasd along the view, q / e down and up, the mouse aims) --------------------------------
+
+  private fly: {
+    yaw: number; pitch: number; vel: THREE.Vector3; keys: Set<string>; dist: number;
+    off: () => void; onExit: (() => void) | null;
+  } | null = null;
+  /** Whether the view flies (see startFly). */
+  get flying(): boolean { return !!this.fly; }
+  /** How fast the flight goes (1: the game's noclip speed); the wheel changes it while flying. */
+  flySpeed = 1;
+
+  /**
+   * Flies the camera as the game's noclip does: W / A / S / D along where it looks and across, Q / E straight down and up, the mouse
+   * aims (the pointer is locked to the view), Shift faster, Ctrl slower, the wheel sets the speed; Esc (or the pointer let go) ends it,
+   * the view then orbits about a point ahead of the camera. `onExit` is called when it ends.
+   */
+  startFly(onExit?: () => void): boolean {
+    if (this.fly) return true;
+    if (this.cameras.active) this.cameras.leave(true);
+    if (this.camera.isOrthographicCamera) this.toggleProjection();
+    this.followed = null;
+    this.viewAnim++;
+    const dir = this.camera.getWorldDirection(new THREE.Vector3());
+    const canvas = this.renderer.domElement;
+    const keys = new Set<string>();
+    const sens = 0.0022;
+    const look = (dx: number, dy: number) => {
+      const f = this.fly;
+      if (!f) return;
+      f.yaw -= dx * sens;
+      f.pitch = THREE.MathUtils.clamp(f.pitch - dy * sens, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
+    };
+    // the mouse aims while the pointer is locked; without the lock (refused), a drag aims
+    const onMove = (ev: MouseEvent) => { if (document.pointerLockElement === canvas || ev.buttons) look(ev.movementX, ev.movementY); };
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.code === "F12") return;
+      // the flight takes every key: no tool, gizmo or hotkey acts while flying
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+      if (ev.type === "keydown" && ev.code === "Escape") { this.stopFly(); return; }
+      if (ev.type === "keydown") keys.add(ev.code); else keys.delete(ev.code);
+    };
+    const onWheel = (ev: WheelEvent) => {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+      this.flySpeed = THREE.MathUtils.clamp(this.flySpeed * (ev.deltaY < 0 ? 1.25 : 0.8), 0.05, 8);
+    };
+    const onBlur = () => keys.clear();
+    let locked = false;
+    const lock = () => {
+      try {
+        const p = canvas.requestPointerLock() as unknown as Promise<void> | undefined;
+        p?.then?.(() => { locked = true; }, () => {});
+      } catch { /* refused: a drag aims */ }
+    };
+    // Esc while the pointer is locked only lets the lock go (the page never sees the key): that ends the flight too
+    const onLockChange = () => {
+      if (document.pointerLockElement === canvas) locked = true;
+      else if (locked && this.fly) this.stopFly();
+    };
+    // (a click while the lock was refused asks again)
+    const onDown = (ev: MouseEvent) => { if (document.pointerLockElement !== canvas) { ev.preventDefault(); ev.stopImmediatePropagation(); lock(); } };
+    window.addEventListener("keydown", onKey, true);
+    window.addEventListener("keyup", onKey, true);
+    window.addEventListener("blur", onBlur);
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("pointerlockchange", onLockChange);
+    canvas.addEventListener("wheel", onWheel, { capture: true, passive: false });
+    canvas.addEventListener("pointerdown", onDown, true);
+    const off = () => {
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("keyup", onKey, true);
+      window.removeEventListener("blur", onBlur);
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("pointerlockchange", onLockChange);
+      canvas.removeEventListener("wheel", onWheel, true);
+      canvas.removeEventListener("pointerdown", onDown, true);
+      if (document.pointerLockElement === canvas) document.exitPointerLock();
+    };
+    this.fly = {
+      yaw: Math.atan2(-dir.x, -dir.z), pitch: Math.asin(THREE.MathUtils.clamp(dir.y, -1, 1)), vel: new THREE.Vector3(), keys,
+      dist: Math.max(this.controls.minDistance, Math.min(this.camera.position.distanceTo(this.controls.target), 400)), off, onExit: onExit ?? null,
+    };
+    this.controls.enabled = false;
+    lock();
+    return true;
+  }
+
+  /** Ends the flight (see startFly): the view orbits about a point ahead of the camera again. */
+  stopFly() {
+    const f = this.fly;
+    if (!f) return;
+    this.fly = null;
+    f.off();
+    const dir = this.camera.getWorldDirection(new THREE.Vector3());
+    this.controls.target.copy(this.camera.position).addScaledVector(dir, f.dist);
+    this.controls.enabled = true;
+    this.controls.update();
+    f.onExit?.();
+  }
+
+  /**
+   * A step of the flight, as the game's FullNoClipMove: the wished velocity (forward and side moves of 450, up of 320, times the noclip
+   * factor of 5, at most sv_maxspeed 320 times it) reached by its acceleration (sv_noclipaccelerate 5), the speed bled off by the
+   * friction (sv_friction 4, never less than a quarter of the top speed's worth), so it glides to a stop.
+   */
+  private stepFly(dt: number) {
+    const f = this.fly;
+    if (!f || dt <= 0) return;
+    const k = f.keys;
+    let factor = 5 * this.flySpeed;
+    if (k.has("ShiftLeft") || k.has("ShiftRight")) factor *= 2.5;
+    if (k.has("ControlLeft") || k.has("ControlRight")) factor *= 0.25;
+    const maxspeed = 320 * factor;
+    const fmove = ((k.has("KeyW") ? 1 : 0) - (k.has("KeyS") ? 1 : 0)) * 450 * factor;
+    const smove = ((k.has("KeyD") ? 1 : 0) - (k.has("KeyA") ? 1 : 0)) * 450 * factor;
+    const umove = ((k.has("KeyE") ? 1 : 0) - (k.has("KeyQ") ? 1 : 0)) * 320 * factor;
+    const cp = Math.cos(f.pitch);
+    const wish = new THREE.Vector3(-Math.sin(f.yaw) * cp, Math.sin(f.pitch), -Math.cos(f.yaw) * cp).multiplyScalar(fmove)
+      .addScaledVector(new THREE.Vector3(Math.cos(f.yaw), 0, -Math.sin(f.yaw)), smove);
+    wish.y += umove;
+    let wishspeed = wish.length();
+    if (wishspeed > 0) wish.divideScalar(wishspeed);
+    wishspeed = Math.min(wishspeed, maxspeed);
+    // accelerate toward the wished velocity
+    const add = wishspeed - f.vel.dot(wish);
+    if (add > 0 && wishspeed > 0) f.vel.addScaledVector(wish, Math.min(5 * dt * wishspeed, add));
+    // the friction
+    const spd = f.vel.length();
+    if (spd < 1) f.vel.set(0, 0, 0);
+    else f.vel.multiplyScalar(Math.max(0, spd - Math.max(spd, maxspeed / 4) * 4 * dt) / spd);
+    this.camera.position.addScaledVector(f.vel, dt);
+    this.camera.quaternion.setFromEuler(new THREE.Euler(f.pitch, f.yaw, 0, "YXZ"));
+    this.camera.updateMatrixWorld(true);
+  }
+
+  /** Center the actual posed surface (or the map's) under the pointer and orbit around that point. */
   focusAtPointer(): boolean {
     this.followed = null;
     if (!this.entityPointer.inside || this.entityModal || this.cameras.hot || this.rig.gizmoHot) return false;
@@ -3755,7 +4014,10 @@ void main() {
         if (mesh.boundingBox) mesh.computeBoundingBox();
       }
     }
-    const hit = ray.intersectObjects(meshes, false)[0];
+    const actorHit = ray.intersectObjects(meshes, false)[0];
+    // the map's surfaces too (whichever is nearer: a character in front of a wall, or the wall)
+    const mapHit = this.world?.visible && this.worldRaycast ? this.worldRaycast(ray.ray.origin, ray.ray.direction, this.camera.far) : null;
+    const hit = mapHit && (!actorHit || mapHit.distance < actorHit.distance) ? { point: mapHit.point } : actorHit;
     if (!hit) return false;
     const direction = this.camera.getWorldDirection(new THREE.Vector3());
     const distance = this.camera.isOrthographicCamera ? this.camera.position.distanceTo(this.controls.target) : hit.point.distanceTo(this.camera.position);

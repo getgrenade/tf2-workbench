@@ -6,9 +6,16 @@ export type CaptureMouse = (surface: HTMLElement, motion: (x: number, y: number)
 /** Use native raw motion: WebView2 pointer lock always displays its own localhost banner. */
 export const capturePlayMouse: CaptureMouse = async (surface, motion, released, wheel, buttons) => {
   const id = crypto.randomUUID();
-  const offMotion = await listen<[string, [number, number]]>("play-mouse-motion", ({ payload }) => {
-    if (payload[0] === id) motion(...payload[1]);
-  });
+  // the motion since the last frame, taken once a frame (it then turns each frame by what the mouse did in it)
+  let taking = false, frame = 0, live = true;
+  const take = () => {
+    if (!live) return;
+    frame = requestAnimationFrame(take);
+    if (taking) return;
+    taking = true;
+    invoke<[number, number]>("play_mouse_take", { id }).then(([x, y]) => { if (live && (x || y)) motion(x, y); }, () => undefined).finally(() => { taking = false; });
+  };
+  const offMotion = () => { live = false; cancelAnimationFrame(frame); };
   let offRelease: (() => void) | undefined;
   let offWheel: (() => void) | undefined;
   let offButtons: (() => void) | undefined;
@@ -18,6 +25,7 @@ export const capturePlayMouse: CaptureMouse = async (surface, motion, released, 
     offButtons = await listen<[string, number]>("play-mouse-buttons", ({ payload }) => { if (payload[0] === id) buttons(payload[1]); });
     const rect = surface.getBoundingClientRect();
     await invoke("play_mouse_start", { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, id });
+    frame = requestAnimationFrame(take);
   } catch (error) {
     offMotion(); offRelease?.(); offWheel?.(); offButtons?.();
     throw error;

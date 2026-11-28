@@ -23,14 +23,24 @@ const CELL = 128;
 /** How many materials and models load at once. */
 const PARALLEL = 6;
 /**
- * The exposure, as the game's auto exposure sets it: the scale that brings the picture's average to a middle grey (a typical surface,
- * 0.35 of the light, under the map's average light), within the limits the map's tonemap controller gives (the game's own when it
- * gives none), times a scale that brings that to the brightness the game shows (matched on itemtest).
+ * The exposure, as the game's auto exposure sets it (viewpostprocess.cpp, its "new algorithm"): a tonemap scale for the whole picture,
+ * the sky's as much as the map's, that brings the brightness only the brightest 2% of the picture's pixels pass to 60% of white (and
+ * the middle pixel to at least 3%), within the limits the map's tonemap controller gives (the game's own, 0.5 to 2, when it gives none),
+ * eased toward it. Before the first picture: the scale that brings a typical surface (0.35 of the light) under the map's average light
+ * to a middle grey. The map's light is drawn LIGHT_SCALE times that scale (matched on harvest: its sky and its walls as the game's).
  */
 const EXPOSURE_TARGET = 0.18;
 const TYPICAL_ALBEDO = 0.35;
 const DEFAULT_EXPOSURE: [number, number] = [0.5, 2];
-const EXPOSURE_SCALE = 3;
+const LIGHT_SCALE = 1.5;
+/** The sky is drawn SKY_SCALE times the tonemap scale (matched on harvest: the game's sky against its walls). */
+const SKY_SCALE = 2;
+/** The game's targets: the brightness the brightest 2% may pass (of white), and the least the middle pixel may have. */
+const BRIGHT_PIXELS = 0.02;
+const BRIGHT_TARGET = 0.6;
+const MIN_MEDIAN = 0.03;
+/** How fast the exposure follows (per second: the part of the way it goes). */
+const EXPOSURE_RATE = 1.5;
 /** The material name of the sky's faces and the start of an overlay's (see bsp.rs). */
 const SKY_MATERIAL = "__sky__";
 const OVERLAY_PREFIX = "overlay:";
@@ -45,7 +55,7 @@ type V3 = [number, number, number];
 
 interface MapJson {
   name: string;
-  meshes: { material: string; vertexCount: number; indexCount: number; pos: number; normal: number; uv: number; lightmap: number; blend: number; tangentS: number; tangentT: number; index: number }[];
+  meshes: { material: string; vertexCount: number; indexCount: number; pos: number; normal: number; uv: number; lightmap: number; blend: number; tangentS: number; tangentT: number; index: number; sky?: boolean; door?: number | null }[];
   props: MapProp[];
   spawns: MapSpawn[];
   lightmap: { width: number; height: number; pages: number; offset: number; range: number; average: number };
@@ -55,8 +65,18 @@ interface MapJson {
   /** How its characters cast shadows (its shadow_control): the way they fall (the map's axes), their colour, their reach. */
   shadow?: { dir: V3; color: V3; distance: number } | null;
   sky: string | null;
+  /** Its 3D skybox (the meshes and props marked sky): where its camera stands, how much bigger it shows, its fog (colour 0..1, gamma). */
+  skyCamera?: { origin: V3; scale: number; fog: MapFog | null } | null;
+  /** Its fog (env_fog_controller). */
+  fog?: MapFog | null;
+  /** Its sliding doors (func_door: direction and distance in map units, speed in units a second) and the triggers that open them. */
+  doors?: { name: string; dir: V3; distance: number; speed: number; startOpen: boolean; anims?: { on: string; target: string; sequence: string }[] }[];
+  triggers?: { min: V3; max: V3; open: string[]; close: string[] }[];
   bounds: [number, number, number, number, number, number];
 }
+
+/** A fog of the game: its colour (0..1, gamma), where it starts and ends (map units of depth from the eye), how thick it gets at most. */
+interface MapFog { color: V3; start: number; end: number; max: number }
 
 interface MaterialJson {
   shader: string;
@@ -75,7 +95,7 @@ function split(buf: ArrayBuffer) {
 }
 
 /** A model the map places: its static number (what its baked light is named by), model, place, turn, skin, size and light. */
-export interface MapProp { index: number | null; model: string; origin: V3; angles: V3; skin: number; scale: number; ambient: V3[]; sunlit: boolean; key: { dir: V3; color: V3 } | null; animation?: string | null }
+export interface MapProp { index: number | null; model: string; origin: V3; angles: V3; skin: number; scale: number; ambient: V3[]; sunlit: boolean; key: { dir: V3; color: V3 } | null; animation?: string | null; sky?: boolean ; door?: number | null; name?: string | null }
 
 const vertexShader = /* glsl */ `
   #ifdef PROP
@@ -116,6 +136,7 @@ const vertexShader = /* glsl */ `
   varying vec3 vSrcPos;
   varying vec3 vWorld;
   varying vec3 vWorldNormal;
+  varying float vFogDepth;
   void main() {
     vec3 objectNormal = vec3(normal);
     vec3 transformed = vec3(position);
@@ -164,6 +185,7 @@ const vertexShader = /* glsl */ `
     #endif
     vec4 world = m * vec4(transformed, 1.0);
     vWorld = world.xyz;
+    vFogDepth = -(viewMatrix * world).z;
     vWorldNormal = normalize(mat3(m) * objectNormal);
     gl_Position = projectionMatrix * viewMatrix * world;
   }`;
@@ -184,6 +206,10 @@ const fragmentShader = /* glsl */ `
   uniform sampler2D tShadowDepth;
   uniform bool uHasBase;
   uniform bool uHasBase2;
+  // UnlitTwoTexture: tBase2 is its second texture, multiplied in (not blended by the vertex alpha)
+  uniform bool uTexture2;
+  // $nofog: the fog leaves it alone
+  uniform bool uNoFog;
   uniform bool uHasBump;
   uniform bool uHasBump2;
   uniform bool uSsbump;
@@ -199,6 +225,10 @@ const fragmentShader = /* glsl */ `
   uniform float uAlpha;
   uniform vec3 uColor;
   uniform vec3 uSrcEye;
+  // the fog (the map's, or its 3D skybox's while that is drawn): start, end, how thick at most, on; its colour (linear)
+  uniform vec4 uFog;
+  uniform vec3 uFogColor;
+  varying float vFogDepth;
   // the characters' shadows (as the game casts them, its shadow_control: their silhouettes seen along the way the shadows fall,
   // on what lies behind them within its distance, in its colour)
   uniform bool uShadowOn;
@@ -266,7 +296,8 @@ const fragmentShader = /* glsl */ `
       b = clamp(vBlend, 0.0, 1.0);
     #endif
     vec4 albedo = uHasBase ? texture2D(tBase, vUv) : vec4(0.6, 0.6, 0.6, 1.0);
-    if (uHasBase2) albedo = mix(albedo, texture2D(tBase2, vUv2), b);
+    if (uTexture2) albedo *= texture2D(tBase2, vUv2);
+    else if (uHasBase2) albedo = mix(albedo, texture2D(tBase2, vUv2), b);
     albedo.rgb *= uColor;
     // the detail texture: modulate 2x (mode 0), or added (1)
     if (uHasDetail) {
@@ -379,8 +410,46 @@ const fragmentShader = /* glsl */ `
     }
 
     gl_FragColor = vec4(color * uExposure, albedo.a * uAlpha);
+    // the game's range fog (common_ps_fxc.h): by the depth from the eye, at most its density, mixed in by its square
+    if (uFog.w > 0.5 && !uNoFog) {
+      float range = max(uFog.y - uFog.x, 1.0);
+      float fog = clamp(min(uFog.z, vFogDepth / range - uFog.x / range), 0.0, 1.0);
+      gl_FragColor.rgb = mix(gl_FragColor.rgb, uFogColor, fog * fog);
+    }
     #include <colorspace_fragment>
   }`;
+
+/** A sliding door of the map (see MapScene.updateDoors): its triangles (map units, where it is closed) move with its group. */
+interface MapDoor {
+  name: string; dir: THREE.Vector3; distance: number; speed: number; pos: number; open: boolean; group: THREE.Group; tris: Float32Array;
+  anims: { on: string; target: string; sequence: string }[];
+}
+
+/** Whether an entity's name is what an output targets (a name, or the start of names when it ends in `*`; lower case). */
+function nameMatches(name: string, target: string): boolean {
+  return target.endsWith("*") ? name.startsWith(target.slice(0, -1)) : name === target;
+}
+
+/** The triangles of a geometry, 9 floats each. */
+function triangles(geo: THREE.BufferGeometry, matrix?: THREE.Matrix4): Float32Array {
+  const pos = geo.getAttribute("position") as THREE.BufferAttribute;
+  const index = geo.getIndex();
+  if (!index) return new Float32Array(0);
+  const out = new Float32Array(index.count * 3);
+  const p = new THREE.Vector3();
+  for (let i = 0; i < index.count; i++) {
+    p.fromBufferAttribute(pos, index.getX(i));
+    if (matrix) p.applyMatrix4(matrix);
+    out[i * 3] = p.x; out[i * 3 + 1] = p.y; out[i * 3 + 2] = p.z;
+  }
+  return out;
+}
+
+function concatFloats(a: Float32Array, b: Float32Array): Float32Array {
+  const out = new Float32Array(a.length + b.length);
+  out.set(a); out.set(b, a.length);
+  return out;
+}
 
 /** Whether a clip moves (some bone is elsewhere in some frame than in its first). */
 function clipMoves(c: ClipData): boolean {
@@ -452,8 +521,34 @@ export class MapScene {
   sky: string | null = null;
   /** The size of the map (its diagonal, in units). */
   extent = 0;
-  /** How much brighter the map's light is drawn (the game's auto exposure: the average light of its lit faces to a middle grey). */
-  exposure = 1;
+  /** The tonemap scale (see the exposure constants), and the limits it keeps to. */
+  private tonemap = 1;
+  private tonemapRange: [number, number] = [...DEFAULT_EXPOSURE];
+  /** How much brighter the map's light is drawn: LIGHT_SCALE times the tonemap scale. */
+  get exposure(): number { return LIGHT_SCALE * this.tonemap; }
+  /** How much brighter the sky is drawn (SKY_SCALE times the tonemap scale). */
+  get skyExposure(): number { return SKY_SCALE * this.tonemap; }
+  /**
+   * Follows the game's auto exposure from a picture just drawn (`luminance`: its pixels' linear luminance, each at most 1; `dt`: the
+   * seconds since the last). Returns whether the exposure changed.
+   */
+  adaptExposure(luminance: Float32Array, dt: number): boolean {
+    const n = luminance.length;
+    if (!n) return false;
+    const sorted = Float32Array.from(luminance).sort();
+    const bright = Math.max(1e-4, sorted[Math.min(n - 1, Math.floor(n * (1 - BRIGHT_PIXELS)))]);
+    const median = sorted[Math.floor(n / 2)];
+    let factor = BRIGHT_TARGET / bright;
+    if (median > 0 && MIN_MEDIAN / median > factor) factor = MIN_MEDIAN / median;
+    const [lo, hi] = this.tonemapRange;
+    const target = Math.min(hi, Math.max(lo, this.tonemap * factor));
+    // (a few percent off is close enough: the game's histogram does not move for less either)
+    if (Math.abs(target / this.tonemap - 1) < 0.03) return false;
+    const k = 1 - Math.exp(-EXPOSURE_RATE * Math.min(dt, 0.5));
+    this.tonemap += (target - this.tonemap) * k;
+    this.shared.uExposure.value = this.exposure;
+    return true;
+  }
   private lightmap: THREE.DataTexture | null = null;
   private readonly materials = new Map<string, THREE.ShaderMaterial>();
   private readonly textures: THREE.Texture[] = [];
@@ -476,7 +571,50 @@ export class MapScene {
     uShadowDir: { value: new THREE.Vector3(0, -1, 0) },
     uShadowTexel: { value: 1 / SHADOW_SIZE },
     uViewToSrc: { value: new THREE.Matrix4() },
+    uFog: { value: new THREE.Vector4(0, 1, 0, 0) },
+    uFogColor: { value: new THREE.Vector3() },
   };
+  /**
+   * The 3D skybox: the small copy of the scenery around the map that it keeps out of the way, drawn (by the viewer, before the map and
+   * behind it) where the game shows it: a point p of it at (p - its camera) * its scale in the map.
+   */
+  readonly skybox = new THREE.Group();
+  private skyScale = 0;
+  private skyFog: MapFog | null = null;
+  private fog: MapFog | null = null;
+  /** Sets the fog uniforms to a fog (null: none). */
+  private setFog(fog: MapFog | null) {
+    this.shared.uFog.value.set(fog?.start ?? 0, fog?.end ?? 1, fog?.max ?? 0, fog ? 1 : 0);
+    if (fog) this.shared.uFogColor.value.set(...(fog.color.map((c) => Math.pow(c, 2.2)) as V3));
+  }
+  private readonly skyInverse = new THREE.Matrix4();
+  private readonly beforeSky = { eye: new THREE.Vector3(), viewToSrc: new THREE.Matrix4(), shadow: false };
+  /** What the viewer draws the skybox by (null: the map has none). `drawing` is told when its pass starts (with the camera) and ends. */
+  get skyboxDraw(): { object: THREE.Object3D; scale: number; drawing(camera: THREE.Camera | null): void } | null {
+    if (!this.skyScale) return null;
+    return {
+      object: this.skybox,
+      scale: this.skyScale,
+      drawing: (camera) => {
+        const u = this.shared;
+        if (camera) {
+          // seen from the skybox's own camera (the eye where it is in the skybox: its reflections), without the characters' shadows, fogged
+          this.beforeSky.eye.copy(u.uSrcEye.value);
+          this.beforeSky.viewToSrc.copy(u.uViewToSrc.value);
+          this.beforeSky.shadow = u.uShadowOn.value;
+          u.uSrcEye.value.setFromMatrixPosition(camera.matrixWorld).applyMatrix4(this.skyInverse);
+          u.uViewToSrc.value.copy(this.skyInverse);
+          u.uShadowOn.value = false;
+          this.setFog(this.skyFog);
+        } else {
+          u.uSrcEye.value.copy(this.beforeSky.eye);
+          u.uViewToSrc.value.copy(this.beforeSky.viewToSrc);
+          u.uShadowOn.value = this.beforeSky.shadow;
+          this.setFog(this.fog);
+        }
+      },
+    };
+  }
   private readonly inverse = new THREE.Matrix4();
   /** The meshes of each material (their draw order follows the material's). */
   private readonly meshesOf = new Map<string, THREE.Object3D[]>();
@@ -486,6 +624,8 @@ export class MapScene {
     this.group.matrixAutoUpdate = false;
     this.group.add(this.world);
     this.world.matrixAutoUpdate = false;
+    this.skybox.name = `skybox:${name}`;
+    this.skybox.matrixAutoUpdate = false;
   }
 
   /** Before the map is drawn: where the eye is, in the map's axes (for the reflections). */
@@ -567,11 +707,12 @@ export class MapScene {
         };
         set("$basetexturetransform", "uTexTransform");
         set("$bumptransform", "uBumpTransform");
+        if (u.uTexture2.value) set("$texture2transform", "uTexTransform2");
       }
     }
     for (const a of this.animated) {
       a.playback.advance(dt);
-      a.rig.poseFromClip(a.clip, a.playback.frame());
+      a.rig.poseFromClip(a.playback.clip ?? a.clip, a.playback.frame());
       a.rig.boneWorld.forEach((m, i) => a.bones[i].matrixWorld.copy(m));
     }
   }
@@ -594,7 +735,8 @@ export class MapScene {
     const lm = json.lightmap;
     const [lo, hi] = [json.exposureMin ?? DEFAULT_EXPOSURE[0], json.exposureMax ?? DEFAULT_EXPOSURE[1]];
     const auto = lm.average > 0 ? EXPOSURE_TARGET / (TYPICAL_ALBEDO * lm.average) : 1;
-    this.exposure = EXPOSURE_SCALE * Math.min(Math.max(auto, Math.min(lo, hi)), Math.max(lo, hi));
+    this.tonemapRange = [Math.min(lo, hi), Math.max(lo, hi)];
+    this.tonemap = Math.min(Math.max(auto, this.tonemapRange[0]), this.tonemapRange[1]);
     this.shared.uExposure.value = this.exposure;
     this.shadowStyle = json.shadow ? { dir: MapScene.toView(json.shadow.dir).normalize(), color: new THREE.Vector3(...json.shadow.color), distance: json.shadow.distance } : null;
     this.shared.uRange.value = lm.range;
@@ -606,6 +748,16 @@ export class MapScene {
     this.group.matrixWorldNeedsUpdate = true;
     this.inverse.copy(this.group.matrix).invert();
     this.shared.uViewToSrc.value.copy(this.inverse);
+    this.fog = json.fog ?? null;
+    this.setFog(this.fog);
+    const sc = json.skyCamera;
+    if (sc && sc.scale > 0) {
+      this.skyScale = sc.scale;
+      this.skyFog = sc.fog;
+      this.skybox.matrix.copy(this.group.matrix).multiply(new THREE.Matrix4().makeScale(sc.scale, sc.scale, sc.scale)).multiply(new THREE.Matrix4().makeTranslation(-sc.origin[0], -sc.origin[1], -sc.origin[2]));
+      this.skybox.matrixWorldNeedsUpdate = true;
+      this.skyInverse.copy(this.skybox.matrix).invert();
+    }
 
     const data = new Uint8Array(buf, blob + lm.offset, lm.width * lm.height * lm.pages * 4).slice();
     this.lightmap = new THREE.DataTexture(data, lm.width, lm.height * lm.pages, THREE.RGBAFormat);
@@ -616,6 +768,16 @@ export class MapScene {
     this.lightmap.needsUpdate = true;
     this.shared.tLightmap.value = this.lightmap;
 
+    this.doors = (json.doors ?? []).map((d) => {
+      const group = new THREE.Group();
+      group.matrixAutoUpdate = false;
+      this.world.add(group);
+      const pos = d.startOpen ? d.distance : 0;
+      const door: MapDoor = { name: d.name, dir: new THREE.Vector3(...d.dir), distance: d.distance, speed: d.speed, pos, open: d.startOpen, group, tris: new Float32Array(0), anims: d.anims ?? [] };
+      group.matrix.makeTranslation(door.dir.x * pos, door.dir.y * pos, door.dir.z * pos);
+      return door;
+    });
+    this.triggers = (json.triggers ?? []).map((t) => ({ min: new THREE.Vector3(...t.min), max: new THREE.Vector3(...t.max), open: t.open, close: t.close, inside: false }));
     for (const m of json.meshes) {
       // the sky's faces are not drawn: the scene's sky (the World settings', made the map's) shows through them
       if (m.material === SKY_MATERIAL) continue;
@@ -634,11 +796,22 @@ export class MapScene {
       const mesh = new THREE.Mesh(geo, this.material(m.material, "w"));
       mesh.name = m.material;
       this.meshesOf.set(`w:${m.material}`, [...(this.meshesOf.get(`w:${m.material}`) ?? []), mesh]);
-      if (!m.material.startsWith(OVERLAY_PREFIX)) this.colliders.push({ geo, matrices: null, key: `w:${m.material}` });
       mesh.matrixAutoUpdate = false;
+      if (m.sky) {
+        this.skybox.add(mesh);
+        continue;
+      }
+      const door = m.door != null ? this.doors[m.door] : undefined;
+      if (door) {
+        door.group.add(mesh);
+        door.tris = concatFloats(door.tris, triangles(geo));
+        continue;
+      }
+      if (!m.material.startsWith(OVERLAY_PREFIX)) this.colliders.push({ geo, matrices: null, key: `w:${m.material}` });
       this.world.add(mesh);
     }
     this.world.updateMatrixWorld(true);
+    this.skybox.updateMatrixWorld(true);
 
     // the textures, then the props
     const keys = [...this.materials.keys()];
@@ -676,6 +849,8 @@ export class MapScene {
         tCube: { value: emptyCube },
         uHasBase: { value: false },
         uHasBase2: { value: false },
+        uTexture2: { value: false },
+        uNoFog: { value: false },
         uHasBump: { value: false },
         uHasBump2: { value: false },
         uSsbump: { value: false },
@@ -756,7 +931,8 @@ export class MapScene {
         faces[Number(env[1])] = tex;
         continue;
       }
-      const tex = this.dataTexture(buf, blob + t.offset, t.width, t.height, t.slot === "base" || t.slot === "base2");
+      const tex = this.dataTexture(buf, blob + t.offset, t.width, t.height, t.slot === "base" || t.slot === "base2" || t.slot === "texture2");
+      if (t.slot === "texture2") { u.tBase2.value = tex; u.uTexture2.value = true; }
       if (t.slot === "base") { u.tBase.value = tex; u.uHasBase.value = true; }
       if (t.slot === "base2") { u.tBase2.value = tex; u.uHasBase2.value = true; }
       if (t.slot === "bump") { u.tBump.value = tex; u.uHasBump.value = true; }
@@ -806,7 +982,8 @@ export class MapScene {
     u.uHalfLambert.value = flag("$halflambert");
     u.uSelfIllum.value = flag("$selfillum");
     u.uTexTransform.value = textureTransform(p["$basetexturetransform"]);
-    u.uTexTransform2.value = textureTransform(p["$basetexturetransform2"] ?? p["$basetexturetransform"]);
+    u.uTexTransform2.value = u.uTexture2.value ? textureTransform(p["$texture2transform"]) : textureTransform(p["$basetexturetransform2"] ?? p["$basetexturetransform"]);
+    u.uNoFog.value = flag("$nofog");
     u.uBumpTransform.value = textureTransform(p["$bumptransform"] ?? p["$basetexturetransform"]);
     (u.uColor.value as THREE.Color).setRGB(...vmtColor(p["$color"] ?? p["$color2"], [1, 1, 1]));
     const shader = json.shader.toLowerCase();
@@ -898,15 +1075,20 @@ export class MapScene {
       }
       const skinOf = (n: number) => (props[n].skin >= 0 && props[n].skin < Math.max(1, data.skinCount) ? props[n].skin : 0);
       // the batches: each baked prop alone, the others by skin
-      const batches: { skin: number; placed: number[]; light: Uint8Array | null }[] = [];
+      // (and the 3D skybox's apart)
+      const batches: { skin: number; placed: number[]; light: Uint8Array | null; sky: boolean }[] = [];
       const bySkin = new Map<number, number[]>();
       for (const n of list) {
         if (moving.has(n)) continue;
+        // (on a door: alone, to move with it)
+        if (props[n].door != null && this.doors[props[n].door!]) { batches.push({ skin: skinOf(n), placed: [n], light: lightOf.get(n) ?? null, sky: false }); continue; }
         const light = lightOf.get(n);
-        if (light) batches.push({ skin: skinOf(n), placed: [n], light });
-        else bySkin.set(skinOf(n), [...(bySkin.get(skinOf(n)) ?? []), n]);
+        const sky = !!props[n].sky && !!this.skyScale;
+        const k = skinOf(n) * 2 + (sky ? 1 : 0);
+        if (light) batches.push({ skin: skinOf(n), placed: [n], light, sky });
+        else bySkin.set(k, [...(bySkin.get(k) ?? []), n]);
       }
-      for (const [skin, placed] of bySkin) batches.push({ skin, placed, light: null });
+      for (const [k, placed] of bySkin) batches.push({ skin: k >> 1, placed, light: null, sky: (k & 1) === 1 });
       const fills: Promise<void>[] = [];
       meshes.forEach((md, mi) => {
         const position = new THREE.BufferAttribute(md.positions, 3);
@@ -915,7 +1097,7 @@ export class MapScene {
         const tangent = new THREE.BufferAttribute(md.tangents.length ? md.tangents : new Float32Array(md.positions.length / 3 * 4), 4);
         const index = new THREE.BufferAttribute(md.indices, 1);
         const count = md.positions.length / 3;
-        for (const { skin, placed, light } of batches) {
+        for (const { skin, placed, light, sky } of batches) {
           const geo = new THREE.InstancedBufferGeometry();
           geo.setAttribute("position", position);
           geo.setAttribute("normal", normal);
@@ -955,17 +1137,26 @@ export class MapScene {
           inst.name = path;
           inst.matrixAutoUpdate = false;
           inst.userData.props = placed;
-          this.world.add(inst);
+          const door = placed.length === 1 && props[placed[0]].door != null ? this.doors[props[placed[0]].door!] : undefined;
+          (sky ? this.skybox : door ? door.group : this.world).add(inst);
           this.meshesOf.set(key, [...(this.meshesOf.get(key) ?? []), inst]);
-          const collider = { geo, matrices: placed.map((n) => MapScene.propMatrix(props[n])), key };
-          this.colliders.push(collider);
+          if (door) {
+            // (it stands where the map places it with its door closed, as the door's own triangles: the door's offset moves both, whether
+            // the door has moved already or not)
+            door.tris = concatFloats(door.tris, triangles(geo, MapScene.propMatrix(props[placed[0]])));
+            continue;
+          }
+          const collider = sky ? null : { geo, matrices: placed.map((n) => MapScene.propMatrix(props[n])), key };
+          if (collider) this.colliders.push(collider);
           placed.forEach((n, i) => this.propParts.set(n, [...(this.propParts.get(n) ?? []), { inst, i, collider }]));
         }
       });
       this.world.updateMatrixWorld(true);
+      this.skybox.updateMatrixWorld(true);
       await Promise.all(fills);
     }, () => this.disposed);
     this.world.updateMatrixWorld(true);
+    this.skybox.updateMatrixWorld(true);
     this.buildColliders();
   }
 
@@ -976,6 +1167,16 @@ export class MapScene {
   private async loadAnimated(path: string, list: number[]): Promise<Set<number>> {
     const out = new Set<number>();
     if (!list.length) return out;
+    // the sequences the doors start on each prop (a gate that a door's opening animates), by prop
+    const scriptedSeqs = new Map<number, Set<string>>();
+    for (const n of list) {
+      const name = this.props[n].name;
+      if (!name) continue;
+      for (const d of this.doors) for (const a of d.anims) if (nameMatches(name, a.target)) {
+        if (!scriptedSeqs.has(n)) scriptedSeqs.set(n, new Set());
+        scriptedSeqs.get(n)!.add(a.sequence.toLowerCase());
+      }
+    }
     let info: ReturnType<typeof parseAnimInfo>;
     try {
       info = parseAnimInfo(await listSequences(path));
@@ -991,8 +1192,23 @@ export class MapScene {
       if (!clips.has(seq.index)) clips.set(seq.index, await bakeClip(path, seq.index, defaults).then((c) => (clipMoves(c) ? c : null)).catch(() => null));
       return clips.get(seq.index) ?? null;
     };
-    const playing: { n: number; clip: ClipData }[] = [];
+    const playing: { n: number; clip: ClipData; scripted?: Map<string, ClipData> }[] = [];
     for (const n of list) {
+      const seqs = scriptedSeqs.get(n);
+      if (seqs) {
+        // (its sequences, played when its door says, whether or not they move: the first pose until then)
+        const scripted = new Map<string, ClipData>();
+        for (const name of seqs) {
+          const seq = info.sequences.find((q) => q.name.toLowerCase() === name);
+          const c = seq && (await bakeClip(path, seq.index, defaults).catch(() => null));
+          if (c) scripted.set(name, c);
+        }
+        const first = info.sequences[0];
+        const rest = first && (await bakeClip(path, first.index, defaults).catch(() => null));
+        const clip = rest ?? scripted.values().next().value;
+        if (clip) playing.push({ n, clip, scripted });
+        continue;
+      }
       const clip = await clipOf(n);
       if (clip) playing.push({ n, clip });
     }
@@ -1005,7 +1221,7 @@ export class MapScene {
     }
     if (this.disposed) return out;
     const fills: Promise<void>[] = [];
-    for (const { n, clip } of playing) {
+    for (const { n, clip, scripted } of playing) {
       const p = this.props[n];
       const rig = new Rig(data.bones);
       if (clip.numBones !== data.bones.length) continue;
@@ -1044,13 +1260,18 @@ export class MapScene {
         mesh.matrix.copy(MapScene.propMatrix(p));
         mesh.name = path;
         mesh.userData.props = [n];
-        this.world.add(mesh);
+        (p.sky && this.skyScale ? this.skybox : this.world).add(mesh);
         this.meshesOf.set(key, [...(this.meshesOf.get(key) ?? []), mesh]);
         meshes.push(mesh);
       }
       if (!meshes.length) continue;
       const playback = new Playback();
       playback.clip = clip;
+      if (scripted) {
+        playback.loopAll = false;
+        playback.playing = false;
+        this.scripted.push({ name: p.name!, playback, clips: scripted });
+      }
       this.animated.push({ rig, bones, clip, playback });
       rig.poseFromClip(clip, 0);
       rig.boneWorld.forEach((m, i) => bones[i].matrixWorld.copy(m));
@@ -1215,18 +1436,93 @@ export class MapScene {
       if (best <= exit || exit > max || exit === Infinity) break;
       if (tMx < tMy) { ix += stepX; tMx += tDx; } else { iy += stepY; tMy += tDy; }
     }
+    // the doors, where they are now (a few triangles each: all of them)
+    let hitTris = tris;
+    for (const door of this.doors) {
+      const dt = door.tris;
+      if (!dt.length) continue;
+      const ox = o.x - door.dir.x * door.pos, oy = o.y - door.dir.y * door.pos, oz = o.z - door.dir.z * door.pos;
+      for (let k = 0; k < dt.length; k += 9) {
+        const e1x = dt[k + 3] - dt[k], e1y = dt[k + 4] - dt[k + 1], e1z = dt[k + 5] - dt[k + 2];
+        const e2x = dt[k + 6] - dt[k], e2y = dt[k + 7] - dt[k + 1], e2z = dt[k + 8] - dt[k + 2];
+        const px = d.y * e2z - d.z * e2y, py = d.z * e2x - d.x * e2z, pz = d.x * e2y - d.y * e2x;
+        const det = e1x * px + e1y * py + e1z * pz;
+        if (Math.abs(det) < 1e-9) continue;
+        const inv = 1 / det;
+        const sx = ox - dt[k], sy = oy - dt[k + 1], sz = oz - dt[k + 2];
+        const u = (sx * px + sy * py + sz * pz) * inv;
+        if (u < 0 || u > 1) continue;
+        const qx = sy * e1z - sz * e1y, qy = sz * e1x - sx * e1z, qz = sx * e1y - sy * e1x;
+        const w = (d.x * qx + d.y * qy + d.z * qz) * inv;
+        if (w < 0 || u + w > 1) continue;
+        const dist = (e2x * qx + e2y * qy + e2z * qz) * inv;
+        if (dist > 1e-4 && dist < best) { best = dist; bestTri = k / 9; hitTris = dt as Float32Array<ArrayBuffer>; }
+      }
+    }
     if (bestTri < 0) return null;
     const k = bestTri * 9;
-    const a = new THREE.Vector3(tris[k], tris[k + 1], tris[k + 2]);
-    const n = new THREE.Vector3(tris[k + 3], tris[k + 4], tris[k + 5]).sub(a).cross(new THREE.Vector3(tris[k + 6], tris[k + 7], tris[k + 8]).sub(a)).normalize();
+    const tris2 = hitTris;
+    const a = new THREE.Vector3(tris2[k], tris2[k + 1], tris2[k + 2]);
+    const n = new THREE.Vector3(tris2[k + 3], tris2[k + 4], tris2[k + 5]).sub(a).cross(new THREE.Vector3(tris2[k + 6], tris2[k + 7], tris2[k + 8]).sub(a)).normalize();
     if (n.dot(d) > 0) n.negate();
     const point = o.addScaledVector(d, best).applyMatrix4(this.group.matrix);
     return { point, normal: n.transformDirection(this.group.matrix), distance: best };
   }
 
+  // --- the doors: open while someone is in a trigger that opens them, as the map's outputs say --------------------------------------
+
+  private doors: MapDoor[] = [];
+  /** The props a door's opening or closing animates (a gate whose door is an invisible brush): their playback and sequences. */
+  private readonly scripted: { name: string; playback: Playback; clips: Map<string, ClipData> }[] = [];
+
+  /** A door starts opening or closing: the animations it starts on props (its OnOpen/OnClose outputs). */
+  private setDoor(d: MapDoor, open: boolean) {
+    if (d.open === open) return;
+    d.open = open;
+    for (const a of d.anims) {
+      if (a.on !== (open ? "open" : "close")) continue;
+      for (const s of this.scripted) {
+        const clip = s.clips.get(a.sequence.toLowerCase());
+        if (!clip || !nameMatches(s.name, a.target)) continue;
+        s.playback.clip = clip;
+        s.playback.time = 0;
+        s.playback.playing = true;
+      }
+    }
+  }
+  private triggers: { min: THREE.Vector3; max: THREE.Vector3; open: string[]; close: string[]; inside: boolean }[] = [];
+
+  /**
+   * Moves the doors on by `dt` seconds: a trigger with someone in it (`points`: where the characters stand, in the view) opens the doors
+   * it names, and closes them once it is left (the team a trigger lets through is not asked). Returns whether a door moved.
+   */
+  updateDoors(dt: number, points: THREE.Vector3[]): boolean {
+    if (!this.doors.length) return false;
+    const local = points.map((p) => p.clone().applyMatrix4(this.inverse));
+    for (const t of this.triggers) {
+      // (a character's middle, not its feet: the trigger's box may start just above the floor)
+      const inside = local.some((p) => p.x >= t.min.x && p.x <= t.max.x && p.y >= t.min.y && p.y <= t.max.y && p.z + 36 >= t.min.z && p.z + 36 <= t.max.z);
+      if (inside === t.inside) continue;
+      t.inside = inside;
+      for (const name of inside ? t.open : t.close) for (const d of this.doors) if (nameMatches(d.name, name)) this.setDoor(d, inside);
+    }
+    let moved = false;
+    for (const d of this.doors) {
+      const target = d.open ? d.distance : 0;
+      if (d.pos === target) continue;
+      const step = d.speed * dt;
+      d.pos = d.pos < target ? Math.min(target, d.pos + step) : Math.max(target, d.pos - step);
+      d.group.matrix.makeTranslation(d.dir.x * d.pos, d.dir.y * d.pos, d.dir.z * d.pos);
+      d.group.updateMatrixWorld(true);
+      moved = true;
+    }
+    return moved;
+  }
+
   dispose() {
     this.disposed = true;
     this.group.removeFromParent();
+    this.skybox.removeFromParent();
     for (const g of this.geometries) g.dispose();
     for (const t of this.textures) t.dispose();
     for (const m of this.materials.values()) m.dispose();

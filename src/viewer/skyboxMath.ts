@@ -107,7 +107,9 @@ export const viewerToSource = (v: V3): [number, number, number] => [v[2], v[0], 
 /** The colour of a picture at a point of its face (0..1), bilinear; the result is written to `out` as 0..255. */
 function sample(p: SkyPicture, u: number, v: number, out: number[]) {
   const [tu, tv] = applyTransform(p.transform, u, v);
-  const x = tu * p.width - 0.5, y = tv * p.height - 0.5;
+  // a texel in from the edges, as the engine draws its sky (its faces' outer texels are often lighter or darker: a seam otherwise)
+  const inset = (t: number, n: number) => (n > 2 ? Math.min(n - 2, Math.max(1, t)) : t);
+  const x = inset(tu * p.width - 0.5, p.width), y = inset(tv * p.height - 0.5, p.height);
   const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
   const wrap = (i: number, n: number, clamp: boolean) => (clamp ? Math.min(n - 1, Math.max(0, i)) : ((i % n) + n) % n);
   const xa = wrap(x0, p.width, p.clampS), xb = wrap(x0 + 1, p.width, p.clampS), ya = wrap(y0, p.height, p.clampT), yb = wrap(y0 + 1, p.height, p.clampT);

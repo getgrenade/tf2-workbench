@@ -191,7 +191,11 @@ export class PlayController {
   private prev: Playing | null = null;
   private fade = 0;
   private wasGround = true;
-  private busy = false;
+  /** The pose requests in flight (they overlap: waiting for each before the next skipped frames, the body moving on without its pose),
+   * the newest one asked and the newest one shown (an older answer arriving late is dropped). */
+  private inFlight = 0;
+  private poseAsked = 0;
+  private poseShown = 0;
   private pitchRange = { start: -45, end: 90 };
   private readonly off: (() => void)[] = [];
 
@@ -899,11 +903,12 @@ export class PlayController {
   }
 
   private async pose(run: number) {
-    if (this.busy || !this.cur) return;
+    if (this.inFlight >= 3 || !this.cur) return;
     const a = this.host.actor;
     const path = this.host.anim.modelPath;
     if (!path) return;
-    this.busy = true;
+    this.inFlight++;
+    const ticket = ++this.poseAsked;
     try {
       const cur = this.cur;
       const prev = this.prev;
@@ -911,7 +916,8 @@ export class PlayController {
       const requests: PoseRequest[] = [this.request(cur)];
       if (prev && fade > 0) requests.push(this.request(prev));
       const buf = await evalPoses(path, requests, this.params(run), this.params(run, true));
-      if (!this.running || this.host.isDamaged?.() || this.taunting) return;
+      if (!this.running || this.host.isDamaged?.() || this.taunting || ticket < this.poseShown) return;
+      this.poseShown = ticket;
       const f = new Float32Array(buf);
       const nb = f.length / (7 * requests.length);
       const at = (i: number): RawPose => ({ pos: f.subarray(i * nb * 7, i * nb * 7 + nb * 3), quat: f.subarray(i * nb * 7 + nb * 3, (i + 1) * nb * 7) });
@@ -924,7 +930,7 @@ export class PlayController {
       console.error(err);
       this.host.onExit();
     } finally {
-      this.busy = false;
+      this.inFlight--;
     }
   }
 }

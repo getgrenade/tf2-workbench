@@ -1215,7 +1215,7 @@ impl AnimSet {
         let mut guard = 0;
         loop {
             let bone_id = u8at(d, p);
-            if bone_id >= 255 || guard > 4096 {
+            if bone_id == 255 || guard > 4096 {
                 break;
             }
             guard += 1;
@@ -2046,7 +2046,7 @@ impl AnimSet {
         let Some(mut p) = ad.panim(&mut frame) else { return s + "  (no data)" };
         for _ in 0..200 {
             let bone = u8at(&grp.data, p);
-            if bone >= 255 {
+            if bone == 255 {
                 break;
             }
             let flags = u8at(&grp.data, p + 1);

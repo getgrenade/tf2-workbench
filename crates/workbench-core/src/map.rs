@@ -74,7 +74,14 @@ pub fn load_map(state: &AppState, name: &str) -> Result<Vec<u8>, String> {
     let vpk = state.vpk()?;
     vpk.mount_map(name).map_err(|e| e.to_string())?;
     let bytes = map_bytes(&vpk, name)?;
-    let map = source_formats::bsp::read(&bytes).map_err(|e| e.to_string())?;
+    // (a prop entity is lit at its model's illumination position: studiohdr_t's illumposition, after id, version, checksum, name,
+    // length and eyeposition)
+    let illum = |model: &str| -> Option<[f32; 3]> {
+        let mdl = vpk.read(model).ok()?;
+        let f = |o: usize| mdl.get(o..o + 4).map(|b| f32::from_le_bytes(b.try_into().unwrap()));
+        Some([f(92)?, f(96)?, f(100)?]).filter(|v| v.iter().all(|x| x.is_finite()))
+    };
+    let map = source_formats::bsp::read_with(&bytes, &illum).map_err(|e| e.to_string())?;
     let mut blob = Vec::new();
     let meshes: Vec<_> = map
         .meshes
@@ -91,12 +98,12 @@ pub fn load_map(state: &AppState, name: &str) -> Result<Vec<u8>, String> {
             for i in &m.indices {
                 blob.extend_from_slice(&i.to_le_bytes());
             }
-            json!({ "material": m.material, "vertexCount": m.positions.len() / 3, "indexCount": m.indices.len(), "pos": pos, "normal": normal, "uv": uv, "lightmap": lightmap, "blend": blend, "tangentS": tangent_s, "tangentT": tangent_t, "index": index })
+            json!({ "material": m.material, "vertexCount": m.positions.len() / 3, "indexCount": m.indices.len(), "pos": pos, "normal": normal, "uv": uv, "lightmap": lightmap, "blend": blend, "tangentS": tangent_s, "tangentT": tangent_t, "index": index, "sky": m.sky, "door": m.door })
         })
         .collect();
     let lightmap = blob.len();
     blob.extend_from_slice(&map.lightmap);
-    let props: Vec<_> = map.props.iter().map(|p| json!({ "index": p.static_index, "model": p.model, "origin": p.origin, "angles": p.angles, "skin": p.skin, "scale": p.scale, "ambient": p.ambient, "sunlit": p.sunlit, "key": p.key.map(|(dir, color)| json!({ "dir": dir, "color": color })), "animation": p.animation })).collect();
+    let props: Vec<_> = map.props.iter().map(|p| json!({ "index": p.static_index, "model": p.model, "origin": p.origin, "angles": p.angles, "skin": p.skin, "scale": p.scale, "ambient": p.ambient, "sunlit": p.sunlit, "key": p.key.map(|(dir, color)| json!({ "dir": dir, "color": color })), "animation": p.animation, "sky": p.sky, "door": p.door, "name": p.name })).collect();
     // the average light of the lit faces (linear), to set the exposure by, as the game's auto exposure does
     let page = (map.lightmap_width * map.lightmap_height * 4) as usize;
     let (mut sum, mut n) = (0.0f64, 0usize);
@@ -122,6 +129,10 @@ pub fn load_map(state: &AppState, name: &str) -> Result<Vec<u8>, String> {
         "shadow": map.shadow.map(|s| json!({ "dir": s.dir, "color": s.color, "distance": s.distance })),
         "exposureMax": map.exposure_max,
         "sky": map.sky,
+        "fog": map.fog.map(|(color, start, end, max)| json!({ "color": color, "start": start, "end": end, "max": max })),
+        "doors": map.doors.iter().map(|d| json!({ "name": d.name, "dir": d.dir, "distance": d.distance, "speed": d.speed, "startOpen": d.start_open, "anims": d.anims.iter().map(|(on, target, sequence)| json!({ "on": on, "target": target, "sequence": sequence })).collect::<Vec<_>>() })).collect::<Vec<_>>(),
+        "triggers": map.triggers.iter().map(|t| json!({ "min": t.min, "max": t.max, "open": t.open, "close": t.close })).collect::<Vec<_>>(),
+        "skyCamera": map.sky_camera.map(|c| json!({ "origin": c.origin, "scale": c.scale, "fog": c.fog.map(|(color, start, end, max)| json!({ "color": color, "start": start, "end": end, "max": max })) })),
         "bounds": map.bounds,
     }))
     .map_err(|e| e.to_string())?;
