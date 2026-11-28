@@ -23,6 +23,10 @@ interface ControlDef {
   /** The flex whose movement places the control (where it moves the face most at its full value). */
   anchor: string;
   channels: ChannelDef[];
+  /** How far out in front of the face it stands (half eye spans; the eyes' aim). */
+  ahead?: number;
+  /** How far its joystick goes, times the others' (the eyes' aim: a wider sweep for a finer aim). */
+  travel?: number;
   /** Where it sits on the face, from the face's landmarks: x outward from the middle and y up from the eyes, in half eye spans. */
   at: (f: Landmarks) => [number, number];
 }
@@ -34,7 +38,10 @@ const SIDE: ControlDef[] = [
   { id: "scalp", label: "Scalp", anchor: "ScalpD", channels: [{ flex: "ScalpD", axis: "y" }], at: (f) => [0.85, f.brow + 0.95] },
   { id: "browIn", label: "Inner brow", anchor: "BrowInV", channels: [{ flex: "BrowInV", axis: "y" }, { flex: "Frown", axis: "x", dir: -1 }], at: (f) => [0.4, f.brow + 0.3] },
   { id: "browOut", label: "Outer brow", anchor: "BrowOutV", channels: [{ flex: "BrowOutV", axis: "y" }], at: (f) => [1.3, f.brow + 0.25] },
-  { id: "lid", label: "Eyelid", anchor: "CloseLid", channels: [{ flex: "CloseLid", axis: "y" }, { flex: "InnerSquint", axis: "x", dir: -1 }, { flex: "OuterSquint", axis: "x", dir: 1 }], at: (f) => [f.eye, 0] },
+  { id: "lid", label: "Eyelid", anchor: "CloseLid", channels: [{ flex: "CloseLid", axis: "y" }], at: (f) => [f.eye, 0] },
+  // (the squints apart, under the eye's corners: both can be on at once; up raises the lower lid)
+  { id: "squintIn", label: "Inner squint", anchor: "InnerSquint", channels: [{ flex: "InnerSquint", axis: "y", dir: 1 }], at: (f) => [f.eye - 0.42, -0.36] },
+  { id: "squintOut", label: "Outer squint", anchor: "OuterSquint", channels: [{ flex: "OuterSquint", axis: "y", dir: 1 }], at: (f) => [f.eye + 0.42, -0.36] },
   { id: "nose", label: "Nose", anchor: "NoseV", channels: [{ flex: "NoseV", axis: "y" }, { flex: "NostrilFlare", axis: "x" }], at: (f) => [0.38, f.nose] },
   { id: "cheek", label: "Cheek", anchor: "CheekV", channels: [{ flex: "CheekV", axis: "y" }, { flex: "CheekH", axis: "x" }], at: (f) => [1.25, f.nose - 0.05] },
   { id: "lipUp", label: "Upper lip", anchor: "LipUpV", channels: [{ flex: "LipUpV", axis: "y" }, { flex: "PuckerLipUp", axis: "x", dir: -1 }, { flex: "FoldLipUp", axis: "extra" }, { flex: "PuffLipUp", axis: "extra" }], at: (f) => [0.32, Math.max(f.lipUp + 0.18, f.cornerY + 0.4)] },
@@ -43,6 +50,9 @@ const SIDE: ControlDef[] = [
 ];
 /** The controls on the middle of the face. */
 const CENTER: ControlDef[] = [
+  // (where the eyes look, out in front of them as an animator's rig has it: eyes_rightleft and eyes_updown, in degrees, on top of the
+  // camera when the eyes follow it; it stands at the brows' depth plus `ahead`)
+  { id: "eyes", label: "Eyes aim", anchor: "left_BrowInV", ahead: 2.8, travel: 2.2, channels: [{ flex: "eyes_rightleft", axis: "x", dir: 1 }, { flex: "eyes_updown", axis: "y", dir: -1 }], at: () => [0, 0.05] },
   // (down opens the mouth: the jaw drops and the lips part with it, LipsV; up clenches it, the lips pressed)
   { id: "jaw", label: "Jaw", anchor: "JawV", channels: [{ flex: "JawV", axis: "y" }, { flex: "left_LipsV", axis: "y", dir: -1 }, { flex: "right_LipsV", axis: "y", dir: -1 }, { flex: "JawH", axis: "x" }, { flex: "JawD", axis: "extra" }], at: (f) => [0, Math.min(f.lipLo - 0.95, f.cornerY - 1.2)] },
 ];
@@ -218,8 +228,8 @@ export function analyzeFace(model: ModelData, head: number): FaceLayout | null {
     const origin = middle.clone()
       .addScaledVector(x, lx * half)
       .addScaledVector(up, ly * half)
-      .addScaledVector(out, Z(anchor.at) + size * 1.2);
-    controls.push({ id: side === "C" ? def.id : `${def.id}${side}`, label: side === "C" ? def.label : `${def.label} ${side}`, side, origin, bone: head, x, y: up.clone(), z: out.clone(), size, reach: [reach("x", -1), reach("x", 1), reach("y", -1), reach("y", 1)], channels });
+      .addScaledVector(out, Z(anchor.at) + size * 1.2 + (def.ahead ?? 0) * half);
+    controls.push({ id: side === "C" ? def.id : `${def.id}${side}`, label: side === "C" ? def.label : `${def.label} ${side}`, side, origin, bone: head, x, y: up.clone(), z: out.clone(), size: size * (def.travel ?? 1), reach: [reach("x", -1), reach("x", 1), reach("y", -1), reach("y", 1)], channels });
   };
   for (const def of SIDE) { place(def, "L"); place(def, "R"); }
   for (const def of CENTER) place(def, "C");
@@ -256,14 +266,135 @@ const COLORS = { L: 0x3a8dff, R: 0xff3b30, C: 0xffc233 } as const;
 const HOVER = 0xffffff;
 const SELECTED = 0xff8a1f;
 /** How close (in pixels) a click must be to a joystick to take it. */
-const PICK_RADIUS = 11;
+const PICK_RADIUS = 8;
+
+/** A closed outline (box units, a control's plane), as an animator's face rig draws its controls. */
+type Outline = [number, number][];
+const ellipse = (rx: number, ry: number, cx = 0, cy = 0, n = 36): Outline =>
+  Array.from({ length: n }, (_, i) => [cx + Math.cos((i / n) * Math.PI * 2) * rx, cy + Math.sin((i / n) * Math.PI * 2) * ry]);
+/** An eye's shape: two arcs meeting at the corners. */
+const almond = (rx: number, ry: number, n = 40): Outline =>
+  Array.from({ length: n }, (_, i) => {
+    const a = (i / n) * Math.PI * 2;
+    return [Math.cos(a) * rx, Math.sin(a) * ry * (0.55 + 0.45 * Math.abs(Math.sin(a)))];
+  });
+/** A bent bar (the scalp's, the jaw's): an arc `bend` high across `w` each way, `t` thick. */
+const bar = (w: number, t: number, bend: number, n = 16): Outline => {
+  const mid = (x: number) => bend * (1 - (x / w) ** 2);
+  const top: Outline = [], bottom: Outline = [];
+  for (let i = 0; i <= n; i++) {
+    const x = -w + (2 * w * i) / n;
+    top.push([x, mid(x) + t]);
+    bottom.push([x, mid(x) - t]);
+  }
+  const cap = (x: number, from: number, to: number): Outline =>
+    Array.from({ length: 6 }, (_, i) => {
+      const a = from + ((to - from) * (i + 1)) / 7;
+      return [x + Math.cos(a) * t, mid(x) + Math.sin(a) * t];
+    });
+  return [...top, ...cap(w, Math.PI / 2, -Math.PI / 2), ...bottom.reverse(), ...cap(-w, -Math.PI / 2, -Math.PI * 1.5)];
+};
+/** The outlines of each kind of control (by its id without the side), in box units (the joystick reaches 1 each way). */
+const SHAPES: Record<string, Outline[]> = {
+  scalp: [bar(1.9, 0.32, 0.45)],
+  browIn: [ellipse(0.62, 0.62)],
+  browOut: [ellipse(0.62, 0.62)],
+  lid: [almond(2.3, 1.15)],
+  squintIn: [bar(0.75, 0.24, 0)],
+  squintOut: [bar(0.75, 0.24, 0)],
+  // (the eyes' aim, out in front of the face: two eyes in a capsule)
+  eyes: [bar(1, 0.42, 0), ellipse(0.28, 0.28, -0.58, 0), ellipse(0.28, 0.28, 0.58, 0)],
+  nose: [ellipse(0.5, 0.5)],
+  cheek: [ellipse(1.05, 1.05)],
+  lipUp: [ellipse(0.5, 0.5)],
+  lipLo: [ellipse(0.5, 0.5)],
+  // (the corner moves every way: a ring with a dot)
+  corner: [ellipse(0.62, 0.62), ellipse(0.16, 0.16, 0, 0, 12)],
+  jaw: [bar(2.2, 0.36, -0.7)],
+};
+/**
+ * The controls drawn as what they do instead of moved about (by the joystick's place, -1..1 each way): the eyelid opens as it is dragged
+ * up (a little past its rest) and shuts as it is dragged down.
+ */
+const MORPHS: Record<string, (u: number, v: number) => Outline[]> = {
+  lid: (_u, v) => {
+    const open = v >= 0 ? 1 + 0.3 * v : 1 + 1.9 * v;
+    return [almond(2.3, 1.15).map(([x, y]) => [x, y > 0 ? y * open : y] as [number, number])];
+  },
+};
+
+/** A band along a closed outline, `w` wide (a line drawn as a mesh: GL draws lines one pixel wide). */
+function band(outline: Outline, w: number): { pos: number[]; index: number[] } {
+  const pos: number[] = [], index: number[] = [];
+  const n = outline.length;
+  for (let i = 0; i < n; i++) {
+    const [px, py] = outline[(i + n - 1) % n], [x, y] = outline[i], [nx, ny] = outline[(i + 1) % n];
+    // the normal at the point: the mean of its two segments'
+    let ax = -(y - py), ay = x - px, bx = -(ny - y), by = nx - x;
+    const la = Math.hypot(ax, ay) || 1, lb = Math.hypot(bx, by) || 1;
+    ax /= la; ay /= la; bx /= lb; by /= lb;
+    let mx = ax + bx, my = ay + by;
+    const lm = Math.hypot(mx, my) || 1;
+    mx /= lm; my /= lm;
+    const k = w / 2 / Math.max(0.35, mx * ax + my * ay);
+    pos.push(x + mx * k, y + my * k, 0, x - mx * k, y - my * k, 0);
+    const a = i * 2, b = ((i + 1) % n) * 2;
+    index.push(a, a + 1, b, b, a + 1, b + 1);
+  }
+  return { pos, index };
+}
+/** The bands of several outlines in one geometry. */
+function bands(outlines: Outline[], w: number): THREE.BufferGeometry {
+  const pos: number[] = [], index: number[] = [];
+  for (const o of outlines) {
+    const b = band(o, w), base = pos.length / 3;
+    pos.push(...b.pos);
+    for (const i of b.index) index.push(base + i);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(index);
+  return g;
+}
+/** Whether a point is inside a polygon (screen points). */
+function inside(x: number, y: number, poly: [number, number][]): boolean {
+  let hit = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i], [xj, yj] = poly[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) hit = !hit;
+  }
+  return hit;
+}
+/** How far a point is from a closed polyline (screen points). */
+function edgeDistance(x: number, y: number, poly: [number, number][]): number {
+  let best = Infinity;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [ax, ay] = poly[j], [bx, by] = poly[i];
+    const dx = bx - ax, dy = by - ay, len = dx * dx + dy * dy || 1;
+    const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / len));
+    best = Math.min(best, Math.hypot(ax + t * dx - x, ay + t * dy - y));
+  }
+  return best;
+}
 
 interface Drawn {
   control: FaceControl;
   group: THREE.Group;
+  /** The range the control moves in (shown while it is hovered, selected or dragged). */
   box: THREE.LineSegments;
-  knob: THREE.Mesh;
-  ring: THREE.LineLoop;
+  /** The control itself: its outlines, moved by the joystick. */
+  knob: THREE.Group;
+  shape: THREE.Mesh;
+  shadow: THREE.Mesh;
+  dot: THREE.Mesh;
+  outlines: Outline[];
+  /** Where it is taken (its rest shape for one drawn as what it does: a shut eyelid is a line, the open eye is still its place). */
+  hit: Outline[];
+  /** The joystick's place (-1..1 each way) the shape was last drawn for. */
+  u: number;
+  v: number;
+  /** Draws the shape for the joystick's place, when it is drawn as what it does (see MORPHS). */
+  morph?: (u: number, v: number) => Outline[];
 }
 
 export interface FaceRigHooks {
@@ -294,6 +425,8 @@ export class FaceRig {
   /** A press in the view off the controls: a click there (not a drag that orbits) lets go of the selected control. */
   private offPress: { x: number; y: number; id: number } | null = null;
   private readonly ray = new THREE.Raycaster();
+  /** The name of the control under the pointer. */
+  private readonly tip: HTMLElement;
 
   constructor(private view: { camera: THREE.Camera; controls: OrbitControls }, private el: HTMLElement, scene: THREE.Scene, container: HTMLElement, private hooks: FaceRigHooks) {
     this.root.name = "faceRig";
@@ -304,6 +437,10 @@ export class FaceRig {
     this.panel.className = "faceRigBox";
     this.panel.hidden = true;
     container.append(this.panel);
+    this.tip = document.createElement("div");
+    this.tip.className = "faceRigTip";
+    this.tip.hidden = true;
+    container.append(this.tip);
     // (in the capture phase on the view: a joystick taken is the rig's, not the orbit's, the selection's nor the click's)
     el.addEventListener("pointerdown", (e) => this.down(e), true);
     el.addEventListener("pointermove", (e) => this.move(e), true);
@@ -333,8 +470,9 @@ export class FaceRig {
     for (const d of this.drawn) {
       d.group.removeFromParent();
       d.box.geometry.dispose();
-      d.knob.geometry.dispose();
-      d.ring.geometry.dispose();
+      d.shape.geometry.dispose();
+      d.shadow.geometry.dispose();
+      d.dot.geometry.dispose();
     }
     this.drawn = [];
     this.root.visible = this.active;
@@ -343,26 +481,42 @@ export class FaceRig {
     for (const control of this.layout.controls) {
       const color = COLORS[control.side];
       const [l, r, b, t] = control.reach;
-      // the box (in units of its size: -1..1 each way it goes, a sliver the way it does not), with a cross at its middle
-      const x0 = l ? -1 : -0.12, x1 = r ? 1 : 0.12, y0 = b ? -1 : -0.12, y1 = t ? 1 : 0.12;
-      const pts = [x0, y0, x1, y0, x1, y0, x1, y1, x1, y1, x0, y1, x0, y1, x0, y0];
-      if (l || r) pts.push(x0, 0, x1, 0);
-      if (b || t) pts.push(0, y0, 0, y1);
+      // where the control's middle can go (box units: 1 each way it goes, none the way it does not): a rectangle for one that goes both
+      // ways, a track with end ticks for one that slides along one axis; a small cross where it rests
+      const x0 = l ? -1 : 0, x1 = r ? 1 : 0, y0 = b ? -1 : 0, y1 = t ? 1 : 0;
+      const tick = 0.18, rest = 0.12;
+      const pts: number[] = [];
+      if ((l || r) && (b || t)) pts.push(x0, y0, x1, y0, x1, y0, x1, y1, x1, y1, x0, y1, x0, y1, x0, y0);
+      else if (l || r) pts.push(x0, 0, x1, 0, x0, -tick, x0, tick, x1, -tick, x1, tick);
+      else pts.push(0, y0, 0, y1, -tick, y0, tick, y0, -tick, y1, tick, y1);
+      pts.push(-rest, 0, rest, 0, 0, -rest, 0, rest);
       const boxGeo = new THREE.BufferGeometry();
       boxGeo.setAttribute("position", new THREE.Float32BufferAttribute(pts.flatMap((v, i) => (i % 2 ? [v, 0] : [v])), 3));
-      const box = new THREE.LineSegments(boxGeo, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.45, depthTest: false, depthWrite: false }));
-      const knob = new THREE.Mesh(new THREE.CircleGeometry(0.28, 20), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, depthTest: false, depthWrite: false, side: THREE.DoubleSide }));
-      const ringGeo = new THREE.BufferGeometry().setFromPoints(Array.from({ length: 24 }, (_, i) => new THREE.Vector3(Math.cos((i / 24) * Math.PI * 2) * 0.4, Math.sin((i / 24) * Math.PI * 2) * 0.4, 0)));
-      const ring = new THREE.LineLoop(ringGeo, new THREE.LineBasicMaterial({ color: SELECTED, depthTest: false, depthWrite: false }));
-      ring.visible = false;
-      for (const o of [box, knob, ring]) o.renderOrder = 1000;
-      knob.renderOrder = 1001;
-      ring.renderOrder = 1002;
+      const box = new THREE.LineSegments(boxGeo, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.6, depthTest: false, depthWrite: false }));
+      box.visible = false;
+      // the control's outlines, over a dark band so they read on any skin
+      const kind = control.id.replace(/[LR]$/, "");
+      const morph = MORPHS[kind];
+      const outlines = morph ? morph(0, 0) : SHAPES[kind] ?? [ellipse(0.55, 0.55)];
+      const flat = (c: number, opacity: number) => new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity, depthTest: false, depthWrite: false, side: THREE.DoubleSide });
+      // (the lines as thick on every control: one with a wider sweep has larger units)
+      const line = Math.min(...this.layout.controls.map((c) => c.size)) / control.size;
+      const shadow = new THREE.Mesh(bands(outlines, 0.34 * line), flat(0x000000, 0.35));
+      const shape = new THREE.Mesh(bands(outlines, 0.15 * line), flat(color, 0.95));
+      const knob = new THREE.Group();
+      knob.add(shadow, shape);
+      // the joystick's place in its range (with the range, while the control is in hand)
+      const dot = new THREE.Mesh(new THREE.CircleGeometry(0.11, 14), flat(color, 1));
+      dot.visible = false;
+      box.renderOrder = 1000;
+      shadow.renderOrder = 1001;
+      shape.renderOrder = 1002;
+      dot.renderOrder = 1003;
       const group = new THREE.Group();
       group.matrixAutoUpdate = false;
-      group.add(box, knob, ring);
+      group.add(box, knob, dot);
       this.root.add(group);
-      this.drawn.push({ control, group, box, knob, ring });
+      this.drawn.push({ control, group, box, knob, shape, shadow, dot, outlines, hit: outlines, u: 0, v: 0, morph });
     }
     this.update();
   }
@@ -384,12 +538,26 @@ export class FaceRig {
       d.group.matrix.makeBasis(ax, ay, az).setPosition(o);
       d.group.matrixWorldNeedsUpdate = true;
       const u = axisPosition(c.channels, "x", get), v = axisPosition(c.channels, "y", get);
-      d.knob.position.set(u, v, 0);
-      d.ring.position.set(u, v, 0);
-      const hot = this.drag?.d === d || this.selected === c.id;
-      (d.knob.material as THREE.MeshBasicMaterial).color.setHex(this.drag?.d === d ? SELECTED : this.hovered === c.id ? HOVER : COLORS[c.side]);
-      d.ring.visible = hot;
-      (d.box.material as THREE.LineBasicMaterial).opacity = hot ? 0.9 : 0.45;
+      if (d.morph) {
+        // (drawn as what it does, in place: the eyelid's shape follows the lid)
+        if (u !== d.u || v !== d.v) {
+          d.outlines = d.morph(u, v);
+          d.shape.geometry.dispose();
+          d.shadow.geometry.dispose();
+          d.shape.geometry = bands(d.outlines, 0.15);
+          d.shadow.geometry = bands(d.outlines, 0.34);
+        }
+      } else d.knob.position.set(u, v, 0);
+      d.u = u;
+      d.v = v;
+      const chosen = this.drag?.d === d || this.selected === c.id;
+      const hover = this.hovered === c.id;
+      (d.shape.material as THREE.MeshBasicMaterial).color.setHex(chosen ? SELECTED : hover ? HOVER : COLORS[c.side]);
+      (d.shadow.material as THREE.MeshBasicMaterial).opacity = chosen || hover ? 0.6 : 0.35;
+      // (the range only for the control in hand: the face stays readable)
+      d.box.visible = d.dot.visible = chosen || hover;
+      d.dot.position.set(u, v, 0);
+      (d.dot.material as THREE.MeshBasicMaterial).color.setHex(chosen ? SELECTED : HOVER);
     }
     this.refreshPanel();
   }
@@ -398,14 +566,26 @@ export class FaceRig {
   pick(clientX: number, clientY: number): Drawn | null {
     if (!this.active) return null;
     const rect = this.el.getBoundingClientRect();
-    let best: Drawn | null = null, bestD = PICK_RADIUS;
+    // on a control's outline, or inside it (the smallest one a point is inside wins)
+    let best: Drawn | null = null, bestScore = Infinity;
     const p = new THREE.Vector3();
     for (const d of this.drawn) {
       if (!d.group.visible) continue;
-      d.knob.getWorldPosition(p).project(this.view.camera);
-      if (p.z > 1) continue;
-      const dist = Math.hypot(rect.left + ((p.x + 1) / 2) * rect.width - clientX, rect.top + ((1 - p.y) / 2) * rect.height - clientY);
-      if (dist < bestD) { bestD = dist; best = d; }
+      d.knob.updateMatrixWorld(true);
+      let behind = false;
+      const polys = d.hit.map((o) => o.map(([x, y]) => {
+        p.set(x, y, 0).applyMatrix4(d.knob.matrixWorld).project(this.view.camera);
+        if (p.z > 1) behind = true;
+        return [rect.left + ((p.x + 1) / 2) * rect.width, rect.top + ((1 - p.y) / 2) * rect.height] as [number, number];
+      }));
+      if (behind) continue;
+      for (const poly of polys) {
+        const edge = edgeDistance(clientX, clientY, poly);
+        const xs = poly.map((q) => q[0]), ys = poly.map((q) => q[1]);
+        const area = (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
+        const score = edge <= PICK_RADIUS ? edge : inside(clientX, clientY, poly) ? PICK_RADIUS + Math.sqrt(area) : Infinity;
+        if (score < bestScore) { bestScore = score; best = d; }
+      }
     }
     return best;
   }
@@ -435,7 +615,7 @@ export class FaceRig {
     const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal, new THREE.Vector3().setFromMatrixPosition(d.group.matrixWorld));
     const grab = this.local(d, plane, e.clientX, e.clientY);
     if (!grab) return;
-    this.drag = { d, plane, grab, start: new THREE.Vector2(d.knob.position.x, d.knob.position.y), pointer: e.pointerId };
+    this.drag = { d, plane, grab, start: new THREE.Vector2(d.u, d.v), pointer: e.pointerId };
     this.view.controls.enabled = false;
     this.el.setPointerCapture(e.pointerId);
   }
@@ -445,9 +625,11 @@ export class FaceRig {
       if (e.buttons !== 0 || !this.active) return;
       const id = this.pick(e.clientX, e.clientY)?.control.id ?? null;
       if (id !== this.hovered) { this.hovered = id; this.el.style.cursor = id ? "grab" : ""; this.update(); }
+      this.showTip(id, e.clientX, e.clientY);
       return;
     }
     e.stopImmediatePropagation();
+    this.tip.hidden = true;
     const { d, plane, grab, start } = this.drag;
     const at = this.local(d, plane, e.clientX, e.clientY);
     if (!at) return;
@@ -472,6 +654,17 @@ export class FaceRig {
     this.update();
   }
 
+  /** The name of the control under the pointer, beside it. */
+  private showTip(id: string | null, x: number, y: number) {
+    const c = id ? this.layout?.controls.find((k) => k.id === id) : null;
+    this.tip.hidden = !c || !this.active;
+    if (!c) return;
+    this.tip.textContent = c.label;
+    const box = this.tip.parentElement!.getBoundingClientRect();
+    this.tip.style.left = `${x - box.left + 14}px`;
+    this.tip.style.top = `${y - box.top + 14}px`;
+  }
+
   /** Sets a control's flexes for a joystick position (and the mirror's, when mirroring). */
   private write(c: FaceControl, u: number, v: number) {
     const values: [string, number][] = [];
@@ -486,6 +679,7 @@ export class FaceRig {
   /** Selects a control (null: none): its channel box opens. */
   select(id: string | null) {
     this.selected = id;
+    this.tip.hidden = true;
     this.update();
   }
 

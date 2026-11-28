@@ -341,6 +341,8 @@ export interface ItemInfo {
   /** Taunts only: the `taunt attack name` (`TAUNTATK_ALLCLASS_GUITAR_RIFF`) and the seconds after the taunt's start it happens at. */
   tauntAttack?: string;
   tauntAttackTime?: number;
+  /** Taunts only: the slot whose weapon the player takes out for it (`primary`: the Heavy's minigun in the Russian Rubdown). */
+  tauntWeaponSlot?: string;
   /**
    * The sounds the item plays while its wearer taunts (sound script names): a taunt's success sound and its loop, `offset` seconds after the
    * taunt starts, or a cosmetic's taunt sound (the Boombox, the Infernal Orchestrina).

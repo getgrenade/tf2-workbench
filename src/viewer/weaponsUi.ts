@@ -16,9 +16,7 @@ export interface WeaponsEls {
   count: HTMLElement;
   /** Empties the search box. */
   clear: HTMLButtonElement;
-  /** Puts away what the character holds. */
-  removeAll: HTMLButtonElement;
-  /** What the character holds (its weapon or taunt), as a card like the worn cosmetics'. */
+  /** What the character holds (its weapon or taunt), as a card like the worn cosmetics' (in front of them, in the cosmetics' row). */
   equipped: HTMLElement;
   /** The row under the list, which gets the thumbnails / list button and the size slider. */
   foot: HTMLElement;
@@ -152,10 +150,9 @@ export function createWeaponsUi(els: WeaponsEls, hooks: WeaponsHooks) {
   function renderEquipped() {
     els.equipped.innerHTML = "";
     const current = shownHeld();
-    els.removeAll.disabled = !current;
     if (!current) return;
     const card = document.createElement("div");
-    card.className = "equip";
+    card.className = "equip held";
     card.innerHTML = `<div class="equipIcon"><b class="x" title="Put it away">✕</b></div><div class="equipName">${escapeText(current.displayName)}</div>`;
     card.title = `${current.displayName} (${current.slot === "taunt" ? "taunt" : slotForClass(current, hooks.gameClass())})`;
     const image = itemImageFor(current);
@@ -225,7 +222,6 @@ export function createWeaponsUi(els: WeaponsEls, hooks: WeaponsHooks) {
     render();
     els.search.focus();
   };
-  els.removeAll.onclick = putAway;
 
   editedItems.onChange(() => render());
   return {

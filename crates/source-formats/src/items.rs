@@ -120,6 +120,10 @@ pub struct Item {
     /// `taunt attack time` (seconds after the taunt starts) it happens at.
     pub taunt_attack: String,
     pub taunt_attack_time: f32,
+    /// Taunts only: the `taunt force weapon slot` (`primary`, `secondary`, `melee`; lower case, empty when unset): the player takes out
+    /// the weapon of that slot for the taunt (CTFPlayer::PlayTauntSceneFromItem switches to it; the Heavy's Russian Rubdown rubs his
+    /// minigun).
+    pub taunt_weapon_slot: String,
     /// The sounds the item plays while its wearer taunts (see [`ItemSound`]).
     pub taunt_sounds: Vec<ItemSound>,
     /// `visuals/playback_activity`: the activity the item's own model plays while its wearer taunts (`start_taunting`, the Infernal
@@ -460,6 +464,7 @@ fn build_item(id: u32, nodes: &[Node], names: &HashMap<String, String>) -> Item 
         taunt_scene_paths: BTreeMap::new(),
         taunt_attack: attribute_text(nodes, "taunt_attack_name").map(|a| a.to_ascii_uppercase()).unwrap_or_default(),
         taunt_attack_time: attribute_text(nodes, "taunt_attack_time").and_then(|t| t.parse().ok()).unwrap_or(0.0),
+        taunt_weapon_slot: attribute_text(nodes, "taunt_force_weapon_slot").map(|s| s.to_ascii_lowercase()).unwrap_or_default(),
         taunt_sounds: item_sounds(nodes),
         taunt_activity: get_block(nodes, "visuals")
             .and_then(|v| get_block(v, "playback_activity"))
@@ -513,7 +518,13 @@ fn item_particles(nodes: &[Node]) -> Vec<ItemParticle> {
 
 /// The value of an attribute of an item's `attributes` / `static_attrs` block, found by its `attribute_class`, trimmed (none when empty).
 fn attribute_text(nodes: &[Node], class: &str) -> Option<String> {
-    ["attributes", "static_attrs"].iter().filter_map(|block| get_block(nodes, block)).flatten().find_map(|n| match &n.value {
+    // (every such block: an item can have two `attributes` blocks, the Russian Rubdown's hold-taunt one and its forced weapon slot's)
+    nodes
+        .iter()
+        .filter(|n| n.key.eq_ignore_ascii_case("attributes") || n.key.eq_ignore_ascii_case("static_attrs"))
+        .filter_map(Node::block)
+        .flatten()
+        .find_map(|n| match &n.value {
         Value::Block(b) if get_str(b, "attribute_class").is_some_and(|c| c.trim().eq_ignore_ascii_case(class)) => {
             get_str(b, "value").map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
         }

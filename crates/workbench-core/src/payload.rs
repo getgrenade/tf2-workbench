@@ -513,6 +513,9 @@ struct ItemJson<'a> {
     taunt_attack: &'a str,
     #[serde(skip_serializing_if = "is_zero_f32")]
     taunt_attack_time: f32,
+    /// A taunt's forced weapon slot (`primary`, `secondary`, `melee`): the weapon the player takes out for it.
+    #[serde(skip_serializing_if = "str::is_empty")]
+    taunt_weapon_slot: &'a str,
     /// The sounds the item plays while its wearer taunts.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     taunt_sounds: Vec<ItemSoundJson<'a>>,
@@ -596,6 +599,7 @@ fn item_json(i: &source_formats::items::Item) -> ItemJson<'_> {
         taunt_scene_paths: &i.taunt_scene_paths,
         taunt_attack: &i.taunt_attack,
         taunt_attack_time: i.taunt_attack_time,
+        taunt_weapon_slot: &i.taunt_weapon_slot,
         taunt_sounds: i.taunt_sounds.iter().map(|t| ItemSoundJson { name: &t.name, offset: t.offset, looping: t.looping }).collect(),
         taunt_activity: &i.taunt_activity,
         build_activity: &i.build_activity,

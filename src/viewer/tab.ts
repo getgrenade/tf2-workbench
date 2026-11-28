@@ -395,6 +395,8 @@ interface Entity {
   beforeTaunt?: SavedAnimation;
   /** The held weapon is the stock stand-in of the sequence picked (see holdForSequence), not one picked by hand. */
   autoHeld?: boolean;
+  /** The weapon held before a taunt was picked (the one a taunt that takes out a weapon of its slot uses: tauntWeaponFor). */
+  weaponBeforeTaunt?: ItemInfo | null;
   /** The held weapon is held but not drawn (a promo shot's Models: see ShotSpec.weaponHidden). */
   weaponHidden?: boolean;
 }
@@ -1038,6 +1040,17 @@ export function createViewTab(els: Els) {
   }
 
   /** Loads the equipped cosmetics for a character's class and bonemerges them onto its skeleton. */
+  /**
+   * The weapon a taunt takes out (its `taunt force weapon slot`): the one the character held before the taunt when it is of that slot, else
+   * the class's stock weapon of the slot (as the game switches to whatever the player has equipped there).
+   */
+  async function tauntWeaponFor(e: Entity, slot: string, cls: string): Promise<ItemInfo | null> {
+    const before = e.weaponBeforeTaunt;
+    if (before && itemUsableBy(before, cls) && slotForClass(before, cls) === slot) return before;
+    const db = await loadItemDb();
+    return db.weapons.find((w) => w.baseItem && itemUsableBy(w, cls) && slotForClass(w, cls) === slot) ?? null;
+  }
+
   async function applyLoadout(e: Entity, loadout: Equipped[]) {
     const token = ++e.loadoutToken;
     if (isBuildingCls(e.cls)) {
@@ -1076,6 +1089,10 @@ export function createViewTab(els: Els) {
     const groups: Record<string, number> = {};
     // The held weapon rides along with the cosmetics: it is bonemerged onto the class's weapon bones the same way.
     const weapon = e.held && itemUsableBy(e.held, cls) ? e.held : null;
+    // a taunt that takes out a weapon of a slot (`taunt force weapon slot`: the Russian Rubdown's minigun) has it in the hands too
+    const forced = weapon?.slot === "taunt" && weapon.tauntWeaponSlot ? await tauntWeaponFor(e, weapon.tauntWeaponSlot, cls) : null;
+    if (token !== e.loadoutToken || !entities.includes(e)) return;
+    const held = (it: ItemInfo) => it === weapon || it === forced;
     let imported: WorkshopTaunt | null = null;
     let importedPropClip: ClipData | null = null;
     // Cancel any old animation bake before a different loadout can complete.
@@ -1097,7 +1114,7 @@ export function createViewTab(els: Els) {
       }
     }
     // (a promo shot's weapon can be held for its pose and not drawn: see ShotSpec.weaponHidden)
-    const everything: Equipped[] = weapon && !e.weaponHidden ? [...loadout, { item: weapon, paint: null, style: 0 }] : loadout;
+    const everything: Equipped[] = weapon && !e.weaponHidden ? [...loadout, ...(forced ? [{ item: forced, paint: null, style: 0 }] : []), { item: weapon, paint: null, style: 0 }] : loadout;
     /** Loads a model (cached) and its materials for a skin family, then adds it to the bonemerged list. */
     const add = async (path: string, rgb: number | null, skin: number, clip: ClipData | null = null, itemId?: number, idle = false, loop = false, material?: string, tauntClip: ClipData | null = null, spell?: number, buildClip: ClipData | null = null) => {
       let data = models.get(path);
@@ -1152,7 +1169,7 @@ export function createViewTab(els: Els) {
       // Team paints carry a second colour for BLU; ordinary paints use their one colour on both teams.
       const rgb = paint ? (team === 1 ? paint.rgb2 ?? paint.rgb : paint.rgb) : null;
       let weaponClip:ClipData|null=null;
-      if(weapon?.id===it.id && (slotForClass(it,cls)==="secondary" && cls==="medic")) {
+      if(held(it) && (slotForClass(it,cls)==="secondary" && cls==="medic")) {
         const info=parseAnimInfo(await listSequences(path));
         if(info.sequences.length) weaponClip=await bakeClip(path,0,info.poseParams.map(p=>p.default));
       }
@@ -1161,23 +1178,23 @@ export function createViewTab(els: Els) {
       let idle = false, loop = false;
       // while its wearer taunts, an item with a `playback_activity` plays that activity's sequence in step with the taunt (the Infernal
       // Orchestrina's drum turns), whichever taunt it is
-      const tauntClip = it !== weapon && it.tauntActivity ? await cosmeticActivityClip(path, it.tauntActivity) : null;
+      const tauntClip = !held(it) && it.tauntActivity ? await cosmeticActivityClip(path, it.tauntActivity) : null;
       // an item with a `start_building` pose held in it by its Pose menu (the Hotrod's mask down over the Engineer's face)
-      const buildClip = it !== weapon && pose === "down" && it.buildActivity ? await cosmeticActivityClip(path, it.buildActivity, true) : null;
+      const buildClip = !held(it) && pose === "down" && it.buildActivity ? await cosmeticActivityClip(path, it.buildActivity, true) : null;
       // the items that play an animation of their own all the time: a sequence the game runs on its own clock (a style without it has none:
       // it is posed as the others are)
-      if (!weaponClip && it !== weapon) { weaponClip = await cosmeticClockClip(path); loop = !!weaponClip; }
+      if (!weaponClip && !held(it)) { weaponClip = await cosmeticClockClip(path); loop = !!weaponClip; }
       // (the held weapon too: the game runs a bonemerged model's own sequence on the bones the class lacks, which turns the Short
       // Circuit's arm_attach_R onto the forearm; without it the gauntlet floats at its bind pose)
       if (!weaponClip) { weaponClip = await cosmeticIdleClip(path, e.cls); idle = !!weaponClip; }
       // an item drawn in one material of its own whatever its model says (the Golden Wrench's gold)
       await add(path, rgb, skin, weaponClip, it.id, idle, loop, itemMaterialOverride(it) ?? undefined, tauntClip, paint?.spell, buildClip);
       if (buildClip && pose && list.length) list[list.length - 1].buildPose = pose;
-      if (it === weapon && list.length) list[list.length - 1].weapon = true;
+      if (held(it) && list.length) list[list.length - 1].weapon = true;
       // Models that travel with the item (a weapon's backpack, an attached part) share its paint and skin.
       for (const extra of it.extraModels ?? []) await add(extra, rgb, skin, null, it.id);
       // a festivized weapon: the Festivizer's lights, on the weapon's bones (they are not painted)
-      if (it === weapon && e.festive?.has(it.id)) for (const lights of it.festiveModels ?? []) await add(lights, null, skin, null, it.id);
+      if (held(it) && e.festive?.has(it.id)) for (const lights of it.festiveModels ?? []) await add(lights, null, skin, null, it.id);
       Object.assign(groups, it.bodygroups, it.styles[style]?.bodygroups);
     }
     // the item being built hides what its Hides chips say, as an item of the game does
@@ -1215,7 +1232,7 @@ export function createViewTab(els: Els) {
     if ((e.warPaintSkin?.key ?? null) !== warPaintKey(e)) e.actor.setHeldSkin(null);
     e.actor.setCosmetics(list);
     e.actor.setProp(prop);
-    syncSheen(e, weapon);
+    syncSheen(e, forced ?? weapon);
     if (e === selected) refreshKillstreak();
     if (e === compilerTarget) void bakeCompilerVisDev();
     void syncConditions(e);
@@ -1482,6 +1499,8 @@ export function createViewTab(els: Els) {
       const wasTaunt = e.held?.slot === "taunt";
       // a taunt is picked: what the character was playing is kept, to go back to when the taunt is put away
       if (weapon?.slot === "taunt" && !wasTaunt && !e.actor.isPosing && !e.actor.holdsPose) e.beforeTaunt = animationOf(e);
+      // (and the weapon it held: a taunt that takes out a weapon of that slot takes out this one, see tauntWeaponFor)
+      if (weapon?.slot === "taunt" && !wasTaunt) e.weaponBeforeTaunt = e.held;
       e.held = weapons.getHeld();
       if (e.held?.id !== weaponPopFor) closeWeaponPop();
       const loaded = applyLoadout(e, e.applied);
@@ -1587,9 +1606,21 @@ export function createViewTab(els: Els) {
     const e = selected;
     if (!e || !CLASSES.some(([, m]) => m === e.cls)) return;
     stopPlay();
+    // the same character in other clothes: what it plays stays as it is (the sequence, the moment, playing or paused, a pose being edited)
+    const pb = e.actor.playback;
+    // (taken once, moved on by the time the new model took to load: the animation goes on without a step back)
+    const clock = { time: pb.time, speed: pb.speed, loopAll: pb.loopAll, playing: pb.playing }, at = performance.now();
+    let resumed = false;
+    const resume = () => {
+      if (resumed) return null;
+      resumed = true;
+      return { ...clock, time: clock.time + (clock.playing ? ((performance.now() - at) / 1000) * clock.speed : 0) };
+    };
+    const custom = e.actor.snapshotCustomPose();
+    const pose = custom ? { bones: e.actor.boneNames, pos: custom.pos, quat: custom.quat, ...(custom.scale ? { scale: custom.scale } : {}), editing: e.actor.isPosing } : undefined;
     e.hwm = !e.hwm;
     markSelected();
-    void show(e, e.cls, { seq: e.anim.seq, seqName: e.anim.seqName, encoded: e.anim.encoded.slice(), playback: () => e.actor.playback });
+    void show(e, e.cls, { seq: e.anim.seq, seqName: e.anim.seqName, encoded: e.anim.encoded.slice(), playback: resume, pose });
   };
 
   function markSelected() {
@@ -2512,6 +2543,9 @@ export function createViewTab(els: Els) {
     // A fresh class starts on its default sequence; a held weapon then picks its own.
     await anim.attach(e.actor, e.anim, path, preset ? { seq: preset.seq, seqName: preset.seqName, encoded: preset.encoded } : undefined);
     if (token !== e.showToken || !entities.includes(e)) return;
+    // the clock goes on where it was at once (not after the loadout below: frames of the sequence's start would show in between)
+    const resumed = preset?.playback?.();
+    if (resumed) Object.assign(e.actor.playback, { time: resumed.time, speed: resumed.speed, loopAll: resumed.loopAll, playing: resumed.playing });
     if (isBuildingCls(e.cls)) {
       // no loadout, weapon or unusuals; a restored scene resumes its clock
       const from = preset?.playback?.();

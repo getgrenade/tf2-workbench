@@ -202,7 +202,7 @@ td.n { text-align: right; font-variant-numeric: tabular-nums; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 /* The equipped items are one scrolling row of a fixed height (with a hint when empty): equipping the first cosmetic must not move the browser below it. */
 #itemEquipped { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; align-items: flex-start; height: 112px; min-height: 112px; flex: none; }
-#itemEquipped:empty::before { content: "No cosmetics equipped. Pick one below; click it here or on the model to paint it."; color: var(--dim); font-size: var(--ui-fs-small); align-self: center; padding: 0 6px; }
+#itemEquipped:empty::before { content: "Nothing equipped. Pick a cosmetic or a weapon; click it here or on the model for its paint."; color: var(--dim); font-size: var(--ui-fs-small); align-self: center; padding: 0 6px; }
 #itemEquipped .equip { flex: none; }
 .equip { width: 84px; background: var(--ui-raised); border: 1px solid var(--line); border-radius: var(--ui-radius-l); padding: 3px; cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
 .equip:hover { border-color: var(--ui-line-strong); background: var(--ui-hover); }
@@ -1728,3 +1728,12 @@ h1, h2, h3, h4, .panel h3, .setGroup h3, nav button, .sceneTab, .dockTabs button
 .faceRigRow { display: grid; grid-template-columns: 92px 1fr 3em; align-items: center; gap: 6px; font-size: var(--ui-fs-small); }
 .faceRigRow > span:first-child { opacity: 0.8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .faceRigValue { text-align: right; font-variant-numeric: tabular-nums; color: var(--dim); }
+.faceRigTip { position: absolute; z-index: 41; pointer-events: none; padding: 2px 7px; border-radius: 4px; background: rgba(16, 16, 18, 0.88); color: #eee; font-size: 11px; white-space: nowrap; }
+/* the held weapon or taunt in front of the worn cosmetics, in one row (one can be held at a time: no row of its own) */
+#equippedRow { display: flex; align-items: flex-start; gap: 6px; margin-top: 6px; height: 112px; min-height: 112px; flex: none; overflow-x: auto; overflow-y: hidden; padding: var(--ui-2); background: var(--ui-canvas); border: 1px solid var(--line); border-radius: var(--ui-radius-l); }
+#equippedRow > #itemEquipped, #equippedRow > #weaponEquipped { margin: 0; padding: 0; background: none; border: 0; border-radius: 0; height: auto; min-height: 0; overflow: visible; flex: none; }
+#equippedRow > #itemEquipped { flex: 1 0 auto; align-self: stretch; }
+#equippedRow > #weaponEquipped:empty { display: none; }
+#equippedRow > #weaponEquipped:not(:empty) { padding-right: 6px; border-right: 1px solid var(--line); }
+#equippedRow:has(> #weaponEquipped:not(:empty)) > #itemEquipped:empty::before { content: none; }
+.equip.held { border-color: var(--ui-accent-line); }
